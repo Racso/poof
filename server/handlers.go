@@ -235,11 +235,13 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
 	err = docker.Deploy(docker.DeployConfig{
-		Name:    p.Name,
-		Image:   image,
-		Domain:  p.Domain,
-		Port:    p.Port,
-		EnvVars: envVars,
+		Name:          p.Name,
+		Image:         image,
+		Domain:        p.Domain,
+		Port:          p.Port,
+		EnvVars:       envVars,
+		RegistryUser:  s.cfg.GitHub.User,
+		RegistryToken: s.cfg.GitHub.Token,
 	})
 
 	status := "success"
