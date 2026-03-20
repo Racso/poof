@@ -36,16 +36,17 @@ jobs:
       - name: Build and push image
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }}
+          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${{ github.sha }}
           docker build -t $IMAGE .
           docker push $IMAGE
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Deploy via Poof!
         run: |
           curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/${{ github.event.repository.name }}/deploy" \
             -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"image\": \"ghcr.io/${{ github.repository }}:${{ github.sha }}\"}"
+            -d "{\"image\": \"${{ env.IMAGE }}\"}"
 `
 
 type Client struct {
