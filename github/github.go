@@ -47,6 +47,14 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"image\": \"${{ env.IMAGE }}\"}"
+
+      - name: Clean up old images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          min-versions-to-keep: 3
+          delete-only-untagged-versions: false
 `
 
 type Client struct {
