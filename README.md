@@ -42,7 +42,7 @@ public_url = "https://poof.yourdomain.com"  # set as POOF_URL repo secret
 
 [github]
 user  = "your-github-username"
-token = "ghp_..."               # PAT with repo scope
+token = "ghp_..."               # PAT with scopes: repo, workflow, read:packages, delete:packages
 
 [auth]
 token = "your-secret-token"     # used by CLI to authenticate with the server
@@ -65,6 +65,7 @@ services:
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker:/root/.docker:ro  # GHCR credentials for pulling images
       - /var/lib/poof:/var/lib/poof
       - /etc/poof:/etc/poof:ro
     environment:
