@@ -65,7 +65,6 @@ services:
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.docker:/root/.docker:ro  # GHCR credentials for pulling images
       - /var/lib/poof:/var/lib/poof
       - /etc/poof:/etc/poof:ro
     environment:

@@ -9,18 +9,37 @@ import (
 const networkName = "caddy-net"
 
 type DeployConfig struct {
-	Name    string
-	Image   string
-	Domain  string
-	Port    int
-	EnvVars map[string]string
+	Name          string
+	Image         string
+	Domain        string
+	Port          int
+	EnvVars       map[string]string
+	RegistryUser  string // optional: login before pull
+	RegistryToken string // optional: login before pull
 }
 
-// Pull pulls a Docker image from the registry.
-func Pull(image string) error {
-	out, err := exec.Command("docker", "pull", image).CombinedOutput()
+// registryHost extracts the registry hostname from an image reference.
+// "ghcr.io/foo/bar:tag" → "ghcr.io"; "ubuntu:22.04" → "" (Docker Hub).
+func registryHost(image string) string {
+	parts := strings.SplitN(image, "/", 2)
+	if len(parts) > 1 && strings.ContainsAny(parts[0], ".:") {
+		return parts[0]
+	}
+	return ""
+}
+
+// login authenticates with the registry that hosts the given image.
+func login(image, user, token string) error {
+	registry := registryHost(image)
+	args := []string{"login", "-u", user, "--password-stdin"}
+	if registry != "" {
+		args = append(args, registry)
+	}
+	cmd := exec.Command("docker", args...)
+	cmd.Stdin = strings.NewReader(token)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("registry login failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -28,8 +47,15 @@ func Pull(image string) error {
 // Deploy pulls the image, stops any existing container for the project, and
 // starts a new one with the appropriate Caddy labels.
 func Deploy(cfg DeployConfig) error {
-	if err := Pull(cfg.Image); err != nil {
-		return err
+	if cfg.RegistryUser != "" && cfg.RegistryToken != "" {
+		if err := login(cfg.Image, cfg.RegistryUser, cfg.RegistryToken); err != nil {
+			return err
+		}
+	}
+
+	out, err := exec.Command("docker", "pull", cfg.Image).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
 	}
 
 	containerName := containerFor(cfg.Name)
@@ -53,7 +79,7 @@ func Deploy(cfg DeployConfig) error {
 
 	args = append(args, cfg.Image)
 
-	out, err := exec.Command("docker", args...).CombinedOutput()
+	out, err = exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker run failed: %s", strings.TrimSpace(string(out)))
 	}
