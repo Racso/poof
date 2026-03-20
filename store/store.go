@@ -13,22 +13,22 @@ type Store struct {
 }
 
 type Project struct {
-	Name      string
-	Domain    string
-	Image     string
-	Repo      string
-	Branch    string
-	Port      int
-	Token     string // per-project deploy token
-	CreatedAt time.Time
+	Name      string    `json:"name"`
+	Domain    string    `json:"domain"`
+	Image     string    `json:"image"`
+	Repo      string    `json:"repo"`
+	Branch    string    `json:"branch"`
+	Port      int       `json:"port"`
+	Token     string    `json:"token"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Deployment struct {
-	ID         int64
-	Project    string
-	Image      string
-	Status     string
-	DeployedAt time.Time
+	ID         int64     `json:"id"`
+	Project    string    `json:"project"`
+	Image      string    `json:"image"`
+	Status     string    `json:"status"`
+	DeployedAt time.Time `json:"deployed_at"`
 }
 
 func Open(path string) (*Store, error) {
@@ -160,7 +160,7 @@ func (s *Store) LastDeployment(project string) (*Deployment, error) {
 	d := &Deployment{}
 	err := s.db.QueryRow(
 		`SELECT id, project, image, status, deployed_at
-		 FROM deployments WHERE project = ? ORDER BY deployed_at DESC LIMIT 1`, project,
+		 FROM deployments WHERE project = ? ORDER BY id DESC LIMIT 1`, project,
 	).Scan(&d.ID, &d.Project, &d.Image, &d.Status, &d.DeployedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -172,12 +172,14 @@ func (s *Store) LastDeployment(project string) (*Deployment, error) {
 }
 
 // PreviousDeployment returns the second-to-last successful deployment (for rollback).
+// Uses ORDER BY id DESC (not deployed_at) because SQLite timestamps have second
+// resolution and multiple deployments in the same second would be non-deterministic.
 func (s *Store) PreviousDeployment(project string) (*Deployment, error) {
 	d := &Deployment{}
 	err := s.db.QueryRow(
 		`SELECT id, project, image, status, deployed_at
 		 FROM deployments WHERE project = ? AND status = 'success'
-		 ORDER BY deployed_at DESC LIMIT 1 OFFSET 1`, project,
+		 ORDER BY id DESC LIMIT 1 OFFSET 1`, project,
 	).Scan(&d.ID, &d.Project, &d.Image, &d.Status, &d.DeployedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil

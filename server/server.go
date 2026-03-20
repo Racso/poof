@@ -19,7 +19,9 @@ func New(cfg *config.Config, st *store.Store) *Server {
 	return &Server{cfg: cfg, store: st}
 }
 
-func (s *Server) Run() error {
+// handler builds and returns the HTTP mux. Separated from Run so tests can
+// call ServeHTTP directly without binding to a port.
+func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Project management (requires global API token)
@@ -41,9 +43,19 @@ func (s *Server) Run() error {
 	mux.HandleFunc("PUT /projects/{name}/env", s.auth(s.setEnv))
 	mux.HandleFunc("DELETE /projects/{name}/env/{key}", s.auth(s.unsetEnv))
 
+	return mux
+}
+
+// ServeHTTP implements http.Handler, allowing the server to be used with
+// httptest.NewRecorder in tests.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.handler().ServeHTTP(w, r)
+}
+
+func (s *Server) Run() error {
 	addr := fmt.Sprintf(":%d", s.cfg.APIPort)
 	log.Printf("poof server listening on %s", addr)
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, s.handler())
 }
 
 // auth middleware: requires the global API token.
