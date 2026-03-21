@@ -132,6 +132,14 @@ func (s *Store) ListProjects() ([]Project, error) {
 	return projects, rows.Err()
 }
 
+func (s *Store) UpdateProject(p Project) error {
+	_, err := s.db.Exec(
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Name,
+	)
+	return err
+}
+
 func (s *Store) DeleteProject(name string) error {
 	_, err := s.db.Exec(`DELETE FROM projects WHERE name = ?`, name)
 	return err
