@@ -99,6 +99,7 @@ WantedBy=multi-user.target
 ## CLI
 
 ```
+poof apply [--file poof.ini]   reconcile projects file with server (see below)
 poof add <name> [flags]        register project + automate GitHub setup
 poof remove <name>             remove project, stop container
 poof list                      list all projects and status
@@ -112,6 +113,33 @@ poof env unset <name> KEY      remove env var
 ```
 
 All flags have smart defaults — `poof add myapp` is usually enough.
+
+## Declarative projects file
+
+Instead of managing projects imperatively, you can declare all projects in an INI file and apply it idempotently:
+
+```ini
+[myapp]
+
+[api]
+domain = api.yourdomain.com
+port   = 3000
+
+[worker]
+image  = ghcr.io/myorg/worker
+branch = stable
+```
+
+Each section is a project name. All fields are optional — omitted fields use the same smart defaults as `poof add`. Secrets (env vars, per-project tokens) are never stored in this file.
+
+```sh
+poof apply                     # apply poof.ini in current directory
+poof apply -f /path/to/file    # explicit path
+poof apply --dry-run           # preview changes without applying
+poof apply --prune             # also remove projects absent from the file
+```
+
+`poof apply` adds new projects, updates changed ones (redeploying running containers), and is a no-op for anything already matching. Without `--prune`, projects on the server but not in the file are left untouched.
 
 ## What Poof! is not
 
