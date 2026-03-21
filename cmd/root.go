@@ -91,6 +91,10 @@ func apiPut(path string, payload interface{}, out interface{}) error {
 	return apiRequest("PUT", path, payload, out)
 }
 
+func apiPatch(path string, payload interface{}, out interface{}) error {
+	return apiRequest("PATCH", path, payload, out)
+}
+
 func apiDelete(path string) error {
 	return apiRequest("DELETE", path, nil, nil)
 }

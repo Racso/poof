@@ -142,6 +142,71 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, p)
 }
 
+type updateProjectRequest struct {
+	Domain string `json:"domain"`
+	Image  string `json:"image"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	Port   int    `json:"port"`
+}
+
+func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	var req updateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	repoChanged := req.Repo != "" && req.Repo != p.Repo
+	branchChanged := req.Branch != "" && req.Branch != p.Branch
+
+	if req.Domain != "" {
+		p.Domain = req.Domain
+	}
+	if req.Image != "" {
+		p.Image = req.Image
+	}
+	if req.Repo != "" {
+		p.Repo = req.Repo
+	}
+	if req.Branch != "" {
+		p.Branch = req.Branch
+	}
+	if req.Port != 0 {
+		p.Port = req.Port
+	}
+
+	if err := s.store.UpdateProject(*p); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if s.cfg.GitHub.Token != "" && (repoChanged || branchChanged) {
+		client := gh.NewClient(s.cfg.GitHub.Token)
+		owner, repoName, found := strings.Cut(p.Repo, "/")
+		if !found {
+			owner = s.cfg.GitHub.User
+			repoName = p.Repo
+		}
+		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, p.Token, p.Branch); err != nil {
+			log.Printf("warning: GitHub update for %s failed: %v", name, err)
+		}
+	}
+
+	jsonOK(w, p)
+}
+
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	p, err := s.store.GetProject(name)

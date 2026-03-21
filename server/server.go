@@ -28,6 +28,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /projects", s.auth(s.listProjects))
 	mux.HandleFunc("POST /projects", s.auth(s.createProject))
 	mux.HandleFunc("GET /projects/{name}", s.auth(s.getProject))
+	mux.HandleFunc("PATCH /projects/{name}", s.auth(s.updateProject))
 	mux.HandleFunc("DELETE /projects/{name}", s.auth(s.deleteProject))
 
 	// Deploy & rollback — accept both global token AND per-project token
