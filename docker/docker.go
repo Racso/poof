@@ -48,13 +48,22 @@ func PreflightSelf() error {
 	return nil
 }
 
-// RecreateSelf inspects the running poof container, stops and removes it, then
-// starts a fresh container with the newly pulled image using the same runtime
-// config (volumes, networks, env, labels, restart policy).
+// RecreateSelf replaces the running poof container with a fresh one using the
+// newly pulled image, preserving all runtime config (volumes, networks, env,
+// labels, restart policy).
 //
-// This avoids docker compose entirely, so it works regardless of whether the
-// compose file or env file are accessible from inside the container.
+// The key constraint: this goroutine runs inside the container it is replacing.
+// Stopping the container first would kill this process before docker run could
+// start the new one. Instead we rename the running container to free its name,
+// start the new container, then stop the old one. By the time the stop signal
+// kills this process, the new container is already running.
 func RecreateSelf() error {
+	oldName := selfContainer + "-old"
+
+	// Clean up any leftover from a previous failed attempt.
+	exec.Command("docker", "rm", "-f", oldName).Run()
+
+	// Capture the running container's full config before touching anything.
 	raw, err := exec.Command("docker", "inspect", selfContainer).Output()
 	if err != nil {
 		return fmt.Errorf("docker inspect failed: %w", err)
@@ -80,13 +89,12 @@ func RecreateSelf() error {
 	}
 	c := info[0]
 
-	exec.Command("docker", "stop", selfContainer).Run()
-	if out, err := exec.Command("docker", "rm", selfContainer).CombinedOutput(); err != nil {
-		if !strings.Contains(string(out), "No such container") {
-			return fmt.Errorf("docker rm failed: %s", strings.TrimSpace(string(out)))
-		}
+	// Rename running container to free the name for the new one.
+	if out, err := exec.Command("docker", "rename", selfContainer, oldName).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker rename failed: %s", strings.TrimSpace(string(out)))
 	}
 
+	// Start the new container. Roll back the rename if this fails.
 	args := []string{"run", "-d", "--name", selfContainer}
 	if c.HostConfig.RestartPolicy.Name != "" {
 		args = append(args, "--restart", c.HostConfig.RestartPolicy.Name)
@@ -106,8 +114,14 @@ func RecreateSelf() error {
 	args = append(args, selfImage)
 
 	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		exec.Command("docker", "rename", oldName, selfContainer).Run()
 		return fmt.Errorf("docker run failed: %s", strings.TrimSpace(string(out)))
 	}
+
+	// Stop and remove the old container. This kills this goroutine's process,
+	// but the new container is already running by this point.
+	exec.Command("docker", "stop", oldName).Run()
+	exec.Command("docker", "rm", oldName).Run()
 	return nil
 }
 
