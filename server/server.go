@@ -131,7 +131,7 @@ func tailFile(path string, n int) (string, error) {
 func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{
 		"commit":     version.Commit,
-		"build_time": version.BuildTime,
+		"commit_time": version.CommitTime,
 	})
 }
 
@@ -151,7 +151,7 @@ func (s *Server) Run() error {
 	log.SetFlags(log.Ldate | log.Ltime | log.LUTC)
 
 	addr := fmt.Sprintf(":%d", s.cfg.APIPort)
-	log.Printf("poof server starting — commit=%s built=%s addr=%s", version.Commit, version.BuildTime, addr)
+	log.Printf("poof server starting — commit=%s committed=%s addr=%s", version.Commit, version.CommitTime, addr)
 	return http.ListenAndServe(addr, s.requestLogger(s.handler()))
 }
 

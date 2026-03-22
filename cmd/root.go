@@ -22,7 +22,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:     "poof",
 	Short:   "Poof! — lightweight self-hosted deployment daemon",
-	Version: version.Commit + "  built=" + version.BuildTime,
+	Version: version.Commit + "  committed=" + version.CommitTime,
 }
 
 func Execute() {
