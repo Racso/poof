@@ -11,10 +11,11 @@ import (
 // --- Server config ---
 
 type ServerConfig struct {
-	Domain    string `toml:"domain"`
-	APIPort   int    `toml:"api_port"`
-	DataDir   string `toml:"data_dir"`
-	PublicURL string `toml:"public_url"` // how the server is reachable from outside
+	Domain         string `toml:"domain"`
+	APIPort        int    `toml:"api_port"`
+	DataDir        string `toml:"data_dir"`
+	PublicURL      string `toml:"public_url"`      // how the server is reachable from outside
+	SubpathDefault string `toml:"subpath_default"` // default subpath mode for new projects: disabled | redirect | proxy
 
 	GitHub GitHubConfig `toml:"github"`
 	Auth   AuthConfig   `toml:"auth"`

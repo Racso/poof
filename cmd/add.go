@@ -30,6 +30,7 @@ If a GitHub PAT is configured on the server, Poof! will automatically:
 		repo, _ := cmd.Flags().GetString("repo")
 		branch, _ := cmd.Flags().GetString("branch")
 		port, _ := cmd.Flags().GetInt("port")
+		subpath, _ := cmd.Flags().GetString("subpath")
 
 		payload := map[string]interface{}{
 			"name":   name,
@@ -55,6 +56,9 @@ If a GitHub PAT is configured on the server, Poof! will automatically:
 		}
 		if port == 0 {
 			delete(payload, "port")
+		}
+		if subpath != "" {
+			payload["subpath"] = subpath
 		}
 
 		var result map[string]interface{}
@@ -82,4 +86,5 @@ func init() {
 	addCmd.Flags().String("repo", "", "GitHub repo owner/name (default: <github-user>/<name>)")
 	addCmd.Flags().String("branch", "", "branch to deploy (default: main)")
 	addCmd.Flags().Int("port", 0, "container port (default: 8080)")
+	addCmd.Flags().String("subpath", "", "subpath routing mode: disabled, redirect, or proxy (default: server's subpath_default)")
 }

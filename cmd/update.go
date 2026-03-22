@@ -22,6 +22,7 @@ The project token is never affected — GitHub Actions integrations remain valid
 		repo, _ := cmd.Flags().GetString("repo")
 		branch, _ := cmd.Flags().GetString("branch")
 		port, _ := cmd.Flags().GetInt("port")
+		subpath, _ := cmd.Flags().GetString("subpath")
 
 		payload := map[string]interface{}{}
 		if domain != "" {
@@ -38,6 +39,9 @@ The project token is never affected — GitHub Actions integrations remain valid
 		}
 		if port != 0 {
 			payload["port"] = port
+		}
+		if subpath != "" {
+			payload["subpath"] = subpath
 		}
 
 		if len(payload) == 0 {
@@ -72,4 +76,5 @@ func init() {
 	updateCmd.Flags().String("repo", "", "new GitHub repo (owner/name)")
 	updateCmd.Flags().String("branch", "", "new branch to deploy")
 	updateCmd.Flags().Int("port", 0, "new container port")
+	updateCmd.Flags().String("subpath", "", "new subpath routing mode: disabled, redirect, or proxy")
 }

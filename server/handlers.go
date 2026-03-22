@@ -57,12 +57,13 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 type createProjectRequest struct {
-	Name   string `json:"name"`
-	Domain string `json:"domain"`
-	Image  string `json:"image"`
-	Repo   string `json:"repo"`
-	Branch string `json:"branch"`
-	Port   int    `json:"port"`
+	Name    string `json:"name"`
+	Domain  string `json:"domain"`
+	Image   string `json:"image"`
+	Repo    string `json:"repo"`
+	Branch  string `json:"branch"`
+	Port    int    `json:"port"`
+	Subpath string `json:"subpath"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +90,18 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		req.Port = 8080
 	}
 
+	// Apply subpath default and validate
+	if req.Subpath == "" {
+		req.Subpath = s.cfg.SubpathDefault
+	}
+	if req.Subpath == "" {
+		req.Subpath = "disabled"
+	}
+	if !validSubpath(req.Subpath) {
+		jsonError(w, "subpath must be disabled, redirect, or proxy", http.StatusBadRequest)
+		return
+	}
+
 	// Validate required fields after defaults
 	if req.Name == "" {
 		jsonError(w, "name is required", http.StatusBadRequest)
@@ -110,13 +123,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := store.Project{
-		Name:   req.Name,
-		Domain: req.Domain,
-		Image:  req.Image,
-		Repo:   req.Repo,
-		Branch: req.Branch,
-		Port:   req.Port,
-		Token:  token,
+		Name:    req.Name,
+		Domain:  req.Domain,
+		Image:   req.Image,
+		Repo:    req.Repo,
+		Branch:  req.Branch,
+		Port:    req.Port,
+		Token:   token,
+		Subpath: req.Subpath,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -144,11 +158,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateProjectRequest struct {
-	Domain string `json:"domain"`
-	Image  string `json:"image"`
-	Repo   string `json:"repo"`
-	Branch string `json:"branch"`
-	Port   int    `json:"port"`
+	Domain  string `json:"domain"`
+	Image   string `json:"image"`
+	Repo    string `json:"repo"`
+	Branch  string `json:"branch"`
+	Port    int    `json:"port"`
+	Subpath string `json:"subpath"`
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +201,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Port != 0 {
 		p.Port = req.Port
+	}
+	if req.Subpath != "" {
+		if !validSubpath(req.Subpath) {
+			jsonError(w, "subpath must be disabled, redirect, or proxy", http.StatusBadRequest)
+			return
+		}
+		p.Subpath = req.Subpath
 	}
 
 	if err := s.store.UpdateProject(*p); err != nil {
@@ -308,7 +330,9 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Name:          p.Name,
 		Image:         image,
 		Domain:        p.Domain,
+		RootDomain:    s.cfg.Domain,
 		Port:          p.Port,
+		Subpath:       p.Subpath,
 		EnvVars:       envVars,
 		RegistryUser:  s.cfg.GitHub.User,
 		RegistryToken: s.cfg.GitHub.Token,
@@ -406,6 +430,14 @@ func (s *Server) unsetEnv(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Helpers ---
+
+func validSubpath(mode string) bool {
+	switch mode {
+	case "disabled", "redirect", "proxy":
+		return true
+	}
+	return false
+}
 
 func generateToken() (string, error) {
 	b := make([]byte, 32)

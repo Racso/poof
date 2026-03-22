@@ -20,6 +20,7 @@ type Project struct {
 	Branch    string    `json:"branch"`
 	Port      int       `json:"port"`
 	Token     string    `json:"token"`
+	Subpath   string    `json:"subpath"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -57,6 +58,7 @@ func (s *Store) migrate() error {
 			branch      TEXT NOT NULL DEFAULT 'main',
 			port        INTEGER NOT NULL DEFAULT 8080,
 			token       TEXT NOT NULL,
+			subpath     TEXT NOT NULL DEFAULT 'disabled',
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
@@ -79,16 +81,21 @@ func (s *Store) migrate() error {
 
 		PRAGMA foreign_keys = ON;
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// v2: add subpath column to existing databases (error = column already exists, safe to ignore).
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN subpath TEXT NOT NULL DEFAULT 'disabled'`)
+	return nil
 }
 
 // --- Projects ---
 
 func (s *Store) CreateProject(p Project) error {
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Token,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Token, p.Subpath,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -99,9 +106,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT name, domain, image, repo, branch, port, token, created_at
+		`SELECT name, domain, image, repo, branch, port, token, subpath, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.CreatedAt)
+	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -113,7 +120,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, domain, image, repo, branch, port, token, created_at
+		`SELECT name, domain, image, repo, branch, port, token, subpath, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -124,7 +131,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -134,8 +141,8 @@ func (s *Store) ListProjects() ([]Project, error) {
 
 func (s *Store) UpdateProject(p Project) error {
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Name,
 	)
 	return err
 }
