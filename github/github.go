@@ -36,7 +36,7 @@ jobs:
       - name: Build and push image
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          IMAGE=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):${{ github.sha }}
+          IMAGE=POOF_IMAGE_BASE:${{ github.sha }}
           docker build -t $IMAGE .
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
@@ -51,7 +51,7 @@ jobs:
       - name: Clean up old images
         uses: actions/delete-package-versions@v5
         with:
-          package-name: ${{ github.event.repository.name }}
+          package-name: POOF_PKG_NAME
           package-type: container
           min-versions-to-keep: 3
           delete-only-untagged-versions: false
@@ -67,14 +67,16 @@ func NewClient(token string) *Client {
 
 // SetupRepo sets the POOF_URL and POOF_TOKEN repo secrets and commits
 // the deploy workflow file. This is called once by `poof add`.
-func (c *Client) SetupRepo(owner, repo, poofURL, poofToken, branch string) error {
+// image is the custom image base (e.g. "ghcr.io/myorg/myimage"); pass ""
+// to derive the image from the GitHub repository name.
+func (c *Client) SetupRepo(owner, repo, poofURL, poofToken, branch, image string) error {
 	if err := c.setSecret(owner, repo, "POOF_URL", poofURL); err != nil {
 		return fmt.Errorf("set POOF_URL secret: %w", err)
 	}
 	if err := c.setSecret(owner, repo, "POOF_TOKEN", poofToken); err != nil {
 		return fmt.Errorf("set POOF_TOKEN secret: %w", err)
 	}
-	if err := c.commitWorkflow(owner, repo, branch); err != nil {
+	if err := c.commitWorkflow(owner, repo, branch, image); err != nil {
 		return fmt.Errorf("commit workflow: %w", err)
 	}
 	return nil
@@ -150,8 +152,38 @@ type getFileResponse struct {
 	SHA string `json:"sha"`
 }
 
-func (c *Client) commitWorkflow(owner, repo, branch string) error {
+// imageBase strips any tag from image and returns the bare image reference.
+func imageBase(image string) string {
+	return strings.SplitN(image, ":", 2)[0]
+}
+
+// imagePackageName extracts the GHCR package name from an image reference.
+// For "ghcr.io/owner/pkg" it returns "pkg"; for "ghcr.io/owner/sub/pkg" it
+// returns "sub/pkg". Falls back to the last path component for other formats.
+func imagePackageName(image string) string {
+	base := imageBase(image)
+	parts := strings.SplitN(base, "/", 3)
+	if len(parts) == 3 {
+		return parts[2]
+	}
+	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+		return base[idx+1:]
+	}
+	return base
+}
+
+func (c *Client) commitWorkflow(owner, repo, branch, image string) error {
+	// Default placeholders derive image and package name from the GitHub repo.
+	imgBase := `ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')`
+	pkgName := `${{ github.event.repository.name }}`
+	if image != "" {
+		imgBase = imageBase(image)
+		pkgName = imagePackageName(image)
+	}
+
 	workflow := strings.ReplaceAll(workflowTemplate, "POOF_BRANCH", branch)
+	workflow = strings.ReplaceAll(workflow, "POOF_IMAGE_BASE", imgBase)
+	workflow = strings.ReplaceAll(workflow, "POOF_PKG_NAME", pkgName)
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 
 	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof.yml", owner, repo)

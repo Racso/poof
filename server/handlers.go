@@ -149,7 +149,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.cfg.GitHub.User
 			repoName = req.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, token, req.Branch); err != nil {
+		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, token, req.Branch, req.Image); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 			// Don't fail — project is registered, user can retry manually.
 		}
@@ -226,7 +226,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.cfg.GitHub.User
 			repoName = p.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, p.Token, p.Branch); err != nil {
+		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, p.Token, p.Branch, p.Image); err != nil {
 			log.Printf("warning: GitHub update for %s failed: %v", name, err)
 		}
 	}
