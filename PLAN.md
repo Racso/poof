@@ -62,7 +62,7 @@ There are no GitHub webhooks involved. The GH Action is the trigger — it calls
 
 ## Configuration
 
-Poof! has a server-side config file (`/etc/poof/poof.toml`):
+### Server (`/etc/poof/poof.toml`)
 
 ```toml
 domain   = "rac.so"           # default domain for subdomain inference
@@ -77,7 +77,50 @@ token = "ghp_..."             # PAT with repo scope — used to automate project
 token = "..."                 # bearer token to authenticate CLI → server API calls
 ```
 
-Per-project config is stored in SQLite and managed via CLI/API. No config files per project in this repo.
+Per-project config is stored in SQLite and managed via CLI/API. No config files per project.
+
+### Client (`~/.config/poof/poof.toml`)
+
+The CLI reads a separate client config. Run `poof config` to print the path (respects `$XDG_CONFIG_HOME` on Linux, uses platform-appropriate dirs on macOS and Windows).
+
+```toml
+server = "https://poof.rac.so"
+token  = "..."
+```
+
+#### Profiles
+
+Named profiles are top-level TOML tables. No `[profiles.*]` nesting — just `[name]` directly:
+
+```toml
+server = "https://poof.rac.so"   # default profile
+token  = "personal-token"
+
+[work]
+server = "https://poof.work.com"
+token  = "work-token"
+
+[staging]
+server = "https://poof-staging.work.com"
+token  = "staging-token"
+```
+
+Activated with `--profile <name>` or `--profile-env` (reads `$POOF_PROFILE`, errors if unset).
+
+A profile can import from a separate file instead of inlining credentials:
+
+```toml
+[work]
+import = "~/.config/poof/work.toml"
+```
+
+```toml
+# ~/.config/poof/work.toml — same format as the main file, profiles ignored
+server = "https://poof.work.com"
+token  = "work-token"
+```
+
+This lets credentials live in a mounted secrets file or a secrets manager without duplicating them.
 
 ---
 
@@ -178,7 +221,15 @@ poof logs <name> [--lines N]   last N log lines from the container
 poof env get <name>            list env var keys (values hidden)
 poof env set <name> KEY=VALUE  set one or more env vars (triggers redeploy)
 poof env unset <name> KEY      remove an env var (triggers redeploy)
+poof config                    print the client config file path
 poof server                    start the daemon
+```
+
+Global flags (all client commands):
+
+```
+--profile <name>   use a named profile from the client config
+--profile-env      read profile name from $POOF_PROFILE (errors if unset)
 ```
 
 ---
@@ -216,6 +267,7 @@ poof/
     logs.go             poof logs
     env.go              poof env get/set/unset
     list.go             poof list/status
+    config.go           poof config (print config file path)
   server/
     server.go           HTTP server setup
     hooks.go            webhook handler
@@ -228,7 +280,7 @@ poof/
   store/
     store.go            SQLite access (projects, deployments, secrets)
   config/
-    config.go           TOML config loading
+    config.go           server + client TOML config loading, profiles
 ```
 
 ---
