@@ -35,10 +35,11 @@ Or download a binary directly from [releases](https://github.com/racso/poof/rele
 Create `/etc/poof/poof.toml` on the server:
 
 ```toml
-domain     = "yourdomain.com"
-api_port   = 9000
-data_dir   = "/var/lib/poof"
-public_url = "https://poof.yourdomain.com"  # set as POOF_URL repo secret
+domain          = "yourdomain.com"
+api_port        = 9000
+data_dir        = "/var/lib/poof"
+public_url      = "https://poof.yourdomain.com"  # set as POOF_URL repo secret
+subpath_default = "redirect"                      # default subpath mode for new projects (see Subpath routing)
 
 [github]
 user  = "your-github-username"
@@ -160,6 +161,7 @@ WantedBy=multi-user.target
 
 ```
 poof add <name> [flags]        register project + automate GitHub setup
+poof update <name> [flags]     update project configuration (token is preserved)
 poof remove <name>             remove project, stop container
 poof list                      list all projects and status
 poof status <name>             project details + last deployment
@@ -181,6 +183,27 @@ Global flags (all client commands):
 ```
 
 All flags have smart defaults — `poof add myapp` is usually enough.
+
+## Subpath routing
+
+By default, projects are only reachable at their subdomain (`myapp.yourdomain.com`). Subpath routing additionally makes a project reachable at `yourdomain.com/myapp/*`, in one of two modes:
+
+- **`redirect`** — `yourdomain.com/myapp/*` issues a 301 redirect to `myapp.yourdomain.com/*`. App compatibility is perfect.
+- **`proxy`** — requests to `yourdomain.com/myapp/*` are transparently proxied to the container. The app must be able to handle being served from a subpath (no path-prefix-unaware asset links or redirects).
+
+Set the mode per project at creation time or later:
+
+```sh
+poof add myapp --subpath=redirect
+poof update myapp --subpath=proxy   # change mode; token is preserved
+poof deploy myapp                   # redeploy required — labels are applied at container start
+```
+
+Set the server-wide default for new projects in `poof.toml`:
+
+```toml
+subpath_default = "redirect"   # disabled | redirect | proxy (default: disabled)
+```
 
 ## Declarative projects file
 
