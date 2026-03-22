@@ -1,10 +1,16 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/store"
@@ -12,12 +18,17 @@ import (
 )
 
 type Server struct {
-	cfg   *config.ServerConfig
-	store *store.Store
+	cfg     *config.ServerConfig
+	store   *store.Store
+	logPath string
 }
 
 func New(cfg *config.ServerConfig, st *store.Store) *Server {
-	return &Server{cfg: cfg, store: st}
+	return &Server{
+		cfg:     cfg,
+		store:   st,
+		logPath: filepath.Join(cfg.DataDir, "server.log"),
+	}
 }
 
 // handler builds and returns the HTTP mux. Separated from Run so tests can
@@ -45,10 +56,76 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("PUT /projects/{name}/env", s.auth(s.setEnv))
 	mux.HandleFunc("DELETE /projects/{name}/env/{key}", s.auth(s.unsetEnv))
 
-	// Version
+	// Server logs & version
+	mux.HandleFunc("GET /logs/server", s.auth(s.getServerLogs))
 	mux.HandleFunc("GET /version", s.auth(s.getVersion))
 
 	return mux
+}
+
+// requestLogger wraps a handler and logs method, path, status, and duration.
+func (s *Server) requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		log.Printf("%s %s %d %s", r.Method, r.URL.RequestURI(), rw.code, time.Since(start).Round(time.Millisecond))
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (sw *statusWriter) WriteHeader(code int) {
+	sw.code = code
+	sw.ResponseWriter.WriteHeader(code)
+}
+
+func (s *Server) getServerLogs(w http.ResponseWriter, r *http.Request) {
+	lines := 100
+	if l := r.URL.Query().Get("lines"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			lines = n
+		}
+	}
+	tail, err := tailFile(s.logPath, lines)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(tail))
+}
+
+// tailFile returns the last n lines of the file at path.
+func tailFile(path string, n int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	result := ""
+	for _, l := range lines {
+		result += l + "\n"
+	}
+	return result, nil
 }
 
 func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
@@ -65,9 +142,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Run() error {
+	f, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open log file %s: %w", s.logPath, err)
+	}
+	defer f.Close()
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
+	log.SetFlags(log.Ldate | log.Ltime | log.LUTC)
+
 	addr := fmt.Sprintf(":%d", s.cfg.APIPort)
-	log.Printf("poof server listening on %s", addr)
-	return http.ListenAndServe(addr, s.handler())
+	log.Printf("poof server starting — commit=%s built=%s addr=%s", version.Commit, version.BuildTime, addr)
+	return http.ListenAndServe(addr, s.requestLogger(s.handler()))
 }
 
 // auth middleware: requires the global API token.

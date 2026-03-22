@@ -138,6 +138,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	log.Printf("project created: %s (repo=%s branch=%s image=%s)", p.Name, p.Repo, p.Branch, p.Image)
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, p)
 }
@@ -192,6 +193,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("project updated: %s", name)
 	if s.cfg.GitHub.Token != "" && (repoChanged || branchChanged) {
 		client := gh.NewClient(s.cfg.GitHub.Token)
 		owner, repoName, found := strings.Cut(p.Repo, "/")
@@ -242,6 +244,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("project deleted: %s", name)
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
@@ -287,6 +290,7 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("rollback triggered: %s → %s", name, prev.Image)
 	s.runDeploy(w, p, prev.Image)
 }
 
@@ -297,6 +301,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		return
 	}
 
+	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
 	err = docker.Deploy(docker.DeployConfig{
@@ -385,6 +390,7 @@ func (s *Server) setEnv(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	log.Printf("env updated: %s (%d key(s) set)", name, len(vars))
 	jsonOK(w, map[string]string{"status": "updated"})
 }
 
@@ -395,6 +401,7 @@ func (s *Server) unsetEnv(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("env unset: %s key=%s", name, key)
 	jsonOK(w, map[string]string{"status": "removed"})
 }
 
