@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -47,45 +48,67 @@ func PreflightSelf() error {
 	return nil
 }
 
-// RecreateSelf reads the docker-compose labels from the running poof container
-// and runs `docker compose up -d` to stop, remove, and recreate it with the
-// newly pulled image.
+// RecreateSelf inspects the running poof container, stops and removes it, then
+// starts a fresh container with the newly pulled image using the same runtime
+// config (volumes, networks, env, labels, restart policy).
 //
-// docker stop alone is not used here because Docker treats it as a manual stop
-// and ignores restart:always — and even if it did restart, it would use the
-// original image digest rather than the newly pulled one.
+// This avoids docker compose entirely, so it works regardless of whether the
+// compose file or env file are accessible from inside the container.
 func RecreateSelf() error {
-	composeFile, err := containerLabel(selfContainer, "com.docker.compose.project.config_files")
-	if err != nil || composeFile == "" {
-		return fmt.Errorf("could not read compose file from container labels: %w", err)
-	}
-
-	args := []string{"compose", "-f", composeFile}
-
-	envFile, _ := containerLabel(selfContainer, "com.docker.compose.project.environment_file")
-	if envFile != "" {
-		args = append(args, "--env-file", envFile)
-	}
-
-	args = append(args, "up", "-d", selfContainer)
-	out, err := exec.Command("docker", args...).CombinedOutput()
+	raw, err := exec.Command("docker", "inspect", selfContainer).Output()
 	if err != nil {
-		return fmt.Errorf("docker compose up failed: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("docker inspect failed: %w", err)
+	}
+
+	var info []struct {
+		HostConfig struct {
+			Binds         []string `json:"Binds"`
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+		} `json:"HostConfig"`
+		Config struct {
+			Env    []string          `json:"Env"`
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+		NetworkSettings struct {
+			Networks map[string]json.RawMessage `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil || len(info) == 0 {
+		return fmt.Errorf("could not parse container inspect output: %w", err)
+	}
+	c := info[0]
+
+	exec.Command("docker", "stop", selfContainer).Run()
+	if out, err := exec.Command("docker", "rm", selfContainer).CombinedOutput(); err != nil {
+		if !strings.Contains(string(out), "No such container") {
+			return fmt.Errorf("docker rm failed: %s", strings.TrimSpace(string(out)))
+		}
+	}
+
+	args := []string{"run", "-d", "--name", selfContainer}
+	if c.HostConfig.RestartPolicy.Name != "" {
+		args = append(args, "--restart", c.HostConfig.RestartPolicy.Name)
+	}
+	for _, bind := range c.HostConfig.Binds {
+		args = append(args, "-v", bind)
+	}
+	for network := range c.NetworkSettings.Networks {
+		args = append(args, "--network", network)
+	}
+	for _, env := range c.Config.Env {
+		args = append(args, "-e", env)
+	}
+	for k, v := range c.Config.Labels {
+		args = append(args, "--label", fmt.Sprintf("%s=%s", k, v))
+	}
+	args = append(args, selfImage)
+
+	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker run failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// containerLabel returns the value of a Docker label on a container.
-func containerLabel(container, label string) (string, error) {
-	out, err := exec.Command(
-		"docker", "inspect",
-		"--format", fmt.Sprintf(`{{index .Config.Labels %q}}`, label),
-		container,
-	).Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 type DeployConfig struct {
