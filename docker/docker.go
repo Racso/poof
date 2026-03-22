@@ -41,14 +41,45 @@ func PreflightSelf() error {
 	return nil
 }
 
-// StopSelf stops the poof container. Docker's restart policy will bring it
-// back automatically with the newly pulled image.
-func StopSelf() error {
-	out, err := exec.Command("docker", "stop", selfContainer).CombinedOutput()
+// RecreateSelf reads the docker-compose labels from the running poof container
+// and runs `docker compose up -d` to stop, remove, and recreate it with the
+// newly pulled image.
+//
+// docker stop alone is not used here because Docker treats it as a manual stop
+// and ignores restart:always — and even if it did restart, it would use the
+// original image digest rather than the newly pulled one.
+func RecreateSelf() error {
+	composeFile, err := containerLabel(selfContainer, "com.docker.compose.project.config_files")
+	if err != nil || composeFile == "" {
+		return fmt.Errorf("could not read compose file from container labels: %w", err)
+	}
+
+	args := []string{"compose", "-f", composeFile}
+
+	envFile, _ := containerLabel(selfContainer, "com.docker.compose.project.environment_file")
+	if envFile != "" {
+		args = append(args, "--env-file", envFile)
+	}
+
+	args = append(args, "up", "-d", selfContainer)
+	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker stop failed: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("docker compose up failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// containerLabel returns the value of a Docker label on a container.
+func containerLabel(container, label string) (string, error) {
+	out, err := exec.Command(
+		"docker", "inspect",
+		"--format", fmt.Sprintf(`{{index .Config.Labels %q}}`, label),
+		container,
+	).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 type DeployConfig struct {

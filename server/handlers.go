@@ -465,8 +465,8 @@ func (s *Server) updateSelf(w http.ResponseWriter, r *http.Request) {
 	// Stop after the handler returns so the response is guaranteed to be sent first.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		if err := docker.StopSelf(); err != nil {
-			log.Printf("self-update: stop failed: %v", err)
+		if err := docker.RecreateSelf(); err != nil {
+			log.Printf("self-update: recreate failed: %v", err)
 		}
 	}()
 }
