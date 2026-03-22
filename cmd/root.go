@@ -15,7 +15,7 @@ import (
 var (
 	cfg            *config.ClientConfig
 	profileFlag    string
-	envProfileFlag bool
+	profileEnvFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -32,16 +32,16 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(loadConfig)
 	rootCmd.PersistentFlags().StringVar(&profileFlag, "profile", "", "named profile to use from config")
-	rootCmd.PersistentFlags().BoolVar(&envProfileFlag, "env-profile", false, "read profile name from $POOF_PROFILE (errors if unset)")
+	rootCmd.PersistentFlags().BoolVar(&profileEnvFlag, "profile-env", false, "read profile name from $POOF_PROFILE (errors if unset)")
 }
 
 func loadConfig() {
-	if profileFlag != "" && envProfileFlag {
-		fmt.Fprintln(os.Stderr, "error: --profile and --env-profile are mutually exclusive")
+	if profileFlag != "" && profileEnvFlag {
+		fmt.Fprintln(os.Stderr, "error: --profile and --profile-env are mutually exclusive")
 		os.Exit(1)
 	}
 	var err error
-	cfg, err = config.LoadClient(profileFlag, envProfileFlag)
+	cfg, err = config.LoadClient(profileFlag, profileEnvFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
 		os.Exit(1)
