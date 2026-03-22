@@ -7,7 +7,7 @@ import (
 )
 
 var remoteUpdateCmd = &cobra.Command{
-	Use:   "remote-update",
+	Use:   "update-remote",
 	Short: "Update the remote poof server to the latest image",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {

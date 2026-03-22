@@ -13,7 +13,7 @@ import (
 )
 
 var selfUpdateCmd = &cobra.Command{
-	Use:   "self-update",
+	Use:   "update-self",
 	Short: "Update the local poof binary to the latest release",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {

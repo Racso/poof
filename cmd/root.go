@@ -50,6 +50,18 @@ func loadConfig() {
 	}
 }
 
+// troubleshootHint returns the `poof troubleshoot` invocation string,
+// including the active profile flag if one is set.
+func troubleshootHint() string {
+	s := "poof troubleshoot"
+	if profileFlag != "" {
+		s += " --profile " + profileFlag
+	} else if profileEnvFlag {
+		s += " --profile-env"
+	}
+	return s
+}
+
 // serverURL returns the server address from config or falls back to localhost.
 func serverURL() string {
 	if cfg.Server != "" {
@@ -74,7 +86,7 @@ func apiGet(path string, out interface{}) error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not reach poof server at %s: %w", serverURL(), err)
+		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help.", serverURL(), troubleshootHint())
 	}
 	defer resp.Body.Close()
 
@@ -129,7 +141,7 @@ func apiRequest(method, path string, payload interface{}, out interface{}) error
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not reach poof server at %s: %w", serverURL(), err)
+		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help.", serverURL(), troubleshootHint())
 	}
 	defer resp.Body.Close()
 
