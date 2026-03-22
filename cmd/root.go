@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/racso/poof/config"
+	"github.com/racso/poof/version"
 	"github.com/spf13/cobra"
 )
 
@@ -19,8 +20,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "poof",
-	Short: "Poof! — lightweight self-hosted deployment daemon",
+	Use:     "poof",
+	Short:   "Poof! — lightweight self-hosted deployment daemon",
+	Version: version.Commit + "  built=" + version.BuildTime,
 }
 
 func Execute() {

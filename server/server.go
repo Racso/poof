@@ -8,6 +8,7 @@ import (
 
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/store"
+	"github.com/racso/poof/version"
 )
 
 type Server struct {
@@ -44,7 +45,17 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("PUT /projects/{name}/env", s.auth(s.setEnv))
 	mux.HandleFunc("DELETE /projects/{name}/env/{key}", s.auth(s.unsetEnv))
 
+	// Version
+	mux.HandleFunc("GET /version", s.auth(s.getVersion))
+
 	return mux
+}
+
+func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{
+		"commit":     version.Commit,
+		"build_time": version.BuildTime,
+	})
 }
 
 // ServeHTTP implements http.Handler, allowing the server to be used with
