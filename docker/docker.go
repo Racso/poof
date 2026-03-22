@@ -24,7 +24,13 @@ func CurrentImageID() string {
 }
 
 // PullSelf pulls the latest poof image from the registry.
-func PullSelf() error {
+// If user and token are non-empty, it logs in to the registry first.
+func PullSelf(user, token string) error {
+	if user != "" && token != "" {
+		if err := login(selfImage, user, token); err != nil {
+			return err
+		}
+	}
 	out, err := exec.Command("docker", "pull", selfImage).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))

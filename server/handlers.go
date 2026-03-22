@@ -444,7 +444,7 @@ func (s *Server) updateSelf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("self-update: pulling new image")
-	if err := docker.PullSelf(); err != nil {
+	if err := docker.PullSelf(s.cfg.GitHub.User, s.cfg.GitHub.Token); err != nil {
 		log.Printf("self-update: pull failed: %v", err)
 		jsonError(w, fmt.Sprintf("pull failed: %v", err), http.StatusInternalServerError)
 		return
