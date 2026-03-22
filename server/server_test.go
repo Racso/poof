@@ -30,7 +30,7 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	cfg := &config.Config{
+	cfg := &config.ServerConfig{
 		Domain:    "rac.so",
 		APIPort:   9000,
 		PublicURL: "https://poof.rac.so",

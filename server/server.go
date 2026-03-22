@@ -11,11 +11,11 @@ import (
 )
 
 type Server struct {
-	cfg   *config.Config
+	cfg   *config.ServerConfig
 	store *store.Store
 }
 
-func New(cfg *config.Config, st *store.Store) *Server {
+func New(cfg *config.ServerConfig, st *store.Store) *Server {
 	return &Server{cfg: cfg, store: st}
 }
 

@@ -12,7 +12,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var cfg *config.Config
+var (
+	cfg            *config.ClientConfig
+	profileFlag    string
+	envProfileFlag bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "poof",
@@ -27,31 +31,34 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(loadConfig)
+	rootCmd.PersistentFlags().StringVar(&profileFlag, "profile", "", "named profile to use from config")
+	rootCmd.PersistentFlags().BoolVar(&envProfileFlag, "env-profile", false, "read profile name from $POOF_PROFILE (errors if unset)")
 }
 
 func loadConfig() {
+	if profileFlag != "" && envProfileFlag {
+		fmt.Fprintln(os.Stderr, "error: --profile and --env-profile are mutually exclusive")
+		os.Exit(1)
+	}
 	var err error
-	cfg, err = config.Load()
+	cfg, err = config.LoadClient(profileFlag, envProfileFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// serverURL returns the server address from config or env.
+// serverURL returns the server address from config or falls back to localhost.
 func serverURL() string {
-	if cfg.Client.Server != "" {
-		return cfg.Client.Server
+	if cfg.Server != "" {
+		return cfg.Server
 	}
-	return fmt.Sprintf("http://localhost:%d", cfg.APIPort)
+	return "http://localhost:9000"
 }
 
 // apiToken returns the API token for CLI → server calls.
 func apiToken() string {
-	if cfg.Client.Token != "" {
-		return cfg.Client.Token
-	}
-	return cfg.Auth.Token
+	return cfg.Token
 }
 
 // --- HTTP helpers for CLI commands ---
