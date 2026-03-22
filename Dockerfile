@@ -15,4 +15,5 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/racso/poof/version.Comm
 # ca-certificates is included so HTTPS calls to GitHub API and ACME work.
 FROM docker:27-cli
 COPY --from=builder /build/poof /usr/local/bin/poof
-ENTRYPOINT ["poof", "server"]
+ENTRYPOINT ["poof"]
+CMD ["server"]

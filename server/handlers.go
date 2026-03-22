@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/racso/poof/docker"
 	gh "github.com/racso/poof/github"
@@ -427,6 +430,45 @@ func (s *Server) unsetEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("env unset: %s key=%s", name, key)
 	jsonOK(w, map[string]string{"status": "removed"})
+}
+
+// --- Self-update ---
+
+func (s *Server) updateSelf(w http.ResponseWriter, r *http.Request) {
+	// Save current image ID so the user has a rollback reference if needed.
+	if id := docker.CurrentImageID(); id != "" {
+		rollbackPath := filepath.Join(s.cfg.DataDir, "rollback-image")
+		if err := os.WriteFile(rollbackPath, []byte(id+"\n"), 0644); err != nil {
+			log.Printf("self-update: could not write rollback-image: %v", err)
+		}
+	}
+
+	log.Printf("self-update: pulling new image")
+	if err := docker.PullSelf(); err != nil {
+		log.Printf("self-update: pull failed: %v", err)
+		jsonError(w, fmt.Sprintf("pull failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("self-update: running pre-flight check")
+	if err := docker.PreflightSelf(); err != nil {
+		log.Printf("self-update: pre-flight failed, update aborted: %v", err)
+		jsonError(w, fmt.Sprintf("pre-flight check failed, update aborted: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("self-update: pre-flight passed, initiating restart")
+	jsonOK(w, map[string]string{
+		"status": "Update initiated — server is restarting with the new image. Run `poof version` in a few seconds to confirm.",
+	})
+
+	// Stop after the handler returns so the response is guaranteed to be sent first.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if err := docker.StopSelf(); err != nil {
+			log.Printf("self-update: stop failed: %v", err)
+		}
+	}()
 }
 
 // --- Helpers ---

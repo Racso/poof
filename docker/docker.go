@@ -8,6 +8,49 @@ import (
 
 const networkName = "caddy-net"
 
+const (
+	selfImage     = "ghcr.io/racso/poof:latest"
+	selfContainer = "poof"
+)
+
+// CurrentImageID returns the image SHA256 of the running poof container,
+// or "" if it cannot be determined.
+func CurrentImageID() string {
+	out, err := exec.Command("docker", "inspect", "--format", "{{.Image}}", selfContainer).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// PullSelf pulls the latest poof image from the registry.
+func PullSelf() error {
+	out, err := exec.Command("docker", "pull", selfImage).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// PreflightSelf runs `poof --version` in the new image as a sanity check.
+func PreflightSelf() error {
+	out, err := exec.Command("docker", "run", "--rm", selfImage, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// StopSelf stops the poof container. Docker's restart policy will bring it
+// back automatically with the newly pulled image.
+func StopSelf() error {
+	out, err := exec.Command("docker", "stop", selfContainer).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker stop failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 type DeployConfig struct {
 	Name          string
 	Image         string

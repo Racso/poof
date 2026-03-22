@@ -56,9 +56,10 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("PUT /projects/{name}/env", s.auth(s.setEnv))
 	mux.HandleFunc("DELETE /projects/{name}/env/{key}", s.auth(s.unsetEnv))
 
-	// Server logs & version
+	// Server logs, version, and self-update
 	mux.HandleFunc("GET /logs/server", s.auth(s.getServerLogs))
 	mux.HandleFunc("GET /version", s.auth(s.getVersion))
+	mux.HandleFunc("POST /update", s.auth(s.updateSelf))
 
 	return mux
 }
