@@ -135,7 +135,8 @@ func tailFile(path string, n int) (string, error) {
 
 func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{
-		"commit":     version.Commit,
+		"number":      version.Number,
+		"commit":      version.Commit,
 		"commit_time": version.CommitTime,
 	})
 }

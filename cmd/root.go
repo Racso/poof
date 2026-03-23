@@ -22,7 +22,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:     "poof",
 	Short:   "Poof! — lightweight self-hosted deployment daemon",
-	Version: version.Commit + "  committed=" + version.CommitTime,
+	Version: version.String(),
 }
 
 func Execute() {
@@ -32,6 +32,7 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.SetVersionTemplate("Poof! {{.Version}}\n")
 	cobra.OnInitialize(loadConfig)
 	rootCmd.PersistentFlags().StringVar(&profileFlag, "profile", "", "named profile to use from config")
 	rootCmd.PersistentFlags().BoolVar(&profileEnvFlag, "profile-env", false, "read profile name from $POOF_PROFILE (errors if unset)")

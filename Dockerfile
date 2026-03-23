@@ -6,9 +6,10 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+ARG NUMBER=dev
 ARG COMMIT=dev
 ARG COMMIT_TIME=unknown
-RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/racso/poof/version.Commit=${COMMIT} -X github.com/racso/poof/version.CommitTime=${COMMIT_TIME}" -o poof .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/racso/poof/version.Number=${NUMBER} -X github.com/racso/poof/version.Commit=${COMMIT} -X github.com/racso/poof/version.CommitTime=${COMMIT_TIME}" -o poof .
 
 # --- Runtime stage ---
 # docker:cli gives us the Docker CLI so Poof! can exec docker commands.

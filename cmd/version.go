@@ -13,9 +13,10 @@ var versionCmd = &cobra.Command{
 	Short: "Show local build info and remote server version",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("local:  commit=%s  committed=%s\n", version.Commit, version.CommitTime)
+		fmt.Printf("local:  Poof! %s\n", version.String())
 
 		var info struct {
+			Number     string `json:"number"`
 			Commit     string `json:"commit"`
 			CommitTime string `json:"commit_time"`
 		}
@@ -23,7 +24,8 @@ var versionCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "server: %v\n", err)
 			return
 		}
-		fmt.Printf("server: commit=%s  committed=%s\n", info.Commit, info.CommitTime)
+		serverVersion := "v" + info.Number + "   // " + info.Commit + " @ " + info.CommitTime
+		fmt.Printf("server: Poof! %s\n", serverVersion)
 	},
 }
 

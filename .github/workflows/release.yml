@@ -39,7 +39,8 @@ jobs:
         run: |
           COMMIT=$(git rev-parse --short HEAD)
           COMMIT_TIME=$(TZ=UTC git log -1 --date=format:'%Y-%m-%dT%H:%M:%SZ' --format=%cd)
-          go build -ldflags="-s -w -X github.com/racso/poof/version.Commit=${COMMIT} -X github.com/racso/poof/version.CommitTime=${COMMIT_TIME}" -o poof-${{ matrix.os }}-${{ matrix.arch }} .
+          NUMBER=$(echo '${{ github.ref_name }}' | sed 's/^v//')
+          go build -ldflags="-s -w -X github.com/racso/poof/version.Number=${NUMBER} -X github.com/racso/poof/version.Commit=${COMMIT} -X github.com/racso/poof/version.CommitTime=${COMMIT_TIME}" -o poof-${{ matrix.os }}-${{ matrix.arch }} .
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
@@ -64,6 +65,7 @@ jobs:
       - name: Set image name and version info
         run: |
           echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/poof" >> $GITHUB_ENV
+          echo "NUMBER=$(echo '${{ github.ref_name }}' | sed 's/^v//')" >> $GITHUB_ENV
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "COMMIT_TIME=$(TZ=UTC git log -1 --date=format:'%Y-%m-%dT%H:%M:%SZ' --format=%cd)" >> $GITHUB_ENV
 
@@ -74,6 +76,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
+            NUMBER=${{ env.NUMBER }}
             COMMIT=${{ env.COMMIT }}
             COMMIT_TIME=${{ env.COMMIT_TIME }}
           tags: |
