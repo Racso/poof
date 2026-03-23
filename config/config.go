@@ -16,6 +16,7 @@ type ServerConfig struct {
 	DataDir        string `toml:"data_dir"`
 	PublicURL      string `toml:"public_url"`      // how the server is reachable from outside
 	SubpathDefault string `toml:"subpath_default"` // default subpath mode for new projects: disabled | redirect | proxy
+	CaddyContainer string `toml:"caddy_container"` // Docker container name of the Caddy proxy (default: caddy-proxy)
 
 	GitHub GitHubConfig `toml:"github"`
 	Auth   AuthConfig   `toml:"auth"`
@@ -34,14 +35,19 @@ func (c *ServerConfig) DBPath() string {
 	return filepath.Join(c.DataDir, "poof.db")
 }
 
+func (c *ServerConfig) RedirectsFile() string {
+	return filepath.Join(c.DataDir, "redirects.caddy")
+}
+
 // LoadServer reads config from the first server config file found, then applies
 // env var overrides. Search order:
 //  1. $POOF_CONFIG
 //  2. /etc/poof/poof.toml
 func LoadServer() (*ServerConfig, error) {
 	cfg := &ServerConfig{
-		APIPort: 9000,
-		DataDir: "/var/lib/poof",
+		APIPort:        9000,
+		DataDir:        "/var/lib/poof",
+		CaddyContainer: "caddy-proxy",
 	}
 	path := ServerConfigPath()
 	if path != "" {

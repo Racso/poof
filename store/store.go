@@ -24,6 +24,13 @@ type Project struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type Redirect struct {
+	ID         int64     `json:"id"`
+	FromDomain string    `json:"from"`
+	ToDomain   string    `json:"to"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type Deployment struct {
 	ID         int64     `json:"id"`
 	Project    string    `json:"project"`
@@ -77,6 +84,13 @@ func (s *Store) migrate() error {
 			value   TEXT NOT NULL,
 			PRIMARY KEY (project, key),
 			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+		);
+
+		CREATE TABLE IF NOT EXISTS redirects (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_domain TEXT NOT NULL UNIQUE,
+			to_domain   TEXT NOT NULL,
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
 		PRAGMA foreign_keys = ON;
@@ -254,4 +268,61 @@ func (s *Store) GetEnvVars(project string) (map[string]string, error) {
 		vars[k] = v
 	}
 	return vars, rows.Err()
+}
+
+// --- Redirects ---
+
+func (s *Store) CreateRedirect(from, to string) (*Redirect, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO redirects (from_domain, to_domain) VALUES (?, ?)`,
+		from, to,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create redirect: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return s.GetRedirect(id)
+}
+
+func (s *Store) GetRedirect(id int64) (*Redirect, error) {
+	r := &Redirect{}
+	err := s.db.QueryRow(
+		`SELECT id, from_domain, to_domain, created_at FROM redirects WHERE id = ?`, id,
+	).Scan(&r.ID, &r.FromDomain, &r.ToDomain, &r.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get redirect: %w", err)
+	}
+	return r, nil
+}
+
+func (s *Store) ListRedirects() ([]Redirect, error) {
+	rows, err := s.db.Query(
+		`SELECT id, from_domain, to_domain, created_at FROM redirects ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list redirects: %w", err)
+	}
+	defer rows.Close()
+
+	var redirects []Redirect
+	for rows.Next() {
+		var r Redirect
+		if err := rows.Scan(&r.ID, &r.FromDomain, &r.ToDomain, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		redirects = append(redirects, r)
+	}
+	return redirects, rows.Err()
+}
+
+func (s *Store) DeleteRedirect(id int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM redirects WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete redirect: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }

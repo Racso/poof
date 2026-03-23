@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/racso/poof/caddy"
 	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/docker"
 	gh "github.com/racso/poof/github"
@@ -428,6 +429,93 @@ func (s *Server) unsetEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("env unset: %s key=%s", name, key)
 	jsonOK(w, map[string]string{"status": "removed"})
+}
+
+// --- Redirects ---
+
+func (s *Server) listRedirects(w http.ResponseWriter, r *http.Request) {
+	redirects, err := s.store.ListRedirects()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if redirects == nil {
+		redirects = []store.Redirect{}
+	}
+	jsonOK(w, redirects)
+}
+
+type createRedirectRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
+	var req createRedirectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.From == "" || req.To == "" {
+		jsonError(w, "from and to are required", http.StatusBadRequest)
+		return
+	}
+
+	redirect, err := s.store.CreateRedirect(req.From, req.To)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			jsonError(w, fmt.Sprintf("%s already has a redirect", req.From), http.StatusConflict)
+			return
+		}
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.syncRedirects(); err != nil {
+		log.Printf("warning: redirect saved but caddy sync failed: %v", err)
+	}
+
+	log.Printf("redirect created: %s → %s", req.From, req.To)
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, redirect)
+}
+
+func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	found, err := s.store.DeleteRedirect(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		jsonError(w, "redirect not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.syncRedirects(); err != nil {
+		log.Printf("warning: redirect deleted but caddy sync failed: %v", err)
+	}
+
+	log.Printf("redirect deleted: id=%d", id)
+	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// syncRedirects writes the redirects Caddyfile and restarts Caddy.
+func (s *Server) syncRedirects() error {
+	redirects, err := s.store.ListRedirects()
+	if err != nil {
+		return err
+	}
+	if err := caddy.WriteRedirects(s.cfg.RedirectsFile(), redirects); err != nil {
+		return err
+	}
+	return caddy.Reload(s.cfg.CaddyContainer)
 }
 
 // --- Helpers ---
