@@ -472,7 +472,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.syncRedirects(); err != nil {
-		log.Printf("warning: redirect saved but caddy sync failed: %v", err)
+		log.Printf("warning: caddy redirects file could not be written: %v", err)
 	}
 
 	log.Printf("redirect created: %s → %s", req.From, req.To)
@@ -506,7 +506,10 @@ func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
-// syncRedirects writes the redirects Caddyfile and restarts Caddy.
+// syncRedirects writes the redirects Caddyfile and schedules a Caddy reload.
+// The file write is synchronous; the reload runs in a goroutine so the HTTP
+// response is delivered before Caddy restarts (Poof itself sits behind Caddy,
+// so restarting it mid-request would drop the response).
 func (s *Server) syncRedirects() error {
 	redirects, err := s.store.ListRedirects()
 	if err != nil {
@@ -515,7 +518,12 @@ func (s *Server) syncRedirects() error {
 	if err := caddy.WriteRedirects(s.cfg.RedirectsFile(), redirects); err != nil {
 		return err
 	}
-	return caddy.Reload(s.cfg.CaddyContainer)
+	go func() {
+		if err := caddy.Reload(s.cfg.CaddyContainer); err != nil {
+			log.Printf("warning: caddy reload failed: %v", err)
+		}
+	}()
+	return nil
 }
 
 // --- Helpers ---
