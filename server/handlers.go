@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/docker"
 	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/store"
@@ -84,10 +85,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		req.Repo = fmt.Sprintf("%s/%s", s.cfg.GitHub.User, req.Name)
 	}
 	if req.Branch == "" {
-		req.Branch = "main"
+		req.Branch = defaults.Branch
 	}
 	if req.Port == 0 {
-		req.Port = 8080
+		req.Port = defaults.Port
 	}
 
 	// Apply subpath default and validate

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/racso/poof/config"
+	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/server"
 	"github.com/racso/poof/store"
 )
@@ -146,11 +147,11 @@ func TestCreateProjectAppliesDefaults(t *testing.T) {
 	if p["repo"] != "racso/myapp" {
 		t.Errorf("repo: got %q, want racso/myapp", p["repo"])
 	}
-	if p["branch"] != "main" {
-		t.Errorf("branch: got %q, want main", p["branch"])
+	if p["branch"] != defaults.Branch {
+		t.Errorf("branch: got %q, want %s", p["branch"], defaults.Branch)
 	}
-	if p["port"] != float64(8080) {
-		t.Errorf("port: got %v, want 8080", p["port"])
+	if p["port"] != float64(defaults.Port) {
+		t.Errorf("port: got %v, want %d", p["port"], defaults.Port)
 	}
 }
 

@@ -3,24 +3,25 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/racso/poof/defaults"
 	"github.com/spf13/cobra"
 )
 
 var addCmd = &cobra.Command{
 	Use:   "add <name>",
 	Short: "Register a new project",
-	Long: `Register a new project with Poof!.
+	Long: fmt.Sprintf(`Register a new project with Poof!.
 
 Defaults (all overridable with flags):
   --domain   <name>.<configured-domain>
   --image    ghcr.io/<github-user>/<name>
   --repo     <github-user>/<name>
-  --branch   main
-  --port     8080
+  --branch   %s
+  --port     %d
 
 If a GitHub PAT is configured on the server, Poof! will automatically:
   - Set POOF_URL and POOF_TOKEN as repo secrets
-  - Commit .github/workflows/poof.yml into the repo`,
+  - Commit .github/workflows/poof.yml into the repo`, defaults.Branch, defaults.Port),
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
@@ -84,7 +85,7 @@ func init() {
 	addCmd.Flags().String("domain", "", "custom domain (default: <name>.<root-domain>)")
 	addCmd.Flags().String("image", "", "Docker image (default: ghcr.io/<github-user>/<name>)")
 	addCmd.Flags().String("repo", "", "GitHub repo owner/name (default: <github-user>/<name>)")
-	addCmd.Flags().String("branch", "", "branch to deploy (default: main)")
-	addCmd.Flags().Int("port", 0, "container port (default: 8080)")
+	addCmd.Flags().String("branch", "", fmt.Sprintf("branch to deploy (default: %s)", defaults.Branch))
+	addCmd.Flags().Int("port", 0, fmt.Sprintf("container port (default: %d)", defaults.Port))
 	addCmd.Flags().String("subpath", "", "subpath routing mode: disabled, redirect, or proxy (default: server's subpath_default)")
 }

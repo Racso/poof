@@ -32,7 +32,7 @@ func sampleProject(name string) store.Project {
 		Image:  "ghcr.io/racso/" + name,
 		Repo:   "racso/" + name,
 		Branch: "main",
-		Port:   8080,
+		Port:   80,
 		Token:  "tok-" + name,
 	}
 }

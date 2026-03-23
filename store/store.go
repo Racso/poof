@@ -55,10 +55,10 @@ func (s *Store) migrate() error {
 			domain      TEXT NOT NULL,
 			image       TEXT NOT NULL,
 			repo        TEXT NOT NULL,
-			branch      TEXT NOT NULL DEFAULT 'main',
-			port        INTEGER NOT NULL DEFAULT 8080,
+			branch      TEXT NOT NULL,
+			port        INTEGER NOT NULL,
 			token       TEXT NOT NULL,
-			subpath     TEXT NOT NULL DEFAULT 'disabled',
+			subpath     TEXT NOT NULL,
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
@@ -81,12 +81,7 @@ func (s *Store) migrate() error {
 
 		PRAGMA foreign_keys = ON;
 	`)
-	if err != nil {
-		return err
-	}
-	// v2: add subpath column to existing databases (error = column already exists, safe to ignore).
-	s.db.Exec(`ALTER TABLE projects ADD COLUMN subpath TEXT NOT NULL DEFAULT 'disabled'`)
-	return nil
+	return err
 }
 
 // --- Projects ---
