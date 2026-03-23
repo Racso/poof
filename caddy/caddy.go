@@ -13,8 +13,18 @@ import (
 // GenerateCaddyfile builds a complete Caddyfile from the given projects and
 // redirects. Only pass projects whose containers are currently running.
 // rootDomain is used to generate subpath routing blocks on the root site.
-func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, rootDomain string) string {
+// poofHost (e.g. "poof.example.com") and poofPort are used to add a route
+// for the Poof API itself, which runs on the host rather than in a container.
+func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, rootDomain, poofHost string, poofPort int) string {
 	var b strings.Builder
+
+	// Global options: keep the admin API binding intact after every sync.
+	fmt.Fprintf(&b, "{\n\tadmin 0.0.0.0:2019\n}\n\n")
+
+	// Poof's own API — runs on the host, reachable via host.docker.internal.
+	if poofHost != "" {
+		fmt.Fprintf(&b, "%s {\n\treverse_proxy host.docker.internal:%d\n}\n\n", poofHost, poofPort)
+	}
 
 	// subpathLines collects handle_path directives grouped by root domain.
 	subpathLines := map[string][]string{}

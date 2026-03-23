@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -33,6 +34,15 @@ type AuthConfig struct {
 
 func (c *ServerConfig) DBPath() string {
 	return filepath.Join(c.DataDir, "poof.db")
+}
+
+// PublicHost returns just the host[:port] portion of PublicURL.
+func (c *ServerConfig) PublicHost() string {
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
 }
 
 // LoadServer reads config from the first server config file found, then applies
