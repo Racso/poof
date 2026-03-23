@@ -11,10 +11,6 @@ const networkName = "caddy-net"
 type DeployConfig struct {
 	Name          string
 	Image         string
-	Domain        string
-	RootDomain    string // root domain for subpath routing (e.g. "rac.so")
-	Port          int
-	Subpath       string // disabled | redirect | proxy
 	EnvVars       map[string]string
 	RegistryUser  string // optional: login before pull
 	RegistryToken string // optional: login before pull
@@ -47,7 +43,7 @@ func login(image, user, token string) error {
 }
 
 // Deploy pulls the image, stops any existing container for the project, and
-// starts a new one with the appropriate Caddy labels.
+// starts a new one on the caddy-net network.
 func Deploy(cfg DeployConfig) error {
 	if cfg.RegistryUser != "" && cfg.RegistryToken != "" {
 		if err := login(cfg.Image, cfg.RegistryUser, cfg.RegistryToken); err != nil {
@@ -71,26 +67,6 @@ func Deploy(cfg DeployConfig) error {
 		"--name", containerName,
 		"--network", networkName,
 		"--restart", "always",
-		"--label", fmt.Sprintf("caddy=%s", cfg.Domain),
-		"--label", fmt.Sprintf("caddy.reverse_proxy={{upstreams %d}}", cfg.Port),
-	}
-
-	// Subpath routing: add a second Caddy server block on the root domain.
-	if cfg.RootDomain != "" && cfg.Domain != cfg.RootDomain {
-		switch cfg.Subpath {
-		case "redirect":
-			args = append(args,
-				"--label", fmt.Sprintf("caddy_1=%s", cfg.RootDomain),
-				"--label", fmt.Sprintf("caddy_1.handle_path=/%s/*", cfg.Name),
-				"--label", fmt.Sprintf("caddy_1.handle_path.redir=https://%s{uri} 301", cfg.Domain),
-			)
-		case "proxy":
-			args = append(args,
-				"--label", fmt.Sprintf("caddy_1=%s", cfg.RootDomain),
-				"--label", fmt.Sprintf("caddy_1.handle_path=/%s/*", cfg.Name),
-				"--label", fmt.Sprintf("caddy_1.handle_path.reverse_proxy={{upstreams %d}}", cfg.Port),
-			)
-		}
 	}
 
 	for k, v := range cfg.EnvVars {

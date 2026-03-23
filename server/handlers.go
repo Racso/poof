@@ -269,6 +269,11 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project deleted: %s", name)
+
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after delete failed: %v", err)
+	}
+
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
@@ -331,10 +336,6 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	err = docker.Deploy(docker.DeployConfig{
 		Name:          p.Name,
 		Image:         image,
-		Domain:        p.Domain,
-		RootDomain:    s.cfg.Domain,
-		Port:          p.Port,
-		Subpath:       p.Subpath,
 		EnvVars:       envVars,
 		RegistryUser:  s.cfg.GitHub.User,
 		RegistryToken: s.cfg.GitHub.Token,
@@ -350,6 +351,10 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 
 	s.store.UpdateDeploymentStatus(depID, status)
 	log.Printf("deployed %s → %s", p.Name, image)
+
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after deploy failed: %v", err)
+	}
 
 	jsonOK(w, map[string]interface{}{
 		"status": "deployed",
@@ -471,7 +476,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.syncRedirects(); err != nil {
+	if err := s.syncCaddy(); err != nil {
 		log.Printf("warning: caddy redirects file could not be written: %v", err)
 	}
 
@@ -498,7 +503,7 @@ func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.syncRedirects(); err != nil {
+	if err := s.syncCaddy(); err != nil {
 		log.Printf("warning: redirect deleted but caddy sync failed: %v", err)
 	}
 
@@ -506,24 +511,25 @@ func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
-// syncRedirects writes the redirects Caddyfile and schedules a Caddy reload.
-// The file write is synchronous; the reload runs in a goroutine so the HTTP
-// response is delivered before Caddy restarts (Poof itself sits behind Caddy,
-// so restarting it mid-request would drop the response).
-func (s *Server) syncRedirects() error {
+// syncCaddy regenerates the full Caddyfile from the current database state and
+// pushes it to the Caddy admin API for a zero-downtime reload.
+func (s *Server) syncCaddy() error {
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		return err
+	}
+	var running []store.Project
+	for _, p := range projects {
+		if docker.IsRunning(p.Name) {
+			running = append(running, p)
+		}
+	}
 	redirects, err := s.store.ListRedirects()
 	if err != nil {
 		return err
 	}
-	if err := caddy.WriteRedirects(s.cfg.RedirectsFile(), redirects); err != nil {
-		return err
-	}
-	go func() {
-		if err := caddy.Reload(s.cfg.CaddyContainer); err != nil {
-			log.Printf("warning: caddy reload failed: %v", err)
-		}
-	}()
-	return nil
+	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.cfg.Domain)
+	return caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 
 // --- Helpers ---

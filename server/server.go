@@ -157,6 +157,11 @@ func (s *Server) Run() error {
 
 	addr := fmt.Sprintf(":%d", s.cfg.APIPort)
 	log.Printf("poof server starting — commit=%s committed=%s addr=%s", version.Commit, version.CommitTime, addr)
+
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: initial caddy sync failed: %v", err)
+	}
+
 	return http.ListenAndServe(addr, s.requestLogger(s.handler()))
 }
 
