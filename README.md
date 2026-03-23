@@ -160,19 +160,22 @@ WantedBy=multi-user.target
 ## CLI
 
 ```
-poof add <name> [flags]        register project + automate GitHub setup
-poof update <name> [flags]     update project configuration (token is preserved)
-poof remove <name>             remove project, stop container
-poof list                      list all projects and status
-poof status <name>             project details + last deployment
-poof deploy <name>             trigger manual redeploy
-poof rollback <name>           redeploy previous image
-poof logs <name> [--lines N]   container log lines
-poof env get <name>            list env var keys (values never shown)
-poof env set <name> KEY=VALUE  set env vars
-poof env unset <name> KEY      remove env var
-poof config                    print the client config file path
-poof server                    start the daemon
+poof add <name> [flags]            register project + automate GitHub setup
+poof update <name> [flags]         update project configuration (token is preserved)
+poof remove <name>                 remove project, stop container
+poof list                          list all projects and status
+poof status <name>                 project details + last deployment
+poof deploy <name>                 trigger manual redeploy
+poof rollback <name>               redeploy previous image
+poof logs <name> [--lines N]       container log lines
+poof env get <name>                list env var keys (values never shown)
+poof env set <name> KEY=VALUE      set env vars
+poof env unset <name> KEY          remove env var
+poof redirect add <from> <to>      add a domain redirect (301)
+poof redirect list                 list all redirects
+poof redirect delete <id>          delete a redirect by ID
+poof config                        print the client config file path
+poof server                        start the daemon
 ```
 
 Global flags (all client commands):
@@ -203,6 +206,55 @@ Set the server-wide default for new projects in `poof.toml`:
 
 ```toml
 subpath_default = "redirect"   # disabled | redirect | proxy (default: disabled)
+```
+
+## Domain redirects
+
+Redirects let you send one domain to another with a 301, independent of any project. The most common use case is `www` ↔ apex:
+
+```sh
+poof redirect add www.mysite.com mysite.com
+poof redirect list
+# ID   FROM                                     TO
+# --   ----                                     --
+# 1    www.mysite.com                           mysite.com
+
+poof redirect delete 1
+```
+
+The target is always treated as a domain — Poof! generates `https://<to>{uri}` so the full path is preserved. Redirects are stored in the server database and applied to Caddy immediately; no project or redeploy needed.
+
+> **DNS note:** The source domain must resolve to the server. Poof! handles the Caddy routing, not DNS.
+
+### Server setup for redirects
+
+Poof!'s redirect feature requires Caddy to import a static Caddyfile. Mount two extra files into the Caddy container and set `CADDY_DOCKER_CADDYFILE_PATH`:
+
+```yaml
+# caddy docker-compose.yml
+environment:
+  - CADDY_DOCKER_CADDYFILE_PATH=/etc/caddy/Caddyfile
+volumes:
+  - /opt/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+  - /var/lib/poof/redirects.caddy:/etc/caddy/poof-redirects.caddy:ro
+```
+
+`/opt/caddy/Caddyfile` (static, never changes):
+
+```
+import /etc/caddy/poof-redirects.caddy
+```
+
+`/var/lib/poof/redirects.caddy` is written automatically by Poof! and is initially empty. Create it before first start:
+
+```sh
+touch /var/lib/poof/redirects.caddy
+```
+
+To use a different container name than `caddy-proxy`, set it in `poof.toml`:
+
+```toml
+caddy_container = "my-caddy"
 ```
 
 ## Declarative projects file
