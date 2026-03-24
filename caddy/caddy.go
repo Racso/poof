@@ -21,9 +21,9 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, roo
 	// Global options: keep the admin API binding intact after every sync.
 	fmt.Fprintf(&b, "{\n\tadmin 0.0.0.0:2019\n}\n\n")
 
-	// Poof's own API — runs on the host, reachable via host.docker.internal.
+	// Poof's own API — runs as a container on caddy-net, reachable by name.
 	if poofHost != "" {
-		fmt.Fprintf(&b, "%s {\n\treverse_proxy host.docker.internal:%d\n}\n\n", poofHost, poofPort)
+		fmt.Fprintf(&b, "%s {\n\treverse_proxy poof:%d\n}\n\n", poofHost, poofPort)
 	}
 
 	// subpathLines collects handle_path directives grouped by root domain.

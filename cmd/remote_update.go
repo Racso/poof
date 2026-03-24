@@ -8,17 +8,14 @@ import (
 
 var remoteUpdateCmd = &cobra.Command{
 	Use:   "update-remote",
-	Short: "Update the remote Poof! server to the latest release",
+	Short: "Update the remote Poof! server to the latest image",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		var result struct {
-			Status  string `json:"status"`
-			Version string `json:"version"`
-		}
+		var result map[string]string
 		if err := apiPost("/update", nil, &result); err != nil {
 			fatal("%v", err)
 		}
-		fmt.Printf("Server updating to %s — restarting now\n", result.Version)
+		fmt.Println("Server updating — restarting now")
 	},
 }
 

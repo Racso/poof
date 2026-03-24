@@ -42,6 +42,21 @@ func login(image, user, token string) error {
 	return nil
 }
 
+// PullSelf logs in to the registry (if credentials are provided) and pulls the
+// given image. Used by the self-update flow.
+func PullSelf(image, user, token string) error {
+	if user != "" && token != "" {
+		if err := login(image, user, token); err != nil {
+			return err
+		}
+	}
+	out, err := exec.Command("docker", "pull", image).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Deploy pulls the image, stops any existing container for the project, and
 // starts a new one on the caddy-net network.
 func Deploy(cfg DeployConfig) error {
