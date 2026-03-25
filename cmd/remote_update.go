@@ -15,7 +15,7 @@ var remoteUpdateCmd = &cobra.Command{
 		if err := apiPost("/update", nil, &result); err != nil {
 			fatal("%v", err)
 		}
-		fmt.Println("Server updating — restarting now")
+		fmt.Println("Server updating — restarting Poof! now")
 	},
 }
 
