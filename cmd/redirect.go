@@ -23,7 +23,7 @@ var redirectAddCmd = &cobra.Command{
 			fatal("%v", err)
 		}
 
-		fmt.Printf("✓ redirect added: %s → https://%s\n", from, to)
+		fmt.Printf("✓ redirect added: %s → %s\n", from, to)
 	},
 }
 
