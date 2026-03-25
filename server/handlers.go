@@ -80,7 +80,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		req.Domain = req.Name + "." + s.cfg.Domain
 	}
 	if req.Image == "" {
-		req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.cfg.GitHub.User), req.Name)
+		req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.cfg.GitHub.User), strings.ToLower(req.Name))
 	}
 	if req.Repo == "" {
 		req.Repo = fmt.Sprintf("%s/%s", s.cfg.GitHub.User, req.Name)
