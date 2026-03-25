@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
@@ -194,9 +195,15 @@ func resolveProfile(file ClientConfig, profile string) (*ClientConfig, error) {
 
 // ClientConfigPath returns the expected client config path regardless of whether
 // the file exists. Used both for loading and for reporting to the user.
+// When running under sudo, uses the invoking user's config dir instead of root's.
 func ClientConfigPath() string {
 	if v := os.Getenv("POOF_CONFIG"); v != "" {
 		return v
+	}
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		if u, err := user.Lookup(sudoUser); err == nil {
+			return filepath.Join(u.HomeDir, ".config", "poof", "poof.toml")
+		}
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
