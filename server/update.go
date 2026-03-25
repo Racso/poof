@@ -5,13 +5,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/racso/poof/docker"
 )
 
 func (s *Server) updateServer(w http.ResponseWriter, r *http.Request) {
-	image := fmt.Sprintf("ghcr.io/%s/poof:latest", s.cfg.GitHub.User)
+	image := fmt.Sprintf("ghcr.io/%s/poof:latest", strings.ToLower(s.cfg.GitHub.User))
 
 	log.Printf("update: pulling %s", image)
 	if err := docker.PullSelf(image, s.cfg.GitHub.User, s.cfg.GitHub.Token); err != nil {
