@@ -528,7 +528,7 @@ func (s *Server) syncCaddy() error {
 	if err != nil {
 		return err
 	}
-	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.cfg.Domain, s.cfg.PublicHost(), s.cfg.APIPort)
+	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.cfg.Domain, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
 	return caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 

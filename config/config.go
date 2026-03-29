@@ -18,7 +18,8 @@ type ServerConfig struct {
 	DataDir        string `toml:"data_dir"`
 	PublicURL      string `toml:"public_url"`      // how the server is reachable from outside
 	SubpathDefault string `toml:"subpath_default"` // default subpath mode for new projects: disabled | redirect | proxy
-	CaddyAdminURL  string `toml:"caddy_admin_url"` // Caddy admin API URL (default: http://caddy-proxy:2019)
+	CaddyAdminURL  string `toml:"caddy_admin_url"`  // Caddy admin API URL (default: http://caddy-proxy:2019)
+	CaddyStaticDir string `toml:"caddy_static_dir"` // glob-imported dir for manual Caddyfile snippets (default: /etc/caddy/conf.d)
 
 	GitHub GitHubConfig `toml:"github"`
 	Auth   AuthConfig   `toml:"auth"`
@@ -54,7 +55,8 @@ func LoadServer() (*ServerConfig, error) {
 	cfg := &ServerConfig{
 		APIPort:       9000,
 		DataDir:       "/var/lib/poof",
-		CaddyAdminURL: "http://caddy-proxy:2019",
+		CaddyAdminURL:  "http://caddy-proxy:2019",
+		CaddyStaticDir: "/etc/caddy/conf.d",
 	}
 	path := ServerConfigPath()
 	if path != "" {

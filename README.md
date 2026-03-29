@@ -39,7 +39,8 @@ domain          = "yourdomain.com"
 api_port        = 9000
 data_dir        = "/var/lib/poof"
 public_url      = "https://poof.yourdomain.com"  # set as POOF_URL repo secret
-caddy_admin_url = "http://caddy-proxy:2019"       # omit if your Caddy container is named caddy-proxy
+caddy_admin_url  = "http://caddy-proxy:2019"       # omit if your Caddy container is named caddy-proxy
+caddy_static_dir = "/etc/caddy/conf.d"             # dir for manual Caddyfile snippets (default shown)
 
 [github]
 user  = "your-github-username"
@@ -174,6 +175,26 @@ poof redirect add www.mysite.com mysite.com
 poof redirect list
 poof redirect delete 1
 ```
+
+## Manual Caddy routes
+
+Poof! regenerates its Caddyfile on every sync, but you can add routes for services not managed by Poof! (e.g. WordPress running via Compose) by dropping `.Caddyfile` files into the static config directory (default: `/etc/caddy/conf.d/`).
+
+```sh
+# On the host, create the directory and mount it into Caddy:
+mkdir -p /etc/caddy/conf.d
+```
+
+Then add a file per service:
+
+```caddyfile
+# /etc/caddy/conf.d/wordpress.Caddyfile
+oscarhumbertogomez.com, www.oscarhumbertogomez.com {
+    reverse_proxy wordpress:80
+}
+```
+
+These files are imported via Caddy's `import` glob directive and survive Poof! reloads. The directory must be accessible inside the Caddy container (mount it as a volume). If the directory is empty, Caddy handles it gracefully.
 
 ## Declarative projects file
 
