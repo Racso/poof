@@ -44,18 +44,39 @@ func login(image, user, token string) error {
 }
 
 // PullSelf logs in to the registry (if credentials are provided) and pulls the
-// given image. Used by the self-update flow.
-func PullSelf(image, user, token string) error {
+// given image. Returns the pull output (including Status and Digest lines) for
+// logging by the caller. Used by the self-update flow.
+func PullSelf(image, user, token string) (string, error) {
 	if user != "" && token != "" {
 		if err := login(image, user, token); err != nil {
-			return err
+			return "", err
 		}
 	}
 	out, err := exec.Command("docker", "pull", image).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
 	}
-	return nil
+	return strings.TrimSpace(string(out)), nil
+}
+
+// InspectLabels returns the OCI labels of a local image.
+func InspectLabels(image string) map[string]string {
+	out, err := exec.Command(
+		"docker", "inspect", "--format",
+		`{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{"\n"}}{{end}}`,
+		image,
+	).Output()
+	if err != nil {
+		return nil
+	}
+	labels := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			labels[k] = v
+		}
+	}
+	return labels
 }
 
 // Deploy pulls the image, stops any existing container for the project, and

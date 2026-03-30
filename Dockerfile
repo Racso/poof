@@ -15,6 +15,12 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/racso/poof/version.Numb
 # docker:cli gives us the Docker CLI so Poof! can exec docker commands.
 # ca-certificates is included so HTTPS calls to GitHub API and ACME work.
 FROM docker:27-cli
+ARG NUMBER=dev
+ARG COMMIT=dev
+ARG COMMIT_TIME=unknown
+LABEL org.opencontainers.image.version="${NUMBER}"
+LABEL org.opencontainers.image.revision="${COMMIT}"
+LABEL org.opencontainers.image.created="${COMMIT_TIME}"
 COPY --from=builder /build/poof /usr/local/bin/poof
 ENTRYPOINT ["poof"]
 CMD ["server"]
