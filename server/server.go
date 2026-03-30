@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -108,7 +109,19 @@ func (s *Server) getServerLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(tail))
+	if tail != "" {
+		w.Header().Set("X-Poof-Log-Source", "file")
+		w.Write([]byte(tail))
+		return
+	}
+	// Log file empty or missing — fall back to docker logs.
+	out, err := exec.Command("docker", "logs", "--tail", strconv.Itoa(lines), "poof").CombinedOutput()
+	if err != nil || len(out) == 0 {
+		w.Header().Set("X-Poof-Log-Source", "none")
+		return
+	}
+	w.Header().Set("X-Poof-Log-Source", "docker")
+	w.Write(out)
 }
 
 // tailFile returns the last n lines of the file at path.

@@ -32,6 +32,14 @@ var serverLogsCmd = &cobra.Command{
 		if resp.StatusCode >= 400 {
 			fatal("server returned %s", resp.Status)
 		}
+		switch resp.Header.Get("X-Poof-Log-Source") {
+		case "file":
+			fmt.Fprintln(os.Stderr, "source: log file")
+		case "docker":
+			fmt.Fprintln(os.Stderr, "source: docker logs (log file unavailable)")
+		case "none", "":
+			fmt.Fprintln(os.Stderr, "source: (no logs available)")
+		}
 		io.Copy(os.Stdout, resp.Body)
 	},
 }
