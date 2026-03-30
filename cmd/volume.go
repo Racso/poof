@@ -108,12 +108,26 @@ Changes take effect on the next deploy.`,
 		project := args[0]
 		id := args[1]
 
+		// Fetch before deleting so we can show the host path in the cleanup hint.
+		var vol map[string]interface{}
+		_ = apiGet("/projects/"+project+"/volumes/"+id, &vol)
+
 		if err := apiDelete("/projects/" + project + "/volumes/" + id); err != nil {
 			fatal("%v", err)
 		}
 
 		fmt.Printf("✓ volume %s removed\n", id)
-		fmt.Printf("  note: host data at the volume path was NOT deleted\n")
+
+		if hostPath, ok := vol["host_path"].(string); ok {
+			managed, _ := vol["managed"].(bool)
+			if managed {
+				fmt.Printf("\n⚠  Host data was NOT deleted. To remove it:\n")
+				fmt.Printf("   rm -rf %s\n", hostPath)
+			} else {
+				fmt.Printf("\n  Host data at %s was NOT deleted.\n", hostPath)
+			}
+		}
+
 		fmt.Printf("\nRedeploy to apply: poof deploy %s\n", project)
 	},
 }

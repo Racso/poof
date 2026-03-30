@@ -547,6 +547,25 @@ func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, vols)
 }
 
+func (s *Server) getVolume(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	vol, err := s.store.GetVolume(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if vol == nil {
+		jsonError(w, "volume not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, vol)
+}
+
 type addVolumeRequest struct {
 	Mount string `json:"mount"` // "/container/path" or "/host/path:/container/path"
 }

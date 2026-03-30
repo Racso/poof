@@ -59,6 +59,7 @@ func (s *Server) handler() http.Handler {
 	// Volumes
 	mux.HandleFunc("GET /projects/{name}/volumes", s.auth(s.listVolumes))
 	mux.HandleFunc("POST /projects/{name}/volumes", s.auth(s.addVolume))
+	mux.HandleFunc("GET /projects/{name}/volumes/{id}", s.auth(s.getVolume))
 	mux.HandleFunc("DELETE /projects/{name}/volumes/{id}", s.auth(s.removeVolume))
 
 	// Redirects
