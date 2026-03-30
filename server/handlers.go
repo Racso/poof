@@ -280,6 +280,15 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("project deleted: %s", name)
 
+	if r.URL.Query().Get("purge") == "true" {
+		dataDir := "/var/lib/poof/" + name
+		if err := os.RemoveAll(dataDir); err != nil {
+			log.Printf("warning: failed to purge host data for %s (%s): %v", name, dataDir, err)
+		} else {
+			log.Printf("project data purged: %s", dataDir)
+		}
+	}
+
 	if err := s.syncCaddy(); err != nil {
 		log.Printf("warning: caddy sync after delete failed: %v", err)
 	}
