@@ -124,7 +124,7 @@ func ReplaceSelf(containerName, newImage string) error {
 	runArgs = append(runArgs, newImage)
 
 	script := fmt.Sprintf(
-		"sleep 2 && docker stop %s && docker rm %s && docker %s",
+		"sleep 2 && docker stop %s && docker rm %s && docker %s && docker image prune -f",
 		containerName, containerName, strings.Join(runArgs, " "),
 	)
 	out, err := exec.Command("docker", "run", "--rm", "-d",
