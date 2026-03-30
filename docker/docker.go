@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -57,6 +59,88 @@ func PullSelf(image, user, token string) (string, error) {
 		return "", fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// SelfContainerName returns the Docker container name of the running process
+// by inspecting the container whose ID matches the current hostname (Docker
+// sets the short container ID as the hostname by default).
+func SelfContainerName() (string, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("get hostname: %w", err)
+	}
+	out, err := exec.Command("docker", "inspect", "--format", "{{.Name}}", hostname).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker inspect self: %w", err)
+	}
+	name := strings.TrimPrefix(strings.TrimSpace(string(out)), "/")
+	if name == "" {
+		return "", fmt.Errorf("empty container name")
+	}
+	return name, nil
+}
+
+// ReplaceSelf inspects the named container's full configuration (mounts,
+// networks, env vars, restart policy) and launches a disposable helper
+// container that will — after we exit — stop the current container, remove
+// it, and start a fresh one with newImage preserving the original config.
+func ReplaceSelf(containerName, newImage string) error {
+	type inspectResult struct {
+		HostConfig struct {
+			Binds         []string
+			RestartPolicy struct{ Name string }
+		}
+		NetworkSettings struct {
+			Networks map[string]json.RawMessage
+		}
+		Config struct {
+			Env []string
+		}
+	}
+
+	raw, err := exec.Command("docker", "inspect", containerName).Output()
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", containerName, err)
+	}
+	var results []inspectResult
+	if err := json.Unmarshal(raw, &results); err != nil || len(results) == 0 {
+		return fmt.Errorf("parse inspect: %w", err)
+	}
+	cfg := results[0]
+
+	runArgs := []string{"run", "-d", "--name", containerName}
+	if policy := cfg.HostConfig.RestartPolicy.Name; policy != "" && policy != "no" {
+		runArgs = append(runArgs, "--restart", policy)
+	}
+	for network := range cfg.NetworkSettings.Networks {
+		runArgs = append(runArgs, "--network", network)
+	}
+	for _, bind := range cfg.HostConfig.Binds {
+		runArgs = append(runArgs, "-v", shellQuote(bind))
+	}
+	for _, env := range cfg.Config.Env {
+		runArgs = append(runArgs, "-e", shellQuote(env))
+	}
+	runArgs = append(runArgs, newImage)
+
+	script := fmt.Sprintf(
+		"sleep 2 && docker stop %s && docker rm %s && docker %s",
+		containerName, containerName, strings.Join(runArgs, " "),
+	)
+	out, err := exec.Command("docker", "run", "--rm", "-d",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"docker:27-cli",
+		"sh", "-c", script,
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launch helper: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // InspectLabels returns the OCI labels of a local image.
