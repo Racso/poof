@@ -101,18 +101,26 @@ var volumeRemoveCmd = &cobra.Command{
 	Short: "Remove a volume mount from a project",
 	Long: `Remove a volume mount from a project by its ID (from 'poof volume list').
 
-The host directory is NOT deleted — only the mount registration is removed.
+By default only the mount registration is removed; host data is left intact.
+Use --purge to also delete the host directory (managed volumes only).
+
 Changes take effect on the next deploy.`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		project := args[0]
 		id := args[1]
+		purge, _ := cmd.Flags().GetBool("purge")
 
-		// Fetch before deleting so we can show the host path in the cleanup hint.
+		path := "/projects/" + project + "/volumes/" + id
+		if purge {
+			path += "?purge=true"
+		}
+
+		// Fetch before deleting so we can show the host path in the output.
 		var vol map[string]interface{}
 		_ = apiGet("/projects/"+project+"/volumes/"+id, &vol)
 
-		if err := apiDelete("/projects/" + project + "/volumes/" + id); err != nil {
+		if err := apiDelete(path); err != nil {
 			fatal("%v", err)
 		}
 
@@ -121,10 +129,14 @@ Changes take effect on the next deploy.`,
 		if hostPath, ok := vol["host_path"].(string); ok {
 			managed, _ := vol["managed"].(bool)
 			if managed {
-				fmt.Printf("\n⚠  Host data was NOT deleted. To remove it:\n")
-				fmt.Printf("   rm -rf %s\n", hostPath)
+				if purge {
+					fmt.Printf("  host data at %s was deleted\n", hostPath)
+				} else {
+					fmt.Printf("\n⚠  Host data was NOT deleted. To remove it:\n")
+					fmt.Printf("   poof volume remove %s %s --purge\n", project, id)
+				}
 			} else {
-				fmt.Printf("\n  Host data at %s was NOT deleted.\n", hostPath)
+				fmt.Printf("\n  Host data at %s was NOT deleted (explicit mount — manage it yourself).\n", hostPath)
 			}
 		}
 
@@ -137,4 +149,5 @@ func init() {
 	volumeCmd.AddCommand(volumeAddCmd)
 	volumeCmd.AddCommand(volumeListCmd)
 	volumeCmd.AddCommand(volumeRemoveCmd)
+	volumeRemoveCmd.Flags().Bool("purge", false, "also delete the host directory (managed volumes only)")
 }

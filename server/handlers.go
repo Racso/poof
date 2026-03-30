@@ -621,6 +621,8 @@ func (s *Server) removeVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	purge := r.URL.Query().Get("purge") == "true"
+
 	vol, err := s.store.GetVolume(id)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -641,10 +643,18 @@ func (s *Server) removeVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]interface{}{"status": "removed"}
-	if vol.Managed {
-		resp["note"] = fmt.Sprintf("managed host data at %s was not deleted", vol.HostPath)
+	resp := map[string]interface{}{"status": "removed", "host_path": vol.HostPath, "managed": vol.Managed}
+
+	if purge && vol.Managed {
+		if err := os.RemoveAll(vol.HostPath); err != nil {
+			log.Printf("warning: failed to purge host data for volume %d (%s): %v", id, vol.HostPath, err)
+			resp["purge_error"] = err.Error()
+		} else {
+			resp["purged"] = true
+			log.Printf("volume purged: id=%d host=%s", id, vol.HostPath)
+		}
 	}
+
 	log.Printf("volume removed: id=%d project=%s", id, vol.Project)
 	jsonOK(w, resp)
 }
