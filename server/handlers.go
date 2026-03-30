@@ -280,7 +280,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("project deleted: %s", name)
 
-	if r.URL.Query().Get("purge") == "true" {
+	if r.URL.Query().Get("data") == "delete" {
 		dataDir := "/var/lib/poof/" + name
 		if err := os.RemoveAll(dataDir); err != nil {
 			log.Printf("warning: failed to purge host data for %s (%s): %v", name, dataDir, err)
@@ -630,7 +630,7 @@ func (s *Server) removeVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	purge := r.URL.Query().Get("purge") == "true"
+	purge := r.URL.Query().Get("data") == "delete"
 
 	vol, err := s.store.GetVolume(id)
 	if err != nil {

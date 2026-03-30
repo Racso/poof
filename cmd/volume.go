@@ -131,7 +131,9 @@ Changes take effect on the next deploy.`,
 
 		path := "/projects/" + project + "/volumes/" + id
 		if purge {
-			path += "?purge=true"
+			path += "?data=delete"
+		} else {
+			path += "?data=keep"
 		}
 
 		if err := apiDelete(path); err != nil {

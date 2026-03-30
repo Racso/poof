@@ -50,7 +50,9 @@ var removeCmd = &cobra.Command{
 
 		path := "/projects/" + name
 		if purge {
-			path += "?purge=true"
+			path += "?data=delete"
+		} else {
+			path += "?data=keep"
 		}
 
 		if err := apiDelete(path); err != nil {
