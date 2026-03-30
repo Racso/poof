@@ -23,6 +23,8 @@ The project token is never affected — GitHub Actions integrations remain valid
 		branch, _ := cmd.Flags().GetString("branch")
 		port, _ := cmd.Flags().GetInt("port")
 		subpath, _ := cmd.Flags().GetString("subpath")
+		folder, _ := cmd.Flags().GetString("folder")
+		folderSet := cmd.Flags().Changed("folder")
 
 		payload := map[string]interface{}{}
 		if domain != "" {
@@ -42,6 +44,9 @@ The project token is never affected — GitHub Actions integrations remain valid
 		}
 		if subpath != "" {
 			payload["subpath"] = subpath
+		}
+		if folderSet {
+			payload["folder"] = folder // allows clearing with --folder ""
 		}
 
 		if len(payload) == 0 {
@@ -66,6 +71,9 @@ The project token is never affected — GitHub Actions integrations remain valid
 		if b, ok := result["branch"].(string); ok {
 			fmt.Printf("  branch:  %s\n", b)
 		}
+		if f, ok := result["folder"].(string); ok && f != "" {
+			fmt.Printf("  folder:  %s\n", f)
+		}
 	},
 }
 
@@ -77,4 +85,5 @@ func init() {
 	updateCmd.Flags().String("branch", "", "new branch to deploy")
 	updateCmd.Flags().Int("port", 0, "new container port")
 	updateCmd.Flags().String("subpath", "", "new subpath routing mode: disabled, redirect, or proxy")
+	updateCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (use \"\" to clear)")
 }

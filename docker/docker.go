@@ -12,8 +12,9 @@ type DeployConfig struct {
 	Name          string
 	Image         string
 	EnvVars       map[string]string
-	RegistryUser  string // optional: login before pull
-	RegistryToken string // optional: login before pull
+	Volumes       []string // host:container mount specs
+	RegistryUser  string   // optional: login before pull
+	RegistryToken string   // optional: login before pull
 }
 
 // registryHost extracts the registry hostname from an image reference.
@@ -86,6 +87,10 @@ func Deploy(cfg DeployConfig) error {
 
 	for k, v := range cfg.EnvVars {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	for _, mount := range cfg.Volumes {
+		args = append(args, "-v", mount)
 	}
 
 	args = append(args, cfg.Image)

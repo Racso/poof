@@ -16,13 +16,19 @@ import (
 const apiBase = "https://api.github.com"
 
 // workflowTemplate is committed into each project repo at
-// .github/workflows/poof.yml. POOF_BRANCH is replaced at commit time.
+// .github/workflows/poof.yml. Placeholders are replaced at commit time:
+//   POOF_BRANCH        → branch to deploy on push
+//   POOF_PATHS_BLOCK   → optional "    paths:\n      - ..." block (empty for root builds)
+//   POOF_IMAGE_BASE    → Docker image base (without tag)
+//   POOF_BUILD_ARGS    → docker build args ("." for root, "-f folder/Dockerfile folder" for subfolders)
+//   POOF_PROJECT_NAME  → Poof! project name (may differ from GitHub repo name in monorepos)
+//   POOF_PKG_NAME      → GHCR package name for cleanup
 const workflowTemplate = `name: Poof! Deploy
 
 on:
   push:
     branches: ["POOF_BRANCH"]
-
+POOF_PATHS_BLOCK
 permissions:
   contents: read
   packages: write
@@ -37,13 +43,13 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           IMAGE=POOF_IMAGE_BASE:${{ github.sha }}
-          docker build -t $IMAGE .
+          docker build -t $IMAGE POOF_BUILD_ARGS
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Deploy via Poof!
         run: |
-          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/${{ github.event.repository.name }}/deploy" \
+          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy" \
             -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"image\": \"${{ env.IMAGE }}\"}"
@@ -66,17 +72,21 @@ func NewClient(token string) *Client {
 }
 
 // SetupRepo sets the POOF_URL and POOF_TOKEN repo secrets and commits
-// the deploy workflow file. This is called once by `poof add`.
-// image is the custom image base (e.g. "ghcr.io/myorg/myimage"); pass ""
-// to derive the image from the GitHub repository name.
-func (c *Client) SetupRepo(owner, repo, poofURL, poofToken, branch, image string) error {
+// the deploy workflow file. This is called once by `poof add` and on updates
+// that change repo, branch, or folder.
+//
+// projectName is the Poof! project name (may differ from the GitHub repo name
+// in monorepos). image is the custom image base (e.g. "ghcr.io/myorg/myimage");
+// pass "" to derive it from the GitHub repository name. folder is the repo
+// subfolder containing the Dockerfile (e.g. "frontend"); pass "" for a root build.
+func (c *Client) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch, image, folder string) error {
 	if err := c.setSecret(owner, repo, "POOF_URL", poofURL); err != nil {
 		return fmt.Errorf("set POOF_URL secret: %w", err)
 	}
 	if err := c.setSecret(owner, repo, "POOF_TOKEN", poofToken); err != nil {
 		return fmt.Errorf("set POOF_TOKEN secret: %w", err)
 	}
-	if err := c.commitWorkflow(owner, repo, branch, image); err != nil {
+	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder); err != nil {
 		return fmt.Errorf("commit workflow: %w", err)
 	}
 	return nil
@@ -172,7 +182,7 @@ func imagePackageName(image string) string {
 	return base
 }
 
-func (c *Client) commitWorkflow(owner, repo, branch, image string) error {
+func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder string) error {
 	// Default placeholders derive image and package name from the GitHub repo.
 	imgBase := `ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')`
 	pkgName := `${{ github.event.repository.name }}`
@@ -181,8 +191,20 @@ func (c *Client) commitWorkflow(owner, repo, branch, image string) error {
 		pkgName = imagePackageName(image)
 	}
 
+	// folder support: path filter and build args
+	pathsBlock := ""
+	buildArgs := "."
+	if folder != "" {
+		folder = strings.TrimRight(folder, "/")
+		pathsBlock = fmt.Sprintf("    paths:\n      - \"%s/**\"", folder)
+		buildArgs = fmt.Sprintf("-f %s/Dockerfile %s", folder, folder)
+	}
+
 	workflow := strings.ReplaceAll(workflowTemplate, "POOF_BRANCH", branch)
+	workflow = strings.ReplaceAll(workflow, "POOF_PATHS_BLOCK", pathsBlock)
 	workflow = strings.ReplaceAll(workflow, "POOF_IMAGE_BASE", imgBase)
+	workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
+	workflow = strings.ReplaceAll(workflow, "POOF_PROJECT_NAME", projectName)
 	workflow = strings.ReplaceAll(workflow, "POOF_PKG_NAME", pkgName)
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 

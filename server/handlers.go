@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,7 @@ type createProjectRequest struct {
 	Branch  string `json:"branch"`
 	Port    int    `json:"port"`
 	Subpath string `json:"subpath"`
+	Folder  string `json:"folder"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +135,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Port:    req.Port,
 		Token:   token,
 		Subpath: req.Subpath,
+		Folder:  req.Folder,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -148,7 +151,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.cfg.GitHub.User
 			repoName = req.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, token, req.Branch, req.Image); err != nil {
+		if err := client.SetupRepo(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 			// Don't fail — project is registered, user can retry manually.
 		}
@@ -166,6 +169,7 @@ type updateProjectRequest struct {
 	Branch  string `json:"branch"`
 	Port    int    `json:"port"`
 	Subpath string `json:"subpath"`
+	Folder  string `json:"folder"`
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +192,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 
 	repoChanged := req.Repo != "" && req.Repo != p.Repo
 	branchChanged := req.Branch != "" && req.Branch != p.Branch
+	folderChanged := req.Folder != p.Folder && (req.Folder != "" || p.Folder != "")
 
 	if req.Domain != "" {
 		p.Domain = req.Domain
@@ -211,6 +216,11 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		p.Subpath = req.Subpath
 	}
+	// folder can be cleared by passing an explicit empty string via the flag;
+	// only update if the field was present in the request body (handled by folderChanged check above).
+	if req.Folder != "" || folderChanged {
+		p.Folder = req.Folder
+	}
 
 	if err := s.store.UpdateProject(*p); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -218,14 +228,14 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if s.cfg.GitHub.Token != "" && (repoChanged || branchChanged) {
+	if s.cfg.GitHub.Token != "" && (repoChanged || branchChanged || folderChanged) {
 		client := gh.NewClient(s.cfg.GitHub.Token)
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
 			owner = s.cfg.GitHub.User
 			repoName = p.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, s.cfg.PublicURL, p.Token, p.Branch, p.Image); err != nil {
+		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, p.Token, p.Branch, p.Image, p.Folder); err != nil {
 			log.Printf("warning: GitHub update for %s failed: %v", name, err)
 		}
 	}
@@ -330,6 +340,16 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		return
 	}
 
+	vols, err := s.store.ListVolumes(p.Name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	mounts := make([]string, len(vols))
+	for i, v := range vols {
+		mounts[i] = v.HostPath + ":" + v.ContainerPath
+	}
+
 	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
@@ -337,6 +357,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Name:          p.Name,
 		Image:         image,
 		EnvVars:       envVars,
+		Volumes:       mounts,
 		RegistryUser:  s.cfg.GitHub.User,
 		RegistryToken: s.cfg.GitHub.Token,
 	})
@@ -509,6 +530,117 @@ func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("redirect deleted: id=%d", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// --- Volumes ---
+
+func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	vols, err := s.store.ListVolumes(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if vols == nil {
+		vols = []store.Volume{}
+	}
+	jsonOK(w, vols)
+}
+
+type addVolumeRequest struct {
+	Mount string `json:"mount"` // "/container/path" or "/host/path:/container/path"
+}
+
+func (s *Server) addVolume(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	var req addVolumeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Mount == "" {
+		jsonError(w, "mount is required", http.StatusBadRequest)
+		return
+	}
+
+	hostPath, containerPath, managed := parseMount(name, req.Mount)
+	if containerPath == "" || !strings.HasPrefix(containerPath, "/") {
+		jsonError(w, "container path must be an absolute path", http.StatusBadRequest)
+		return
+	}
+
+	if managed {
+		if err := os.MkdirAll(hostPath, 0755); err != nil {
+			jsonError(w, fmt.Sprintf("failed to create host directory: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	vol, err := s.store.CreateVolume(store.Volume{
+		Project:       name,
+		HostPath:      hostPath,
+		ContainerPath: containerPath,
+		Managed:       managed,
+	})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("volume added: %s id=%d host=%s container=%s managed=%v", name, vol.ID, hostPath, containerPath, managed)
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, vol)
+}
+
+func (s *Server) removeVolume(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	vol, err := s.store.GetVolume(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if vol == nil {
+		jsonError(w, "volume not found", http.StatusNotFound)
+		return
+	}
+
+	found, err := s.store.DeleteVolume(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		jsonError(w, "volume not found", http.StatusNotFound)
+		return
+	}
+
+	resp := map[string]interface{}{"status": "removed"}
+	if vol.Managed {
+		resp["note"] = fmt.Sprintf("managed host data at %s was not deleted", vol.HostPath)
+	}
+	log.Printf("volume removed: id=%d project=%s", id, vol.Project)
+	jsonOK(w, resp)
+}
+
+// parseMount splits a mount spec into host path, container path, and managed flag.
+// If only a container path is given (no ":"), the host path is auto-assigned under
+// /var/lib/poof/<project>/ and managed is true.
+func parseMount(project, mount string) (hostPath, containerPath string, managed bool) {
+	if idx := strings.Index(mount, ":"); idx >= 0 {
+		return mount[:idx], mount[idx+1:], false
+	}
+	containerPath = mount
+	rel := strings.TrimPrefix(containerPath, "/")
+	hostPath = "/var/lib/poof/" + project + "/" + rel
+	return hostPath, containerPath, true
 }
 
 // syncCaddy regenerates the full Caddyfile from the current database state and

@@ -21,7 +21,17 @@ type Project struct {
 	Port      int       `json:"port"`
 	Token     string    `json:"token"`
 	Subpath   string    `json:"subpath"`
+	Folder    string    `json:"folder"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type Volume struct {
+	ID            int64     `json:"id"`
+	Project       string    `json:"project"`
+	HostPath      string    `json:"host_path"`
+	ContainerPath string    `json:"container_path"`
+	Managed       bool      `json:"managed"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type Redirect struct {
@@ -66,6 +76,7 @@ func (s *Store) migrate() error {
 			port        INTEGER NOT NULL,
 			token       TEXT NOT NULL,
 			subpath     TEXT NOT NULL,
+			folder      TEXT NOT NULL DEFAULT '',
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
@@ -87,24 +98,40 @@ func (s *Store) migrate() error {
 		);
 
 		CREATE TABLE IF NOT EXISTS redirects (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			from_domain TEXT NOT NULL UNIQUE,
 			to_domain   TEXT NOT NULL,
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
+		CREATE TABLE IF NOT EXISTS volumes (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			project        TEXT NOT NULL,
+			host_path      TEXT NOT NULL,
+			container_path TEXT NOT NULL,
+			managed        BOOLEAN NOT NULL DEFAULT 0,
+			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+		);
+
 		PRAGMA foreign_keys = ON;
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Add folder column to existing databases that predate this field.
+	// Ignore the error — it fires on "duplicate column name" when already present.
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN folder TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 // --- Projects ---
 
 func (s *Store) CreateProject(p Project) error {
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Token, p.Subpath,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Token, p.Subpath, p.Folder,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -115,9 +142,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT name, domain, image, repo, branch, port, token, subpath, created_at
+		`SELECT name, domain, image, repo, branch, port, token, subpath, folder, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.CreatedAt)
+	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.Folder, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -129,7 +156,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, domain, image, repo, branch, port, token, subpath, created_at
+		`SELECT name, domain, image, repo, branch, port, token, subpath, folder, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -140,7 +167,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.Folder, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -150,8 +177,8 @@ func (s *Store) ListProjects() ([]Project, error) {
 
 func (s *Store) UpdateProject(p Project) error {
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Name,
 	)
 	return err
 }
@@ -322,6 +349,64 @@ func (s *Store) DeleteRedirect(id int64) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM redirects WHERE id = ?`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete redirect: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// --- Volumes ---
+
+func (s *Store) CreateVolume(v Volume) (*Volume, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO volumes (project, host_path, container_path, managed) VALUES (?, ?, ?, ?)`,
+		v.Project, v.HostPath, v.ContainerPath, v.Managed,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create volume: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return s.GetVolume(id)
+}
+
+func (s *Store) GetVolume(id int64) (*Volume, error) {
+	v := &Volume{}
+	err := s.db.QueryRow(
+		`SELECT id, project, host_path, container_path, managed, created_at FROM volumes WHERE id = ?`, id,
+	).Scan(&v.ID, &v.Project, &v.HostPath, &v.ContainerPath, &v.Managed, &v.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get volume: %w", err)
+	}
+	return v, nil
+}
+
+func (s *Store) ListVolumes(project string) ([]Volume, error) {
+	rows, err := s.db.Query(
+		`SELECT id, project, host_path, container_path, managed, created_at FROM volumes WHERE project = ? ORDER BY id`,
+		project,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list volumes: %w", err)
+	}
+	defer rows.Close()
+
+	var volumes []Volume
+	for rows.Next() {
+		var v Volume
+		if err := rows.Scan(&v.ID, &v.Project, &v.HostPath, &v.ContainerPath, &v.Managed, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		volumes = append(volumes, v)
+	}
+	return volumes, rows.Err()
+}
+
+func (s *Store) DeleteVolume(id int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM volumes WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete volume: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
