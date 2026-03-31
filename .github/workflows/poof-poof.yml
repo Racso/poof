@@ -1,0 +1,39 @@
+name: Poof! Deploy
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "landing/**"
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push image
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          IMAGE=ghcr.io/racso/poof:${{ github.sha }}
+          docker build -t $IMAGE -f landing/Dockerfile landing
+          docker push $IMAGE
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy via Poof!
+        run: |
+          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/poof/deploy" \
+            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN_POOF }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"image\": \"${{ env.IMAGE }}\"}"
+
+      - name: Clean up old images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: poof
+          package-type: container
+          min-versions-to-keep: 3
+          delete-only-untagged-versions: false
