@@ -93,10 +93,10 @@ func (c *Client) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch,
 }
 
 // RemoveRepo removes the POOF_TOKEN secret and deletes the workflow file.
-func (c *Client) RemoveRepo(owner, repo string) error {
+func (c *Client) RemoveRepo(owner, repo, projectName string) error {
 	_ = c.deleteSecret(owner, repo, "POOF_TOKEN")
 	_ = c.deleteSecret(owner, repo, "POOF_URL")
-	_ = c.deleteWorkflow(owner, repo)
+	_ = c.deleteWorkflow(owner, repo, projectName)
 	return nil
 }
 
@@ -208,7 +208,7 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder 
 	workflow = strings.ReplaceAll(workflow, "POOF_PKG_NAME", pkgName)
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 
-	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof.yml", owner, repo)
+	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-%s.yml", owner, repo, projectName)
 
 	// Check if the file already exists (need SHA to update).
 	var existing getFileResponse
@@ -225,8 +225,8 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder 
 	return c.put(path, payload)
 }
 
-func (c *Client) deleteWorkflow(owner, repo string) error {
-	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof.yml", owner, repo)
+func (c *Client) deleteWorkflow(owner, repo, projectName string) error {
+	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-%s.yml", owner, repo, projectName)
 
 	var existing getFileResponse
 	if err := c.get(path, &existing); err != nil {
