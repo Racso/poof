@@ -38,6 +38,10 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, roo
 	subpathLines := map[string][]string{}
 
 	for _, p := range projects {
+		// Skip if the project's domain is already emitted as the poofHost block above.
+		if poofHost != "" && p.Domain == poofHost {
+			continue
+		}
 		fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n}\n\n", p.Domain, p.Name, p.Port)
 
 		if rootDomain != "" && p.Domain != rootDomain && p.Subpath != "disabled" {
