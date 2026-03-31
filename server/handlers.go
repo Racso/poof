@@ -268,7 +268,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.cfg.GitHub.User
 			repoName = p.Repo
 		}
-		if err := client.RemoveRepo(owner, repoName, name); err != nil {
+		if err := client.RemoveRepo(owner, repoName, name, p.Folder); err != nil {
 			log.Printf("warning: GitHub cleanup for %s: %v", name, err)
 		}
 	}
