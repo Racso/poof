@@ -676,12 +676,166 @@
         .footer-right a:hover { color: var(--white); }
 
         /* ── RESPONSIVE ── */
+        /* ── START V2: Requirements matrix ── */
+        #start-v2 {
+            border-top: 1px solid rgba(var(--main-accent-rgb),0.07);
+            border-bottom: 1px solid rgba(var(--main-accent-rgb),0.07);
+        }
+
+        .req-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1px;
+            background: var(--n3);
+            border: 1px solid var(--n3);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 3rem;
+            margin-bottom: 3rem;
+        }
+
+        .req-col { background: var(--void); padding: 2rem; }
+
+        .req-col-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(106, 128, 144, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .req-col--required .req-col-label { color: var(--lava); }
+        .req-col--optional .req-col-label { color: var(--vitellary); }
+
+        .req-item {
+            display: flex;
+            gap: 0.75rem;
+            padding: 0.65rem 0;
+            border-bottom: 1px solid rgba(106, 128, 144, 0.08);
+            align-items: flex-start;
+        }
+        .req-item:last-child { border-bottom: none; }
+
+        .req-item-dot {
+            flex-shrink: 0;
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            margin-top: 0.42rem;
+        }
+        .req-col--required .req-item-dot { background: var(--lava); box-shadow: 0 0 6px rgba(243,60,44,0.4); }
+        .req-col--optional .req-item-dot { background: var(--vitellary); box-shadow: 0 0 6px rgba(240,160,48,0.4); }
+
+        .req-item-name { font-size: 0.875rem; font-weight: 600; color: var(--white); margin-bottom: 0.15rem; }
+        .req-item-note { font-size: 0.78rem; color: var(--n4); line-height: 1.5; }
+        .req-item-note code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--n5);
+            background: rgba(255,255,255,0.06);
+            padding: 0.05em 0.3em;
+            border-radius: 3px;
+        }
+        .req-item-unlocks {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--vitellary);
+            opacity: 0.7;
+            margin-top: 0.2rem;
+            display: block;
+            letter-spacing: 0.02em;
+        }
+
+        /* ── START V3: Badged steps ── */
+        #start-v3 {
+            background: rgba(41, 51, 62, 0.25);
+            border-top: 1px solid rgba(var(--main-accent-rgb),0.07);
+        }
+
+        .step-badge {
+            display: inline-flex;
+            align-items: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.58rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-weight: 600;
+            padding: 0.12rem 0.45rem;
+            border-radius: 3px;
+            vertical-align: middle;
+            margin-left: 0.5rem;
+            position: relative;
+            top: -1px;
+        }
+        .step-badge--req { background: rgba(243,60,44,0.1); color: var(--lava); border: 1px solid rgba(243,60,44,0.2); }
+        .step-badge--opt { background: rgba(240,160,48,0.1); color: var(--vitellary); border: 1px solid rgba(240,160,48,0.2); }
+
+        .step-opt-note {
+            margin-top: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            background: rgba(240,160,48,0.05);
+            border-left: 2px solid rgba(240,160,48,0.25);
+            border-radius: 0 4px 4px 0;
+            font-size: 0.75rem;
+            color: var(--n4);
+            line-height: 1.55;
+        }
+        .step-opt-note code { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--n5); }
+        .step-opt-note .opt-kw { color: var(--vitellary); font-weight: 500; }
+
+        .no-gh-block {
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 3rem;
+            align-items: start;
+            margin-top: 3rem;
+            padding-top: 2.5rem;
+            border-top: 1px solid rgba(240,160,48,0.15);
+        }
+
+        .no-gh-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--vitellary);
+            margin-bottom: 1.1rem;
+            letter-spacing: 0.02em;
+        }
+
+        .no-gh-steps {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+        }
+        .no-gh-steps li {
+            display: flex;
+            gap: 0.6rem;
+            font-size: 0.82rem;
+            color: var(--n4);
+            line-height: 1.55;
+            align-items: flex-start;
+        }
+        .no-gh-steps li::before {
+            content: '–';
+            color: rgba(240,160,48,0.5);
+            flex-shrink: 0;
+        }
+        .no-gh-steps li code { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--n5); }
+
+        .code-block--sm { font-size: 0.72rem; padding: 1.1rem 1.3rem; line-height: 1.75; }
+
         @media (max-width: 940px) {
             .hero-inner { grid-template-columns: 1fr; gap: 3rem; }
             .steps { grid-template-columns: 1fr; }
             .step-arrow { display: none; }
             .features-grid { grid-template-columns: 1fr 1fr; }
             .start-grid { grid-template-columns: 1fr; }
+            .req-grid { grid-template-columns: 1fr; }
+            .no-gh-block { grid-template-columns: 1fr; }
         }
         @media (max-width: 580px) {
             nav { padding: 1rem; }
@@ -700,7 +854,6 @@
     <div class="nav-right">
         <span class="nav-badge">open source</span>
         <a href="#start" class="nav-link">Quick start</a>
-        <a href="#how" class="nav-link">How it works</a>
         <a href="#features" class="nav-link">Features</a>
         <a href="https://github.com/racso/poof" class="nav-github" target="_blank" rel="noopener">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -738,7 +891,7 @@
                     <button class="install-cmd-copy" id="copy-btn" onclick="copyInstall()" aria-label="Copy install command">copy</button>
                 </div>
                 <div class="hero-links">
-                    <a href="#how" class="hero-link">↓ How it works</a>
+                    <a href="#start" class="hero-link">↓ Quick start</a>
                     <a href="https://github.com/racso/poof" class="hero-link" target="_blank" rel="noopener">★ Star on GitHub</a>
                 </div>
             </div>
@@ -771,28 +924,29 @@
                     <div class="start-num" aria-hidden="true">1</div>
                     <div>
                         <div class="start-title">Install the binary</div>
-                        <div class="start-desc">One curl. Works on any Linux server with Docker.</div>
+                        <div class="start-desc">One curl. Works on any Linux server with Docker and Caddy already running.</div>
                     </div>
                 </div>
                 <div class="start-step">
                     <div class="start-num" aria-hidden="true">2</div>
                     <div>
-                        <div class="start-title">Configure the server</div>
-                        <div class="start-desc">Set your domain, GitHub token, and auth token in <code>/etc/poof/poof.toml</code>. Then run <code>poof server</code>.</div>
+                        <div class="start-title">Configure &amp; start the server</div>
+                        <div class="start-desc">Set your domain and auth token in <code>/etc/poof/poof.toml</code>. Then <code>poof server</code>.</div>
+                        <div class="step-opt-note"><span class="opt-kw">optional:</span> add a GitHub token to your config and Poof! will <em>also</em> automate GitHub Actions setup.</div>
                     </div>
                 </div>
                 <div class="start-step">
                     <div class="start-num" aria-hidden="true">3</div>
                     <div>
-                        <div class="start-title">Add your first project</div>
-                        <div class="start-desc">One command sets up GitHub secrets, commits the workflow, and registers the project. Push and it deploys.</div>
+                        <div class="start-title">Register your project</div>
+                        <div class="start-desc"><code>poof add myapp</code> registers the project, injects deploy secrets into your repo, and commits the CI workflow.</div>
                     </div>
                 </div>
                 <div class="start-step">
                     <div class="start-num" aria-hidden="true">4</div>
                     <div>
                         <div class="start-title">Push your code</div>
-                        <div class="start-desc">That's it. From here on, every push to <code>main</code> deploys automatically.</div>
+                        <div class="start-desc">Every push to <code>main</code> builds and deploys automatically. That's it — forever.</div>
                     </div>
                 </div>
             </div>
@@ -816,36 +970,27 @@
 <span class="hi">  ✦ https://myapp.yourdomain.com is live</span>
             </div>
         </div>
-    </div>
-</section>
 
-<!-- HOW IT WORKS -->
-<section id="how" aria-labelledby="how-title">
-    <div class="section-inner">
-        <div class="section-label" aria-hidden="true">// workflow</div>
-        <h2 class="section-title" id="how-title">Ridiculously simple.</h2>
-        <p class="section-sub">Three steps. No servers to babysit, no YAML to maintain after the first setup.</p>
-
-        <div class="steps" role="list">
-            <div class="step" role="listitem">
-                <div class="step-num" aria-hidden="true">01</div>
-                <span class="step-icon" aria-hidden="true">⬆</span>
-                <div class="step-title">Push to main</div>
-                <div class="step-desc">Commit your code. Push. That's the only thing you do manually — ever.</div>
+        <div class="no-gh-block">
+            <div>
+                <div class="no-gh-title">No GitHub token? Not using GitHub at all?</div>
+                <ul class="no-gh-steps">
+                    <li>Skip the GitHub token in your config — <code>poof add</code> still registers the project and configures routing.</li>
+                    <li>Set up your CI pipeline manually in whatever tool you use.</li>
+                    <li>Build your Docker image and push it to any registry the server can pull from.</li>
+                    <li>Trigger deploys by calling <code>POST /projects/myapp/deploy</code> with the image tag.</li>
+                </ul>
             </div>
-            <div class="step-arrow" aria-hidden="true">→</div>
-            <div class="step" role="listitem">
-                <div class="step-num" aria-hidden="true">02</div>
-                <span class="step-icon" aria-hidden="true">⚙</span>
-                <div class="step-title">GitHub Actions builds</div>
-                <div class="step-desc">Free CI builds your Docker image and pushes to GHCR. Build logs live in GitHub, not on your server.</div>
-            </div>
-            <div class="step-arrow" aria-hidden="true">→</div>
-            <div class="step" role="listitem">
-                <div class="step-num" aria-hidden="true">03</div>
-                <span class="step-icon" aria-hidden="true">✦</span>
-                <div class="step-title">Poof deploys</div>
-                <div class="step-desc">Pulls the image, starts the container, Caddy routes traffic and provisions TLS. Your app is live.</div>
+            <div class="code-block code-block--sm" role="region" aria-label="Manual deploy example">
+<span class="co"># Build &amp; push (any CI)</span>
+<span class="cm">docker build -t myimage:v1 .</span>
+<span class="cm">docker push myimage:v1</span>
+<br>
+<span class="co"># Trigger deploy via API</span>
+<span class="cm">curl -X POST https://poof.yourdomain.com/projects/myapp/deploy \</span>
+<span class="cm">  -H "Authorization: Bearer $POOF_TOKEN" \</span>
+<span class="cm">  -d '{"image":"myimage:v1"}'</span>
+<span class="hi">  ✦ https://myapp.yourdomain.com is live</span>
             </div>
         </div>
     </div>
