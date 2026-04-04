@@ -511,59 +511,6 @@
             font-size: 1.25rem;
         }
 
-        /* ── FEATURES ── */
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1px;
-            background: var(--n3);
-            border: 1px solid var(--n3);
-            border-radius: 12px;
-            overflow: hidden;
-            margin-top: 3.5rem;
-        }
-
-        .feature-card {
-            background: var(--void);
-            padding: 2rem 1.75rem;
-            transition: background 0.2s;
-        }
-        .feature-card:hover { background: var(--n2); }
-
-        .feature-icon {
-            width: 38px; height: 38px;
-            border-radius: 8px;
-            background: var(--main-accent-lo);
-            border: 1px solid rgba(var(--main-accent-rgb),0.22);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1rem;
-            margin-bottom: 1rem;
-            color: var(--main-accent);
-        }
-
-        .feature-title {
-            font-size: 0.92rem;
-            font-weight: 600;
-            color: var(--white);
-            margin-bottom: 0.4rem;
-        }
-
-        .feature-desc {
-            font-size: 0.82rem;
-            color: var(--n4);
-            line-height: 1.65;
-        }
-
-        .feature-desc code {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.73rem;
-            color: var(--main-accent);
-            background: var(--main-accent-lo);
-            padding: 0.1em 0.35em;
-            border-radius: 3px;
-        }
 
         /* ── QUICK START ── */
         #start {
@@ -915,6 +862,7 @@
             .req-grid { grid-template-columns: 1fr; }
             .no-gh-block { grid-template-columns: 1fr; }
             .alt-scenario-body { grid-template-columns: 1fr; }
+            .cli-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 580px) {
             nav { padding: 1rem; }
@@ -961,6 +909,95 @@
         .alt-prose p { margin: 0; }
         .alt-prose p + p { margin-top: 0.6em; }
 
+        /* ── CLI REFERENCE ── */
+        #features {
+            background: rgba(41, 51, 62, 0.25);
+            border-top: 1px solid rgba(var(--main-accent-rgb),0.07);
+        }
+
+        .cli-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1px;
+            background: var(--n3);
+            border: 1px solid var(--n3);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 3rem;
+        }
+
+        .cli-card {
+            background: var(--void);
+            padding: 1.75rem;
+            transition: background 0.2s;
+            display: flex;
+            flex-direction: column;
+            gap: 0.55rem;
+        }
+        .cli-card:hover { background: var(--n2); }
+
+        .cli-cat {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.58rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 600;
+            padding: 0.15rem 0.45rem;
+            border-radius: 3px;
+            display: inline-block;
+            width: fit-content;
+        }
+        .cli-cat--routing  { color: var(--vitellary);  background: rgba(240,160,48,0.1);   border: 1px solid rgba(240,160,48,0.2); }
+        .cli-cat--storage  { color: var(--violet);     background: rgba(153,102,255,0.1);  border: 1px solid rgba(153,102,255,0.2); }
+        .cli-cat--env      { color: var(--victoria);   background: rgba(68,102,221,0.1);   border: 1px solid rgba(68,102,221,0.2); }
+        .cli-cat--deploy   { color: var(--verdigris);  background: rgba(64,184,104,0.1);   border: 1px solid rgba(64,184,104,0.2); }
+        .cli-cat--monorepo { color: var(--lava);       background: rgba(243,60,44,0.1);    border: 1px solid rgba(243,60,44,0.2); }
+        .cli-cat--config   { color: var(--main-accent);background: var(--main-accent-lo);  border: 1px solid rgba(var(--main-accent-rgb),0.25); }
+
+        .cli-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--white);
+            letter-spacing: -0.015em;
+            line-height: 1.2;
+        }
+
+        .cli-desc {
+            font-size: 0.8rem;
+            color: var(--n4);
+            line-height: 1.6;
+            flex: 1;
+        }
+
+        .cli-code {
+            background: #191f26;
+            border: 1px solid rgba(49,63,76,0.9);
+            border-radius: 7px;
+            padding: 0.75rem 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            line-height: 1.9;
+            margin-top: 0.2rem;
+        }
+        .cli-code .cm { color: var(--n5); }
+        .cli-code .co { color: var(--n4); }
+        .cli-code .ok { color: var(--verdigris); }
+        .cli-code .hi { color: var(--main-accent); }
+
+        .cli-footer {
+            text-align: center;
+            margin-top: 2.25rem;
+            font-size: 0.8rem;
+            color: var(--n4);
+        }
+        .cli-footer code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--main-accent);
+            background: var(--main-accent-lo);
+            padding: 0.1em 0.4em;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
@@ -971,7 +1008,7 @@
     <div class="nav-right">
         <span class="nav-badge">open source</span>
         <a href="#start" class="nav-link">Quick start</a>
-        <a href="#features" class="nav-link">Features</a>
+        <a href="#features" class="nav-link">Reference</a>
         <a href="https://github.com/racso/poof" class="nav-github" target="_blank" rel="noopener">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
@@ -1150,45 +1187,127 @@
     </div>
 </section>
 
-<!-- FEATURES -->
+<!-- FEATURES / CLI REFERENCE -->
 <section id="features" aria-labelledby="features-title">
     <div class="section-inner">
-        <div class="section-label" aria-hidden="true">// capabilities</div>
-        <h2 class="section-title" id="features-title">Everything you need.</h2>
-        <p class="section-sub">Nothing you don't.</p>
+        <div class="section-label" aria-hidden="true">// cli reference</div>
+        <h2 class="section-title" id="features-title">Common operations.</h2>
+        <p class="section-sub">A quick reference for what Poof! can do. Run <code style="font-family:'JetBrains Mono',monospace;font-size:0.85em;color:var(--main-accent);background:var(--main-accent-lo);padding:0.1em 0.4em;border-radius:3px">poof help</code> to see everything.</p>
 
-        <div class="features-grid">
-            <div class="feature-card">
-                <div class="feature-icon" aria-hidden="true">◎</div>
-                <div class="feature-title">Zero DNS ops</div>
-                <div class="feature-desc">One wildcard record covers every project, forever. Add a project, it's live at <code>myapp.mydomain.com</code> instantly.</div>
+        <div class="cli-grid">
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--routing">routing</span>
+                <div class="cli-title">Custom domain</div>
+                <div class="cli-desc">Override the default <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">name.mydomain.com</code> subdomain. Set it at registration or update it anytime.</div>
+                <div class="cli-code">
+<span class="co"># at registration</span><br>
+<span class="cm">poof add myapp --domain app.mydomain.com</span><br>
+<br>
+<span class="co"># or later</span><br>
+<span class="cm">poof update myapp --domain app.mydomain.com</span>
+                </div>
             </div>
-            <div class="feature-card">
-                <div class="feature-icon" aria-hidden="true">⚡</div>
-                <div class="feature-title">Automatic TLS</div>
-                <div class="feature-desc">Caddy provisions ACME certificates automatically. Every subdomain gets HTTPS — no configuration required.</div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--routing">routing</span>
+                <div class="cli-title">Domain redirects</div>
+                <div class="cli-desc">Redirect any domain to another — www aliases, legacy domains, or migration paths. Caddy handles the 301 and TLS automatically.</div>
+                <div class="cli-code">
+<span class="cm">poof redirect add www.mydomain.com mydomain.com</span><br>
+<span class="cm">poof redirect add old-name.com mydomain.com</span><br>
+<br>
+<span class="cm">poof redirect list</span><br>
+<span class="ok">&nbsp;&nbsp;1  www.mydomain.com  →  mydomain.com</span>
+                </div>
             </div>
-            <div class="feature-card">
-                <div class="feature-icon" aria-hidden="true">⬡</div>
-                <div class="feature-title">Per-project tokens</div>
-                <div class="feature-desc">Each project gets an isolated secret. Compromise one, affect none. Generated and injected automatically via the GitHub API.</div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--monorepo">monorepo</span>
+                <div class="cli-title">Multiple services, one repo</div>
+                <div class="cli-desc">Register multiple projects from a single repository. Each folder gets its own project, domain, and CI workflow — which triggers only on changes to that folder.</div>
+                <div class="cli-code">
+<span class="cm">poof add api  --folder backend  --port 3000</span><br>
+<span class="cm">poof add web  --folder frontend --port 8080</span><br>
+<br>
+<span class="ok">&nbsp;&nbsp;✓ api  →  api.mydomain.com</span><br>
+<span class="ok">&nbsp;&nbsp;✓ web  →  web.mydomain.com</span>
+                </div>
             </div>
-            <div class="feature-card">
-                <div class="feature-icon" aria-hidden="true">▤</div>
-                <div class="feature-title">Monorepo support</div>
-                <div class="feature-desc">Multiple services in one repository with <code>--folder</code>. Workflows only trigger on changes to each subfolder.</div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--env">env vars</span>
+                <div class="cli-title">Environment variables</div>
+                <div class="cli-desc">Inject secrets and config into containers. Keys are listed but values are never exposed. Deploy to apply changes.</div>
+                <div class="cli-code">
+<span class="cm">poof env set myapp DATABASE_URL=postgres://...</span><br>
+<span class="cm">poof env set myapp KEY=val1 SECRET=val2</span><br>
+<br>
+<span class="cm">poof env get myapp</span><br>
+<span class="ok">&nbsp;&nbsp;DATABASE_URL  SECRET  KEY</span>
+                </div>
             </div>
-            <div class="feature-card">
-                <div class="feature-icon" aria-hidden="true">⊙</div>
-                <div class="feature-title">One binary</div>
-                <div class="feature-desc">Same Go binary runs as server daemon or CLI client. Zero runtime dependencies, SQLite state, single-file backup.</div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--storage">storage</span>
+                <div class="cli-title">Persistent volumes</div>
+                <div class="cli-desc">Mount a path into your container. Let Poof! manage the host directory, or point to one you control. Changes apply on next deploy.</div>
+                <div class="cli-code">
+<span class="co"># managed (Poof! owns it)</span><br>
+<span class="cm">poof volume add myapp /data</span><br>
+<br>
+<span class="co"># explicit host path</span><br>
+<span class="cm">poof volume add myapp /mnt/uploads:/app/uploads</span><br>
+<span class="cm">poof deploy myapp</span>
+                </div>
             </div>
-            <div class="feature-card">
-                <div class="feature-icon" aria-hidden="true">↩</div>
-                <div class="feature-title">Instant rollbacks</div>
-                <div class="feature-desc">Something broke? <code>poof rollback myapp</code> redeploys the previous image in seconds from deployment history.</div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--deploy">deploy</span>
+                <div class="cli-title">Rollback</div>
+                <div class="cli-desc">Something broke after a deploy? Poof! keeps a deployment history and can restore the previous image in seconds.</div>
+                <div class="cli-code">
+<span class="cm">poof rollback myapp</span><br>
+<span class="ok">&nbsp;&nbsp;✓ rolled back to ghcr.io/org/myapp:prev</span><br>
+<span class="hi">&nbsp;&nbsp;✦ https://myapp.mydomain.com is live</span><br>
+<br>
+<span class="co"># or deploy a specific image</span><br>
+<span class="cm">poof deploy myapp --image ghcr.io/org/myapp:v2</span>
+                </div>
             </div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--config">declarative</span>
+                <div class="cli-title">Declarative config</div>
+                <div class="cli-desc">Define all projects in a <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">poof.ini</code> file and reconcile with one command. Great for reproducible infrastructure and staging environments.</div>
+                <div class="cli-code">
+<span class="co"># poof.ini</span><br>
+<span class="cm">[api]</span><br>
+<span class="cm">domain = api.mydomain.com</span><br>
+<span class="cm">port   = 3000</span><br>
+<br>
+<span class="cm">poof apply --dry-run</span><br>
+<span class="cm">poof apply</span>
+                </div>
+            </div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--deploy">ops</span>
+                <div class="cli-title">Logs, status & updates</div>
+                <div class="cli-desc">Inspect running projects, tail logs, and keep both the CLI and the server up to date — all from your machine.</div>
+                <div class="cli-code">
+<span class="cm">poof status myapp</span><br>
+<span class="cm">poof logs myapp -n 50</span><br>
+<span class="cm">poof list</span><br>
+<br>
+<span class="cm">poof update-self</span><br>
+<span class="cm">poof update-remote</span>
+                </div>
+            </div>
+
         </div>
+
+        <p class="cli-footer">These are the highlights — run <code>poof help</code> or <code>poof &lt;command&gt; --help</code> for the full manual.</p>
     </div>
 </section>
 
