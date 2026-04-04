@@ -69,13 +69,9 @@
             /* "poof" stays white; only .exclaim gets lava */
         }
         .exclaim {
+            font-family: 'JetBrains Mono', monospace;
             color: var(--lava);
             text-shadow: 0 0 8px rgba(243,60,44,0.7), 0 0 24px rgba(243,60,44,0.3);
-        }
-
-        .poof-name {
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 500;
         }
 
         .nav-right {
@@ -230,8 +226,6 @@
             color: var(--white);
             position: relative;
             display: inline-block;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 700;
         }
         .hero-headline .accent::after {
             content: '';
@@ -1108,7 +1102,7 @@
     <div class="section-inner">
         <div class="section-label" aria-hidden="true">// getting started</div>
         <h2 class="section-title" id="start-title">Up in minutes.</h2>
-        <p class="section-sub"><span class="poof-name">Poof<span class="exclaim">!</span></span> is convention-driven: sensible defaults get you from zero to deployed in minutes, with every detail overridable when you need it.</p>
+        <p class="section-sub">Poof<span class="exclaim">!</span> is convention-driven: sensible defaults get you from zero to deployed in minutes, with every detail overridable when you need it.</p>
 
         <div class="start-grid">
             <div class="start-steps">
@@ -1127,8 +1121,8 @@
                             <div class="start-title">Configure &amp; start</div>
                             <div class="start-desc">
                                 <p>Create a (minimal) configuration file.</p>
-                                <p>Add your base domain, GitHub token, and a <span class="poof-name">Poof<span class="exclaim">!</span></span> auth token.</p>
-                                <p>Run <span class="poof-name">Poof<span class="exclaim">!</span></span> in server mode.</p>
+                                <p>Add your base domain, GitHub token, and a Poof<span class="exclaim">!</span> auth token.</p>
+                                <p>Run Poof<span class="exclaim">!</span> in server mode.</p>
                             </div>
                         </div>
                     </div>
@@ -1229,7 +1223,7 @@
     <div class="section-inner">
         <div class="section-label" aria-hidden="true">// cli reference</div>
         <h2 class="section-title" id="features-title">Common operations.</h2>
-        <p class="section-sub">A quick reference for what <span class="poof-name">Poof<span class="exclaim">!</span></span> can do. Run <code style="font-family:'JetBrains Mono',monospace;font-size:0.85em;color:var(--main-accent);background:var(--main-accent-lo);padding:0.1em 0.4em;border-radius:3px">poof help</code> to see everything.</p>
+        <p class="section-sub">A quick reference for what Poof<span class="exclaim">!</span> can do. Run <code style="font-family:'JetBrains Mono',monospace;font-size:0.85em;color:var(--main-accent);background:var(--main-accent-lo);padding:0.1em 0.4em;border-radius:3px">poof help</code> to see everything.</p>
 
         <div class="cli-grid">
 
@@ -1288,7 +1282,7 @@
             <div class="cli-card">
                 <span class="cli-cat cli-cat--storage">storage</span>
                 <div class="cli-title">Persistent volumes</div>
-                <div class="cli-desc">Mount a path into your container. Let <span class="poof-name">Poof<span class="exclaim">!</span></span> manage the host directory, or point to one you control. Changes apply on next deploy.</div>
+                <div class="cli-desc">Mount a path into your container. Let Poof<span class="exclaim">!</span> manage the host directory, or point to one you control. Changes apply on next deploy.</div>
                 <div class="cli-code">
 <span class="co"># managed (Poof! owns it)</span><br>
 <span class="cm">poof volume add myapp /data</span><br>
@@ -1302,7 +1296,7 @@
             <div class="cli-card">
                 <span class="cli-cat cli-cat--deploy">deploy</span>
                 <div class="cli-title">Rollback</div>
-                <div class="cli-desc">Something broke after a deploy? <span class="poof-name">Poof<span class="exclaim">!</span></span> keeps a deployment history and can restore the previous image in seconds.</div>
+                <div class="cli-desc">Something broke after a deploy? Poof<span class="exclaim">!</span> keeps a deployment history and can restore the previous image in seconds.</div>
                 <div class="cli-code">
 <span class="cm">poof rollback myapp</span><br>
 <span class="ok">&nbsp;&nbsp;✓ rolled back to ghcr.io/org/myapp:prev</span><br>
