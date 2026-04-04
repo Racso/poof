@@ -8,7 +8,7 @@
     <meta name="description" content="A lightweight deployment daemon that takes your code from git push to a running container, automatically.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,400&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -70,7 +70,12 @@
         }
         .exclaim {
             color: var(--lava);
-            text-shadow: 0 0 16px rgba(243, 60, 44, 0.5);
+            text-shadow: 0 0 8px rgba(243,60,44,0.7), 0 0 24px rgba(243,60,44,0.3);
+        }
+
+        .poof-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
         }
 
         .nav-right {
@@ -225,6 +230,8 @@
             color: var(--white);
             position: relative;
             display: inline-block;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
         }
         .hero-headline .accent::after {
             content: '';
@@ -598,8 +605,14 @@
 
         /* ── FOOTER ── */
         footer {
-            padding: 1.75rem 2rem;
+            padding: 1.5rem 2rem 1.75rem;
             border-top: 1px solid rgba(106, 128, 144, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+        }
+
+        .footer-main {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -614,19 +627,30 @@
         }
         .footer-logo .exclaim { color: var(--lava); }
 
-        .footer-right {
+        .footer-links {
             display: flex;
             align-items: center;
             gap: 1.5rem;
             font-size: 0.78rem;
-            color: var(--n4);
         }
-        .footer-right a {
+        .footer-links a {
             color: var(--n4);
             text-decoration: none;
             transition: color 0.2s;
         }
-        .footer-right a:hover { color: var(--white); }
+        .footer-links a:hover { color: var(--white); }
+
+        .footer-credit {
+            font-size: 0.75rem;
+            color: var(--n4);
+            text-align: center;
+        }
+        .footer-credit a {
+            color: var(--n4);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .footer-credit a:hover { color: var(--white); }
 
         /* ── RESPONSIVE ── */
         /* ── START V2: Requirements matrix ── */
@@ -1084,7 +1108,7 @@
     <div class="section-inner">
         <div class="section-label" aria-hidden="true">// getting started</div>
         <h2 class="section-title" id="start-title">Up in minutes.</h2>
-        <p class="section-sub">Poof<span style="color:var(--lava)">!</span> is convention-driven: sensible defaults get you from zero to deployed in minutes, with every detail overridable when you need it.</p>
+        <p class="section-sub"><span class="poof-name">Poof<span class="exclaim">!</span></span> is convention-driven: sensible defaults get you from zero to deployed in minutes, with every detail overridable when you need it.</p>
 
         <div class="start-grid">
             <div class="start-steps">
@@ -1103,8 +1127,8 @@
                             <div class="start-title">Configure &amp; start</div>
                             <div class="start-desc">
                                 <p>Create a (minimal) configuration file.</p>
-                                <p>Add your base domain, GitHub token, and a Poof<span style="color:var(--lava)">!</span> auth token.</p>
-                                <p>Run Poof<span style="color:var(--lava)">!</span> in server mode.</p>
+                                <p>Add your base domain, GitHub token, and a <span class="poof-name">Poof<span class="exclaim">!</span></span> auth token.</p>
+                                <p>Run <span class="poof-name">Poof<span class="exclaim">!</span></span> in server mode.</p>
                             </div>
                         </div>
                     </div>
@@ -1205,7 +1229,7 @@
     <div class="section-inner">
         <div class="section-label" aria-hidden="true">// cli reference</div>
         <h2 class="section-title" id="features-title">Common operations.</h2>
-        <p class="section-sub">A quick reference for what Poof<span style="color:var(--lava)">!</span> can do. Run <code style="font-family:'JetBrains Mono',monospace;font-size:0.85em;color:var(--main-accent);background:var(--main-accent-lo);padding:0.1em 0.4em;border-radius:3px">poof help</code> to see everything.</p>
+        <p class="section-sub">A quick reference for what <span class="poof-name">Poof<span class="exclaim">!</span></span> can do. Run <code style="font-family:'JetBrains Mono',monospace;font-size:0.85em;color:var(--main-accent);background:var(--main-accent-lo);padding:0.1em 0.4em;border-radius:3px">poof help</code> to see everything.</p>
 
         <div class="cli-grid">
 
@@ -1264,7 +1288,7 @@
             <div class="cli-card">
                 <span class="cli-cat cli-cat--storage">storage</span>
                 <div class="cli-title">Persistent volumes</div>
-                <div class="cli-desc">Mount a path into your container. Let Poof<span style="color:var(--lava)">!</span> manage the host directory, or point to one you control. Changes apply on next deploy.</div>
+                <div class="cli-desc">Mount a path into your container. Let <span class="poof-name">Poof<span class="exclaim">!</span></span> manage the host directory, or point to one you control. Changes apply on next deploy.</div>
                 <div class="cli-code">
 <span class="co"># managed (Poof! owns it)</span><br>
 <span class="cm">poof volume add myapp /data</span><br>
@@ -1278,7 +1302,7 @@
             <div class="cli-card">
                 <span class="cli-cat cli-cat--deploy">deploy</span>
                 <div class="cli-title">Rollback</div>
-                <div class="cli-desc">Something broke after a deploy? Poof<span style="color:var(--lava)">!</span> keeps a deployment history and can restore the previous image in seconds.</div>
+                <div class="cli-desc">Something broke after a deploy? <span class="poof-name">Poof<span class="exclaim">!</span></span> keeps a deployment history and can restore the previous image in seconds.</div>
                 <div class="cli-code">
 <span class="cm">poof rollback myapp</span><br>
 <span class="ok">&nbsp;&nbsp;✓ rolled back to ghcr.io/org/myapp:prev</span><br>
@@ -1326,11 +1350,15 @@
 
 <!-- FOOTER -->
 <footer>
-    <a href="#" class="footer-logo">poof<span class="exclaim">!</span></a>
-    <div class="footer-right">
-        <span>Made with <span style="font-size:1.2em;line-height:1">♠</span> by <a href="https://rac.so" target="_blank" rel="noopener">Racso</a></span>
-        <a href="https://github.com/racso/poof" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/racso/poof/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    <div class="footer-main">
+        <a href="#" class="footer-logo">poof<span class="exclaim">!</span></a>
+        <div class="footer-links">
+            <a href="https://github.com/racso/poof" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/racso/poof/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        </div>
+    </div>
+    <div class="footer-credit">
+        Made with <span style="font-size:1.2em;line-height:1">♠</span> by <a href="https://rac.so" target="_blank" rel="noopener">Racso</a>
     </div>
 </footer>
 
