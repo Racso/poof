@@ -617,8 +617,10 @@
         .start-desc {
             font-size: 0.8rem;
             color: var(--n4);
-            line-height: 1.55;
+            line-height: 1.6;
         }
+        .start-desc p { margin: 0; }
+        .start-desc p + p { margin-top: 0.65em; }
 
         .start-desc code {
             font-family: 'JetBrains Mono', monospace;
@@ -632,8 +634,8 @@
             border-radius: 10px;
             padding: 1.4rem 1.6rem;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.78rem;
-            line-height: 1.9;
+            font-size: 0.72rem;
+            line-height: 2.1;
             box-shadow: 0 16px 48px rgba(0,0,0,0.35);
         }
 
@@ -775,17 +777,12 @@
         .step-badge--opt { background: rgba(240,160,48,0.1); color: var(--vitellary); border: 1px solid rgba(240,160,48,0.2); }
 
         .step-opt-note {
-            margin-top: 0.5rem;
-            padding: 0.5rem 0.75rem;
-            background: rgba(240,160,48,0.05);
-            border-left: 2px solid rgba(240,160,48,0.25);
-            border-radius: 0 4px 4px 0;
-            font-size: 0.75rem;
+            margin-top: 0.4rem;
+            font-size: 0.78rem;
             color: var(--n4);
             line-height: 1.55;
         }
-        .step-opt-note code { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--n5); }
-        .step-opt-note .opt-kw { color: var(--vitellary); font-weight: 500; }
+        .step-opt-note .opt-kw { color: var(--vitellary); }
 
         .no-gh-block {
             display: grid;
@@ -812,21 +809,102 @@
             gap: 0.6rem;
         }
         .no-gh-steps li {
-            display: flex;
-            gap: 0.6rem;
+            position: relative;
+            padding-left: 1rem;
             font-size: 0.82rem;
             color: var(--n4);
             line-height: 1.55;
-            align-items: flex-start;
         }
         .no-gh-steps li::before {
             content: '–';
             color: rgba(240,160,48,0.5);
-            flex-shrink: 0;
+            position: absolute;
+            left: 0;
         }
         .no-gh-steps li code { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--n5); }
 
         .code-block--sm { font-size: 0.72rem; padding: 1.1rem 1.3rem; line-height: 1.75; }
+
+        /* ── START B: Inline commands ── */
+        #start-b {
+            border-top: 1px solid rgba(var(--main-accent-rgb),0.07);
+        }
+
+        .start-steps-solo {
+            max-width: 680px;
+            display: flex;
+            flex-direction: column;
+            margin-top: 3rem;
+        }
+
+        .step-cmd {
+            background: #191f26;
+            border: 1px solid var(--n3);
+            border-radius: 7px;
+            padding: 0.7rem 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            line-height: 1.8;
+            margin-top: 0.75rem;
+            display: block;
+        }
+
+        /* ── Step group labels ── */
+        .step-group-label {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.62rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: var(--n4);
+            margin-bottom: 0.25rem;
+        }
+        .step-group-label::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: rgba(106, 128, 144, 0.15);
+        }
+        .step-group-label--server { color: var(--vitellary); }
+        .step-group-label--server::after { background: rgba(240,160,48,0.15); }
+        .step-group-label--local { color: var(--main-accent); }
+        .step-group-label--local::after { background: rgba(var(--main-accent-rgb),0.15); }
+
+        .step-group + .step-group { margin-top: 0.5rem; }
+
+        .step-group-done {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.68rem;
+            color: var(--verdigris);
+            margin-top: 0.1rem;
+            margin-left: calc(26px + 1.1rem);
+            padding-bottom: 0.75rem;
+            animation: neonBreathe 2.8s ease-in-out infinite;
+        }
+        @keyframes neonBreathe {
+            0%, 100% {
+                opacity: 0.65;
+                text-shadow: 0 0 6px rgba(64,184,104,0.4), 0 0 14px rgba(64,184,104,0.15);
+            }
+            50% {
+                opacity: 1;
+                text-shadow: 0 0 8px rgba(64,184,104,0.9), 0 0 22px rgba(64,184,104,0.5), 0 0 40px rgba(64,184,104,0.2);
+            }
+        }
+
+        .cb-group-label {
+            display: block;
+            font-size: 0.65rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.3rem;
+            margin-top: 0.1rem;
+        }
+        .cb-group-label--server { color: rgba(240,160,48,0.55); }
+        .cb-group-label--local  { color: rgba(var(--main-accent-rgb),0.55); }
 
         @media (max-width: 940px) {
             .hero-inner { grid-template-columns: 1fr; gap: 3rem; }
@@ -887,7 +965,7 @@
             <div class="hero-actions">
                 <div class="install-cmd">
                     <span class="install-cmd-prefix" aria-hidden="true">$</span>
-                    <span class="install-cmd-text">curl -fsSL https://raw.githubusercontent.com/racso/poof/main/install.sh | sh</span>
+                    <span class="install-cmd-text">curl -fsSL https://poof.rac.so/install | sh</span>
                     <button class="install-cmd-copy" id="copy-btn" onclick="copyInstall()" aria-label="Copy install command">copy</button>
                 </div>
                 <div class="hero-links">
@@ -920,54 +998,69 @@
 
         <div class="start-grid">
             <div class="start-steps">
-                <div class="start-step">
-                    <div class="start-num" aria-hidden="true">1</div>
-                    <div>
-                        <div class="start-title">Install the binary</div>
-                        <div class="start-desc">One curl. Works on any Linux server with Docker and Caddy already running.</div>
+                <div class="step-group">
+                    <div class="step-group-label step-group-label--server">on your server</div>
+                    <div class="start-step">
+                        <div class="start-num" aria-hidden="true">1</div>
+                        <div>
+                            <div class="start-title">Install the binary</div>
+                            <div class="start-desc">Works on any Linux server with Docker and Caddy already running.</div>
+                        </div>
                     </div>
-                </div>
-                <div class="start-step">
-                    <div class="start-num" aria-hidden="true">2</div>
-                    <div>
-                        <div class="start-title">Configure &amp; start the server</div>
-                        <div class="start-desc">Set your domain and auth token in <code>/etc/poof/poof.toml</code>. Then <code>poof server</code>.</div>
-                        <div class="step-opt-note"><span class="opt-kw">optional:</span> add a GitHub token to your config and Poof! will <em>also</em> automate GitHub Actions setup.</div>
+                    <div class="start-step" style="border-bottom:none">
+                        <div class="start-num" aria-hidden="true">2</div>
+                        <div>
+                            <div class="start-title">Configure &amp; start</div>
+                            <div class="start-desc">
+                                <p>Create a (minimal) configuration file.</p>
+                                <p>Add your base domain, GitHub token, and a Poof! auth token.</p>
+                                <p>Run Poof! in server mode.</p>
+                            </div>
+                        </div>
                     </div>
+                    <div class="step-group-done">✓ done with the server — forever</div>
                 </div>
-                <div class="start-step">
-                    <div class="start-num" aria-hidden="true">3</div>
-                    <div>
-                        <div class="start-title">Register your project</div>
-                        <div class="start-desc"><code>poof add myapp</code> registers the project, injects deploy secrets into your repo, and commits the CI workflow.</div>
+                <div class="step-group">
+                    <div class="step-group-label step-group-label--local">from your machine</div>
+                    <div class="start-step">
+                        <div class="start-num" aria-hidden="true">3</div>
+                        <div>
+                            <div class="start-title">Register your project</div>
+                            <div class="start-desc">Sets up routing, injects deploy secrets into your repo, and commits the GitHub Actions workflow.</div>
+                        </div>
                     </div>
-                </div>
-                <div class="start-step">
-                    <div class="start-num" aria-hidden="true">4</div>
-                    <div>
-                        <div class="start-title">Push your code</div>
-                        <div class="start-desc">Every push to <code>main</code> builds and deploys automatically. That's it — forever.</div>
+                    <div class="start-step">
+                        <div class="start-num" aria-hidden="true">4</div>
+                        <div>
+                            <div class="start-title">Push your code</div>
+                            <div class="start-desc">
+                                <p>Every push to <code>main</code> builds and deploys <code>myapp.mydomain.com</code> automatically.</p>
+                                <p>That's it.</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <div class="code-block" role="region" aria-label="Quick start commands">
-<span class="co"># 1. Install</span>
-<span class="cm">curl -fsSL https://raw.githubusercontent.com/racso/poof/main/install.sh | sh</span>
+<span class="cb-group-label cb-group-label--server">on your server</span>
+<span class="co"># Install the binary</span><br>
+<span class="cm">curl -fsSL https://poof.rac.so/install | sh</span><br>
 <br>
-<span class="co"># 2. Configure &amp; start</span>
-<span class="cm">vim /etc/poof/poof.toml</span>
-<span class="cm">poof server &amp;</span>
+<span class="co"># Configure &amp; start</span><br>
+<span class="cm">nano /etc/poof/poof.toml</span><br>
+<span class="cm">poof server &amp;</span><br>
 <br>
-<span class="co"># 3. Register a project</span>
-<span class="cm">poof add myapp</span>
-<span class="ok">  ✓ Project registered · myapp.yourdomain.com</span>
-<span class="ok">  ✓ Secret POOF_TOKEN set on github</span>
-<span class="ok">  ✓ Workflow committed to .github/workflows/</span>
+<span class="cb-group-label cb-group-label--local">from your machine</span>
+<span class="co"># Register your project</span><br>
+<span class="cm">poof add myapp</span><br>
+<span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✓ Project registered · myapp.mydomain.com</span><br>
+<span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✓ Secret POOF_TOKEN set on github</span><br>
+<span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✓ Workflow committed to .github/workflows/</span><br>
 <br>
-<span class="co"># 4. Ship it</span>
-<span class="cm">git push</span>
-<span class="hi">  ✦ https://myapp.yourdomain.com is live</span>
+<span class="co"># Ship it!</span><br>
+<span class="cm">git push</span><br>
+<span class="hi">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✦ https://myapp.mydomain.com is live</span>
             </div>
         </div>
 
@@ -987,10 +1080,10 @@
 <span class="cm">docker push myimage:v1</span>
 <br>
 <span class="co"># Trigger deploy via API</span>
-<span class="cm">curl -X POST https://poof.yourdomain.com/projects/myapp/deploy \</span>
+<span class="cm">curl -X POST https://poof.mydomain.com/projects/myapp/deploy \</span>
 <span class="cm">  -H "Authorization: Bearer $POOF_TOKEN" \</span>
 <span class="cm">  -d '{"image":"myimage:v1"}'</span>
-<span class="hi">  ✦ https://myapp.yourdomain.com is live</span>
+<span class="hi">  ✦ https://myapp.mydomain.com is live</span>
             </div>
         </div>
     </div>
@@ -1007,7 +1100,7 @@
             <div class="feature-card">
                 <div class="feature-icon" aria-hidden="true">◎</div>
                 <div class="feature-title">Zero DNS ops</div>
-                <div class="feature-desc">One wildcard record covers every project, forever. Add a project, it's live at <code>myapp.yourdomain.com</code> instantly.</div>
+                <div class="feature-desc">One wildcard record covers every project, forever. Add a project, it's live at <code>myapp.mydomain.com</code> instantly.</div>
             </div>
             <div class="feature-card">
                 <div class="feature-icon" aria-hidden="true">⚡</div>
@@ -1088,7 +1181,7 @@
 
     // ── Copy install command ──
     function copyInstall() {
-        const cmd = 'curl -fsSL https://raw.githubusercontent.com/racso/poof/main/install.sh | sh';
+        const cmd = 'curl -fsSL https://poof.rac.so/install | sh';
         navigator.clipboard.writeText(cmd).then(() => {
             const btn = document.getElementById('copy-btn');
             btn.textContent = 'copied!';
