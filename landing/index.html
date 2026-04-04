@@ -1133,12 +1133,19 @@
                     <div class="start-step">
                         <div class="start-num" aria-hidden="true">3</div>
                         <div>
+                            <div class="start-title">Point your CLI at the server</div>
+                            <div class="start-desc">Create a client config file with the server URL and the auth token you set on the server.</div>
+                        </div>
+                    </div>
+                    <div class="start-step">
+                        <div class="start-num" aria-hidden="true">4</div>
+                        <div>
                             <div class="start-title">Register your project</div>
                             <div class="start-desc">Sets up routing, injects deploy secrets into your repo, and commits the GitHub Actions workflow.</div>
                         </div>
                     </div>
                     <div class="start-step">
-                        <div class="start-num" aria-hidden="true">4</div>
+                        <div class="start-num" aria-hidden="true">5</div>
                         <div>
                             <div class="start-title">Push your code</div>
                             <div class="start-desc">
@@ -1160,6 +1167,11 @@
 <span class="cm">poof server &amp;</span><br>
 <br>
 <span class="cb-group-label cb-group-label--local">from your machine</span>
+<span class="co"># Point your CLI at the server</span><br>
+<span class="cm">nano ~/.config/poof/poof.toml</span><br>
+<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;server = "https://poof.mydomain.com"</span><br>
+<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;token&nbsp;&nbsp;= "your-auth-token"</span><br>
+<br>
 <span class="co"># Register your project</span><br>
 <span class="cm">poof add myapp</span><br>
 <span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✓ Project registered · myapp.mydomain.com</span><br>
