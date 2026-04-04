@@ -914,6 +914,7 @@
             .start-grid { grid-template-columns: 1fr; }
             .req-grid { grid-template-columns: 1fr; }
             .no-gh-block { grid-template-columns: 1fr; }
+            .alt-scenario-body { grid-template-columns: 1fr; }
         }
         @media (max-width: 580px) {
             nav { padding: 1rem; }
@@ -922,6 +923,44 @@
             .hero { padding: 6rem 1.25rem 4rem; }
             .features-grid { grid-template-columns: 1fr; }
         }
+
+        /* ── ALT SCENARIOS ── */
+        .alt-scenarios {
+            margin-top: 3rem;
+            border: 1px solid rgba(240,160,48,0.15);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .alt-scenario {
+            padding: 2rem 2rem;
+            border-bottom: 1px solid rgba(240,160,48,0.08);
+        }
+        .alt-scenario:last-child { border-bottom: none; }
+
+        .alt-scenario-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--vitellary);
+            letter-spacing: 0.03em;
+            margin-bottom: 1.25rem;
+        }
+
+        .alt-scenario-body {
+            display: grid;
+            grid-template-columns: 1fr 1.25fr;
+            gap: 2.5rem;
+            align-items: start;
+        }
+
+        .alt-prose {
+            font-size: 0.82rem;
+            color: var(--n4);
+            line-height: 1.6;
+        }
+        .alt-prose p { margin: 0; }
+        .alt-prose p + p { margin-top: 0.6em; }
+
     </style>
 </head>
 <body>
@@ -1065,26 +1104,47 @@
             </div>
         </div>
 
-        <div class="no-gh-block">
-            <div>
-                <div class="no-gh-title">No GitHub token? Not using GitHub at all?</div>
-                <ul class="no-gh-steps">
-                    <li>Skip the GitHub token in your config — <code>poof add</code> still registers the project and configures routing.</li>
-                    <li>Set up your CI pipeline manually in whatever tool you use.</li>
-                    <li>Build your Docker image and push it to any registry the server can pull from.</li>
-                    <li>Trigger deploys by calling <code>POST /projects/myapp/deploy</code> with the image tag.</li>
-                </ul>
-            </div>
-            <div class="code-block code-block--sm" role="region" aria-label="Manual deploy example">
-<span class="co"># Build &amp; push (any CI)</span>
-<span class="cm">docker build -t myimage:v1 .</span>
-<span class="cm">docker push myimage:v1</span>
+        <div class="alt-scenarios">
+            <div class="alt-scenario">
+                <div class="alt-scenario-title">No GitHub token? Not using GitHub at all?</div>
+                <div class="alt-scenario-body">
+                    <div class="alt-prose">
+                        <p>Skip the GitHub token in your config entirely.</p>
+                        <p>Set up your own CI to build and push a Docker image to any registry your server can pull from.</p>
+                        <p>Trigger deploys by posting the new image tag to Poof's deploy API.</p>
+                    </div>
+                    <div class="code-block code-block--sm" role="region" aria-label="Manual deploy example">
+<span class="co"># Build &amp; push with any CI tool</span><br>
+<span class="cm">docker build -t myimage:v1 .</span><br>
+<span class="cm">docker push myimage:v1</span><br>
 <br>
-<span class="co"># Trigger deploy via API</span>
-<span class="cm">curl -X POST https://poof.mydomain.com/projects/myapp/deploy \</span>
-<span class="cm">  -H "Authorization: Bearer $POOF_TOKEN" \</span>
-<span class="cm">  -d '{"image":"myimage:v1"}'</span>
-<span class="hi">  ✦ https://myapp.mydomain.com is live</span>
+<span class="co"># Trigger deploy via API</span><br>
+<span class="cm">curl -X POST https://poof.mydomain.com/projects/myapp/deploy \</span><br>
+<span class="cm">  -H "Authorization: Bearer $POOF_TOKEN" \</span><br>
+<span class="cm">  -d '{"image":"myimage:v1"}'</span><br>
+<span class="hi">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✦ https://myapp.mydomain.com is live</span>
+                    </div>
+                </div>
+            </div>
+            <div class="alt-scenario">
+                <div class="alt-scenario-title">Deploying to multiple domains?</div>
+                <div class="alt-scenario-body">
+                    <div class="alt-prose">
+                        <p>Override the default subdomain by specifying a custom domain at registration time.</p>
+                        <p>Add aliases and redirects for www prefixes, legacy domains, or domain migrations.</p>
+                        <p>Each project lives on its own domain, independently of your base domain. You can also update the domain at any time.</p>
+                    </div>
+                    <div class="code-block code-block--sm" role="region" aria-label="Multi-domain example">
+<span class="co"># Register with a custom domain</span><br>
+<span class="cm">poof add myapp --domain app.mydomain.com</span><br>
+<br>
+<span class="co"># Redirect an alias</span><br>
+<span class="cm">poof redirect add www.mydomain.com mydomain.com</span><br>
+<br>
+<span class="co"># Change domain anytime</span><br>
+<span class="cm">poof update myapp --domain new.mydomain.com</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
