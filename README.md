@@ -128,6 +128,9 @@ poof logs <name> [--lines N]       container log lines
 poof env get <name>                list env var keys (values never shown)
 poof env set <name> KEY=VALUE      set env vars
 poof env unset <name> KEY          remove env var
+poof volume add <name> <mount>     add a volume mount to a project
+poof volume list <name>            list volume mounts for a project
+poof volume remove <name> <id>     remove a volume mount from a project
 poof redirect add <from> <to>      add a domain redirect (301)
 poof redirect list                 list all redirects
 poof redirect delete <id>          delete a redirect by ID
@@ -165,6 +168,22 @@ Set the server-wide default in `poof.toml`:
 ```toml
 subpath_default = "redirect"   # disabled | redirect | proxy (default: disabled)
 ```
+
+## Volumes
+
+Persistent volume mounts survive container recreations and redeployments.
+
+```sh
+poof volume add myapp /app/data                    # managed mount
+poof volume add myapp /mnt/uploads:/app/uploads    # explicit mount
+poof volume list myapp
+poof volume remove myapp <id>
+poof deploy myapp   # redeploy to apply changes
+```
+
+**Managed mounts** — only a container path is given. Poof! creates and owns the host directory at `/var/lib/poof/<project>/<container-path>`. When removing a managed volume, you will be asked whether to delete the host data (`--data-delete` / `--data-keep` to skip the prompt).
+
+**Explicit mounts** — `host/path:container/path` format. You control the host directory; Poof! never touches it.
 
 ## Domain redirects
 
