@@ -861,8 +861,6 @@
             .start-grid { grid-template-columns: 1fr; }
             .req-grid { grid-template-columns: 1fr; }
             .no-gh-block { grid-template-columns: 1fr; }
-            .alt-scenario-body { grid-template-columns: 1fr; }
-            .cli-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 580px) {
             nav { padding: 1rem; }
@@ -997,6 +995,12 @@
             background: var(--main-accent-lo);
             padding: 0.1em 0.4em;
             border-radius: 3px;
+        }
+
+        /* ── RESPONSIVE (must follow base styles to win the cascade) ── */
+        @media (max-width: 940px) {
+            .alt-scenario-body { grid-template-columns: 1fr; }
+            .cli-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
