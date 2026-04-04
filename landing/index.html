@@ -259,6 +259,7 @@
             overflow: hidden;
             max-width: 430px;
             transition: border-color 0.2s;
+            flex-wrap: wrap;
         }
         .install-cmd:focus-within { border-color: rgba(var(--main-accent-rgb),0.4); }
 
@@ -276,10 +277,8 @@
             font-size: 0.78rem;
             color: var(--n5);
             flex: 1;
-            padding: 0.75rem 0.25rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            padding: 0.75rem 1rem 0.75rem 0.25rem;
+            word-break: break-word;
             min-width: 0;
         }
 
@@ -289,12 +288,15 @@
             color: var(--n4);
             background: var(--n3);
             border: none;
-            border-left: 1px solid rgba(106, 128, 144, 0.18);
+            border-right: 1px solid rgba(106, 128, 144, 0.18);
             padding: 0.75rem 1rem;
             cursor: pointer;
             transition: background 0.15s, color 0.15s;
             white-space: nowrap;
             flex-shrink: 0;
+            align-self: stretch;
+            display: flex;
+            align-items: center;
         }
         .install-cmd-copy:hover {
             background: var(--main-accent-lo);
@@ -320,6 +322,8 @@
         /* ── TERMINAL ── */
         .terminal-wrap {
             position: relative;
+            overflow: hidden;
+            min-width: 0;
         }
 
         .terminal-glow {
@@ -1001,6 +1005,11 @@
         @media (max-width: 940px) {
             .alt-scenario-body { grid-template-columns: 1fr; }
             .cli-grid { grid-template-columns: 1fr; }
+            .terminal-body { font-size: 0.68rem; min-height: 280px; }
+        }
+        @media (max-width: 580px) {
+            .terminal-body { font-size: 0.62rem; min-height: 240px; }
+            .install-cmd { max-width: 100%; }
         }
     </style>
 </head>
@@ -1044,9 +1053,9 @@
             </p>
             <div class="hero-actions">
                 <div class="install-cmd">
+                    <button class="install-cmd-copy" id="copy-btn" onclick="copyInstall()" aria-label="Copy install command">copy</button>
                     <span class="install-cmd-prefix" aria-hidden="true">$</span>
                     <span class="install-cmd-text">curl -fsSL https://poof.rac.so/install | sh</span>
-                    <button class="install-cmd-copy" id="copy-btn" onclick="copyInstall()" aria-label="Copy install command">copy</button>
                 </div>
                 <div class="hero-links">
                     <a href="#start" class="hero-link">↓ Quick start</a>
