@@ -213,8 +213,17 @@ func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) validGlobalToken(r *http.Request) bool {
+	// Resolve the expected token: toml takes precedence, then DB, then bootstrap.
+	expected := s.cfg.Auth.Token
+	if expected == "" {
+		expected, _ = s.store.GetSetting("token")
+	}
+	if expected == "" {
+		// No token configured anywhere — allow unauthenticated bootstrap.
+		return true
+	}
 	token := bearerToken(r)
-	return token != "" && token == s.cfg.Auth.Token
+	return token != "" && token == expected
 }
 
 func bearerToken(r *http.Request) string {

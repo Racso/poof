@@ -1115,10 +1115,9 @@
                     <div class="start-step" style="border-bottom:none">
                         <div class="start-num" aria-hidden="true">2</div>
                         <div>
-                            <div class="start-title">Configure &amp; start</div>
+                            <div class="start-title">Start</div>
                             <div class="start-desc">
-                                <p>Create a minimal config file with just an auth token.</p>
-                                <p>Run Poof<span class="exclaim">!</span> in server mode.</p>
+                                <p>No config file needed. Tell the CLI this machine is the server, then start Poof<span class="exclaim">!</span> in server mode.</p>
                             </div>
                         </div>
                     </div>
@@ -1155,13 +1154,9 @@
 
             <div class="code-block" role="region" aria-label="Quick start commands">
 <span class="cb-group-label cb-group-label--server">on your server</span>
-<span class="co"># Install the binary</span><br>
+<span class="co"># Install &amp; start — no config needed</span><br>
 <span class="cm">curl -fsSL https://poof.rac.so/install | sh</span><br>
-<br>
-<span class="co"># Configure &amp; start (auth token only)</span><br>
-<span class="cm">nano /etc/poof/poof.toml</span><br>
-<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;[auth]</span><br>
-<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;token = "your-secret-token"</span><br>
+<span class="cm">poof config set server</span><br>
 <span class="cm">poof server &amp;</span><br>
 <br>
 <span class="cb-group-label cb-group-label--local">from your machine</span>
