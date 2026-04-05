@@ -967,12 +967,9 @@
             display: inline-block;
             width: fit-content;
         }
-        .cli-cat--routing  { color: var(--vitellary);  background: rgba(240,160,48,0.1);   border: 1px solid rgba(240,160,48,0.2); }
-        .cli-cat--storage  { color: var(--violet);     background: rgba(153,102,255,0.1);  border: 1px solid rgba(153,102,255,0.2); }
-        .cli-cat--env      { color: var(--victoria);   background: rgba(68,102,221,0.1);   border: 1px solid rgba(68,102,221,0.2); }
-        .cli-cat--deploy   { color: var(--verdigris);  background: rgba(64,184,104,0.1);   border: 1px solid rgba(64,184,104,0.2); }
-        .cli-cat--monorepo { color: var(--lava);       background: rgba(243,60,44,0.1);    border: 1px solid rgba(243,60,44,0.2); }
-        .cli-cat--config   { color: var(--main-accent);background: var(--main-accent-lo);  border: 1px solid rgba(var(--main-accent-rgb),0.25); }
+        .cli-cat--routing         { color: var(--vitellary);  background: rgba(240,160,48,0.1);   border: 1px solid rgba(240,160,48,0.2); }
+        .cli-cat--containerization{ color: var(--victoria);   background: rgba(68,102,221,0.1);   border: 1px solid rgba(68,102,221,0.2); }
+        .cli-cat--ops             { color: var(--verdigris);  background: rgba(64,184,104,0.1);   border: 1px solid rgba(64,184,104,0.2); }
 
         .cli-title {
             font-size: 0.95rem;
@@ -1242,13 +1239,13 @@
             <div class="cli-card">
                 <span class="cli-cat cli-cat--routing">routing</span>
                 <div class="cli-title">Custom domain</div>
-                <div class="cli-desc">Override the default <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">name.mydomain.com</code> subdomain. Set it at registration or update it anytime.</div>
+                <div class="cli-desc">Override the default <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">name.another-domain.xyz</code> subdomain. Set it at registration or update it anytime.</div>
                 <div class="cli-code">
 <span class="co"># at registration</span><br>
-<span class="cm">poof add myapp --domain app.mydomain.com</span><br>
+<span class="cm">poof add myapp --domain app.another-domain.xyz</span><br>
 <br>
 <span class="co"># or later</span><br>
-<span class="cm">poof update myapp --domain app.mydomain.com</span>
+<span class="cm">poof update myapp --domain app.another-domain.xyz</span>
                 </div>
             </div>
 
@@ -1266,7 +1263,7 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--monorepo">monorepo</span>
+                <span class="cli-cat cli-cat--routing">routing</span>
                 <div class="cli-title">Multiple services, one repo</div>
                 <div class="cli-desc">Register multiple projects from a single repository. Each folder gets its own project, domain, and CI workflow. Each workflow triggers only on changes to its folder.</div>
                 <div class="cli-code">
@@ -1279,7 +1276,7 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--env">env vars</span>
+                <span class="cli-cat cli-cat--containerization">containerization</span>
                 <div class="cli-title">Environment variables</div>
                 <div class="cli-desc">Inject secrets and config into containers. Keys are listed but values are never exposed. Deploy to apply changes.</div>
                 <div class="cli-code">
@@ -1292,7 +1289,7 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--storage">storage</span>
+                <span class="cli-cat cli-cat--containerization">containerization</span>
                 <div class="cli-title">Persistent volumes</div>
                 <div class="cli-desc">Mount a path into your container. Let Poof<span class="exclaim">!</span> manage the host directory, or point to one you control. Changes apply on next deploy.</div>
                 <div class="cli-code">
@@ -1306,7 +1303,7 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--deploy">deploy</span>
+                <span class="cli-cat cli-cat--ops">ops</span>
                 <div class="cli-title">Rollback</div>
                 <div class="cli-desc">Something broke after a deploy? Poof<span class="exclaim">!</span> keeps a deployment history and can restore the previous image in seconds.</div>
                 <div class="cli-code">
@@ -1320,9 +1317,9 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--config">declarative</span>
+                <span class="cli-cat cli-cat--ops">ops</span>
                 <div class="cli-title">Declarative config</div>
-                <div class="cli-desc">Define all projects in a <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">poof.ini</code> file and reconcile with one command. Great for reproducible infrastructure and staging environments.</div>
+                <div class="cli-desc">Instead of running individual commands, you can define all projects in a <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">poof.ini</code> file and reconcile with one command. Great for reproducible infrastructure and staging environments.</div>
                 <div class="cli-code">
 <span class="co"># poof.ini</span><br>
 <span class="cm">[api]</span><br>
@@ -1335,7 +1332,7 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--deploy">ops</span>
+                <span class="cli-cat cli-cat--ops">ops</span>
                 <div class="cli-title">Logs, status & updates</div>
                 <div class="cli-desc">Inspect running projects, tail logs, and keep both the CLI and the server up to date, all from your machine.</div>
                 <div class="cli-code">
