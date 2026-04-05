@@ -1239,13 +1239,17 @@
             <div class="cli-card">
                 <span class="cli-cat cli-cat--routing">routing</span>
                 <div class="cli-title">Custom domain</div>
-                <div class="cli-desc">Override the default <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">name.another-domain.xyz</code> subdomain. Set it at registration or update it anytime.</div>
+                <div class="cli-desc">Set any domain or subdomain per project, or configure a default domain on the server to auto-assign subdomains. Configurable at registration or anytime after.</div>
                 <div class="cli-code">
-<span class="co"># at registration</span><br>
-<span class="cm">poof add myapp --domain app.another-domain.xyz</span><br>
+<span class="co"># default: auto-assigned subdomain</span><br>
+<span class="cm">poof add myapp</span><br>
+<span class="ok">&nbsp;&nbsp;✓ myapp  →  myapp.mydomain.com</span><br>
 <br>
-<span class="co"># or later</span><br>
-<span class="cm">poof update myapp --domain app.another-domain.xyz</span>
+<span class="co"># custom domain (no subdomain)</span><br>
+<span class="cm">poof add otherapp --domain another-domain.xyz</span><br>
+<br>
+<span class="co"># update anytime</span><br>
+<span class="cm">poof update myapp --domain myapp2.mydomain.com</span>
                 </div>
             </div>
 
