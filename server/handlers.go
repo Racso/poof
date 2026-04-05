@@ -19,29 +19,18 @@ import (
 )
 
 // --- Settings helpers ---
-// These read from the DB, falling back to toml-configured values for backwards compatibility.
-// toml values take precedence so existing installations continue to work unchanged.
 
 func (s *Server) settingDomain() string {
-	if s.cfg.Domain != "" {
-		return s.cfg.Domain
-	}
 	v, _ := s.store.GetSetting("domain")
 	return v
 }
 
 func (s *Server) settingGitHubToken() string {
-	if s.cfg.GitHub.Token != "" {
-		return s.cfg.GitHub.Token
-	}
 	v, _ := s.store.GetSetting("github-token")
 	return v
 }
 
 func (s *Server) settingGitHubUser() string {
-	if s.cfg.GitHub.User != "" {
-		return s.cfg.GitHub.User
-	}
 	v, _ := s.store.GetSetting("github-user")
 	return v
 }
@@ -53,16 +42,6 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	// Fill in toml-sourced values if not already in DB (so poof config show is always complete)
-	if _, ok := settings["domain"]; !ok && s.cfg.Domain != "" {
-		settings["domain"] = s.cfg.Domain
-	}
-	if _, ok := settings["github-user"]; !ok && s.cfg.GitHub.User != "" {
-		settings["github-user"] = s.cfg.GitHub.User
-	}
-	if _, ok := settings["github-token"]; !ok && s.cfg.GitHub.Token != "" {
-		settings["github-token"] = s.cfg.GitHub.Token
 	}
 	jsonOK(w, settings)
 }

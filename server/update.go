@@ -13,12 +13,12 @@ import (
 )
 
 func (s *Server) updateServer(w http.ResponseWriter, r *http.Request) {
-	image := fmt.Sprintf("ghcr.io/%s/poof:latest", strings.ToLower(s.cfg.GitHub.User))
+	image := fmt.Sprintf("ghcr.io/%s/poof:latest", strings.ToLower(s.settingGitHubUser()))
 
 	log.Printf("update: current version=%s commit=%s", version.Number, version.Commit)
 	log.Printf("update: pulling %s", image)
 
-	pullOut, err := docker.PullSelf(image, s.cfg.GitHub.User, s.cfg.GitHub.Token)
+	pullOut, err := docker.PullSelf(image, s.settingGitHubUser(), s.settingGitHubToken())
 	if err != nil {
 		jsonError(w, fmt.Sprintf("pull failed: %v", err), http.StatusInternalServerError)
 		return

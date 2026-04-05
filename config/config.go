@@ -13,7 +13,6 @@ import (
 // --- Server config ---
 
 type ServerConfig struct {
-	Domain         string `toml:"domain"`
 	APIPort        int    `toml:"api_port"`
 	DataDir        string `toml:"data_dir"`
 	PublicURL      string `toml:"public_url"`      // how the server is reachable from outside
@@ -21,13 +20,7 @@ type ServerConfig struct {
 	CaddyAdminURL  string `toml:"caddy_admin_url"`  // Caddy admin API URL (default: http://caddy-proxy:2019)
 	CaddyStaticDir string `toml:"caddy_static_dir"` // glob-imported dir for manual Caddyfile snippets (default: /etc/caddy/conf.d)
 
-	GitHub GitHubConfig `toml:"github"`
-	Auth   AuthConfig   `toml:"auth"`
-}
-
-type GitHubConfig struct {
-	User  string `toml:"user"`
-	Token string `toml:"token"` // PAT with repo scope
+	Auth AuthConfig `toml:"auth"`
 }
 
 type AuthConfig struct {
@@ -63,9 +56,6 @@ func LoadServer() (*ServerConfig, error) {
 		if _, err := toml.DecodeFile(path, cfg); err != nil {
 			return nil, fmt.Errorf("reading config %s: %w", path, err)
 		}
-	}
-	if v := os.Getenv("POOF_GITHUB_TOKEN"); v != "" {
-		cfg.GitHub.Token = v
 	}
 	return cfg, nil
 }
