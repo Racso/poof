@@ -18,6 +18,77 @@ import (
 	"github.com/racso/poof/store"
 )
 
+// --- Settings helpers ---
+// These read from the DB, falling back to toml-configured values for backwards compatibility.
+// toml values take precedence so existing installations continue to work unchanged.
+
+func (s *Server) settingDomain() string {
+	if s.cfg.Domain != "" {
+		return s.cfg.Domain
+	}
+	v, _ := s.store.GetSetting("domain")
+	return v
+}
+
+func (s *Server) settingGitHubToken() string {
+	if s.cfg.GitHub.Token != "" {
+		return s.cfg.GitHub.Token
+	}
+	v, _ := s.store.GetSetting("github-token")
+	return v
+}
+
+func (s *Server) settingGitHubUser() string {
+	if s.cfg.GitHub.User != "" {
+		return s.cfg.GitHub.User
+	}
+	v, _ := s.store.GetSetting("github-user")
+	return v
+}
+
+// --- Config ---
+
+func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.store.GetAllSettings()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Fill in toml-sourced values if not already in DB (so poof config show is always complete)
+	if _, ok := settings["domain"]; !ok && s.cfg.Domain != "" {
+		settings["domain"] = s.cfg.Domain
+	}
+	if _, ok := settings["github-user"]; !ok && s.cfg.GitHub.User != "" {
+		settings["github-user"] = s.cfg.GitHub.User
+	}
+	if _, ok := settings["github-token"]; !ok && s.cfg.GitHub.Token != "" {
+		settings["github-token"] = s.cfg.GitHub.Token
+	}
+	jsonOK(w, settings)
+}
+
+func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	validKeys := map[string]bool{"domain": true, "github-user": true, "github-token": true}
+	if !validKeys[key] {
+		jsonError(w, "unknown config key: "+key, http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Value == "" {
+		jsonError(w, "value is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SetSetting(key, req.Value); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("config updated: %s", key)
+	jsonOK(w, map[string]string{"key": key, "status": "updated"})
+}
+
 // --- Project CRUD ---
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -79,13 +150,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 
 	// Apply defaults
 	if req.Domain == "" {
-		req.Domain = req.Name + "." + s.cfg.Domain
+		req.Domain = req.Name + "." + s.settingDomain()
 	}
 	if req.Image == "" {
-		req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.cfg.GitHub.User), strings.ToLower(req.Name))
+		req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.settingGitHubUser()), strings.ToLower(req.Name))
 	}
 	if req.Repo == "" {
-		req.Repo = fmt.Sprintf("%s/%s", s.cfg.GitHub.User, req.Name)
+		req.Repo = fmt.Sprintf("%s/%s", s.settingGitHubUser(), req.Name)
 	}
 	if req.Branch == "" {
 		req.Branch = defaults.Branch
@@ -144,11 +215,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set up GitHub repo (secrets + workflow) if a PAT is configured.
-	if s.cfg.GitHub.Token != "" {
-		client := gh.NewClient(s.cfg.GitHub.Token)
+	if s.settingGitHubToken() != "" {
+		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(req.Repo, "/")
 		if !found {
-			owner = s.cfg.GitHub.User
+			owner = s.settingGitHubUser()
 			repoName = req.Repo
 		}
 		if err := client.SetupRepo(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder); err != nil {
@@ -228,11 +299,11 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if s.cfg.GitHub.Token != "" && (repoChanged || branchChanged || folderChanged) {
-		client := gh.NewClient(s.cfg.GitHub.Token)
+	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged) {
+		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
-			owner = s.cfg.GitHub.User
+			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
 		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, p.Token, p.Branch, p.Image, p.Folder); err != nil {
@@ -261,11 +332,11 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clean up GitHub if PAT is configured
-	if s.cfg.GitHub.Token != "" {
-		client := gh.NewClient(s.cfg.GitHub.Token)
+	if s.settingGitHubToken() != "" {
+		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
-			owner = s.cfg.GitHub.User
+			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
 		if err := client.RemoveRepo(owner, repoName, name, p.Folder); err != nil {
@@ -367,8 +438,8 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Image:         image,
 		EnvVars:       envVars,
 		Volumes:       mounts,
-		RegistryUser:  s.cfg.GitHub.User,
-		RegistryToken: s.cfg.GitHub.Token,
+		RegistryUser:  s.settingGitHubUser(),
+		RegistryToken: s.settingGitHubToken(),
 	})
 
 	status := "success"
@@ -698,7 +769,7 @@ func (s *Server) syncCaddy() error {
 	if err != nil {
 		return err
 	}
-	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.cfg.Domain, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
+	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
 	return caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 

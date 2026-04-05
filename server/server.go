@@ -67,6 +67,10 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /redirects", s.auth(s.createRedirect))
 	mux.HandleFunc("DELETE /redirects/{id}", s.auth(s.deleteRedirect))
 
+	// Server settings
+	mux.HandleFunc("GET /config", s.auth(s.getConfig))
+	mux.HandleFunc("PATCH /config/{key}", s.auth(s.setConfig))
+
 	// Server logs, version, and self-update
 	mux.HandleFunc("GET /logs/server", s.auth(s.getServerLogs))
 	mux.HandleFunc("GET /version", s.auth(s.getVersion))

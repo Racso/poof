@@ -100,6 +100,15 @@ type ClientConfig struct {
 	Profiles map[string]ProfileEntry
 }
 
+// ServerLocal is the sentinel value stored in the client config to indicate
+// that this machine is the Poof! server. Internally it resolves to localhost.
+const ServerLocal = "local"
+
+// IsLocal reports whether this config is running in server mode (server = "local").
+func (c *ClientConfig) IsLocal() bool {
+	return c.Server == ServerLocal
+}
+
 // LoadClient reads the client config file, resolves the active profile, and
 // applies env var overrides.
 //
@@ -221,4 +230,25 @@ func expandTilde(p string) string {
 		}
 	}
 	return p
+}
+
+// WriteClientSetting writes or updates a single key in the client config file at path.
+// The file is created if it doesn't exist. Existing keys are preserved.
+func WriteClientSetting(path, key, value string) error {
+	raw := make(map[string]interface{})
+	if _, err := os.Stat(path); err == nil {
+		if _, err := toml.DecodeFile(path, &raw); err != nil {
+			return fmt.Errorf("reading config: %w", err)
+		}
+	}
+	raw[key] = value
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(raw)
 }

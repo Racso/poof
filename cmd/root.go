@@ -63,16 +63,22 @@ func troubleshootHint() string {
 	return s
 }
 
-// serverURL returns the server address from config or falls back to localhost.
+// serverURL returns the server API base URL. Fatals if server is not configured.
 func serverURL() string {
-	if cfg.Server != "" {
-		return cfg.Server
+	if cfg.Server == "" {
+		fatal("server not configured — run: poof config set server <url>\n       (or: poof config set server   if this machine is the server)")
 	}
-	return "http://localhost:9000"
+	if cfg.Server == config.ServerLocal {
+		return "http://localhost:9000"
+	}
+	return cfg.Server
 }
 
-// apiToken returns the API token for CLI → server calls.
+// apiToken returns the API auth token. Fatals if token is not configured.
 func apiToken() string {
+	if cfg.Token == "" {
+		fatal("token not configured — run: poof config set token <token>")
+	}
 	return cfg.Token
 }
 
