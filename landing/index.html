@@ -1117,8 +1117,7 @@
                         <div>
                             <div class="start-title">Configure &amp; start</div>
                             <div class="start-desc">
-                                <p>Create a (minimal) configuration file.</p>
-                                <p>Add your base domain, GitHub token, and a Poof<span class="exclaim">!</span> auth token.</p>
+                                <p>Create a minimal config file with just an auth token.</p>
                                 <p>Run Poof<span class="exclaim">!</span> in server mode.</p>
                             </div>
                         </div>
@@ -1131,7 +1130,7 @@
                         <div class="start-num" aria-hidden="true">3</div>
                         <div>
                             <div class="start-title">Point your CLI at the server</div>
-                            <div class="start-desc">Create a client config file with the server URL and the auth token you set on the server.</div>
+                            <div class="start-desc">Set the server URL, auth token, base domain, and GitHub credentials — all with <code>poof config set</code>.</div>
                         </div>
                     </div>
                     <div class="start-step">
@@ -1159,15 +1158,19 @@
 <span class="co"># Install the binary</span><br>
 <span class="cm">curl -fsSL https://poof.rac.so/install | sh</span><br>
 <br>
-<span class="co"># Configure &amp; start</span><br>
+<span class="co"># Configure &amp; start (auth token only)</span><br>
 <span class="cm">nano /etc/poof/poof.toml</span><br>
+<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;[auth]</span><br>
+<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;token = "your-secret-token"</span><br>
 <span class="cm">poof server &amp;</span><br>
 <br>
 <span class="cb-group-label cb-group-label--local">from your machine</span>
 <span class="co"># Point your CLI at the server</span><br>
-<span class="cm">nano ~/.config/poof/poof.toml</span><br>
-<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;server = "https://poof.mydomain.com"</span><br>
-<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;token&nbsp;&nbsp;= "your-auth-token"</span><br>
+<span class="cm">poof config set server https://poof.mydomain.com</span><br>
+<span class="cm">poof config set token  your-secret-token</span><br>
+<span class="cm">poof config set domain mydomain.com</span><br>
+<span class="cm">poof config set github-user  your-gh-user</span><br>
+<span class="cm">poof config set github-token ghp_...</span><br>
 <br>
 <span class="co"># Register your project</span><br>
 <span class="cm">poof add myapp</span><br>

@@ -35,20 +35,27 @@ Or download a binary directly from [releases](https://github.com/racso/poof/rele
 Create `/etc/poof/poof.toml`:
 
 ```toml
-domain          = "yourdomain.com"
 api_port        = 9000
 data_dir        = "/var/lib/poof"
 public_url      = "https://poof.yourdomain.com"  # set as POOF_URL repo secret
 caddy_admin_url  = "http://caddy-proxy:2019"       # omit if your Caddy container is named caddy-proxy
 caddy_static_dir = "/etc/caddy/conf.d"             # dir for manual Caddyfile snippets (default shown)
 
-[github]
-user  = "your-github-username"
-token = "ghp_..."               # PAT with scopes: repo, workflow, read:packages, delete:packages
-
 [auth]
 token = "your-secret-token"     # used by CLI to authenticate with the server
 ```
+
+After the server is running, push the remaining settings from your machine using the CLI:
+
+```sh
+poof config set server https://poof.yourdomain.com
+poof config set token  your-secret-token
+poof config set domain yourdomain.com
+poof config set github-user  your-github-username
+poof config set github-token ghp_...    # PAT with scopes: repo, workflow, read:packages, delete:packages
+```
+
+Run `poof config` at any time to see the current client and server settings.
 
 ## Running
 
@@ -75,7 +82,7 @@ Poof! must share `caddy-net` with Caddy so it can reach the admin API by contain
 
 ## Client configuration
 
-The CLI reads from `~/.config/poof/poof.toml` (respects `$XDG_CONFIG_HOME`; Windows: `%AppData%\poof\poof.toml`). Run `poof config` to print the exact path.
+The CLI reads from `~/.config/poof/poof.toml` (respects `$XDG_CONFIG_HOME`; Windows: `%AppData%\poof\poof.toml`). Use `poof config set` to write settings, or edit the file directly:
 
 ```toml
 server = "https://poof.yourdomain.com"
@@ -137,7 +144,8 @@ poof redirect delete <id>          delete a redirect by ID
 poof apply [-f file] [--dry-run] [--prune]   declarative project sync
 poof update-remote                 update the server to the latest image
 poof version                       print client version
-poof config                        print the client config file path
+poof config                        show client and server configuration
+poof config set <key> [value]      set a client or server configuration value
 poof server                        start the daemon
 ```
 
