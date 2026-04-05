@@ -32,33 +32,32 @@ Or download a binary directly from [releases](https://github.com/racso/poof/rele
 
 ## Server configuration
 
-Poof! starts with no config required. All settings are pushed from your machine via `poof config set`.
-
-If you need to override infrastructure defaults (port, data dir, Caddy URL), create `/etc/poof/poof.toml`:
+Create `/etc/poof/poof.toml`:
 
 ```toml
-api_port        = 9000                            # default
-data_dir        = "/var/lib/poof"                 # default
+token           = "your-secret-token"             # required; used by CLI to authenticate with the server
+api_port        = 9000                            # default; omit to keep
+data_dir        = "/var/lib/poof"                 # default; omit to keep
 public_url      = "https://poof.yourdomain.com"   # set as POOF_URL repo secret
 caddy_admin_url  = "http://caddy-proxy:2019"       # omit if your Caddy container is named caddy-proxy
 caddy_static_dir = "/etc/caddy/conf.d"             # dir for manual Caddyfile snippets (default shown)
 ```
 
-After the server is running, configure everything from your machine:
+Minimal config (just the required field):
+
+```toml
+token = "your-secret-token"
+```
+
+After the server is running, push the remaining settings from your machine:
 
 ```sh
-# On the server machine — tell the CLI this is the local server
-poof config set server
-
-# From your machine (or the server, if server = local)
-poof config set server https://poof.yourdomain.com   # client only; omit on server machine
-poof config set token  your-secret-token             # sets auth on server + saves locally
+poof config set server https://poof.yourdomain.com
+poof config set token  your-secret-token
 poof config set domain yourdomain.com
 poof config set github-user  your-github-username
 poof config set github-token ghp_...    # PAT with scopes: repo, workflow, read:packages, delete:packages
 ```
-
-The server is open to unauthenticated requests until `token` is set. Set it immediately after first boot.
 
 Run `poof config` at any time to see the current client and server settings.
 

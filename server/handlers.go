@@ -43,14 +43,12 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Never expose the auth token over the API.
-	delete(settings, "token")
 	jsonOK(w, settings)
 }
 
 func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
-	validKeys := map[string]bool{"domain": true, "github-user": true, "github-token": true, "token": true}
+	validKeys := map[string]bool{"domain": true, "github-user": true, "github-token": true}
 	if !validKeys[key] {
 		jsonError(w, "unknown config key: "+key, http.StatusBadRequest)
 		return

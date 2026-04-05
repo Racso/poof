@@ -20,8 +20,8 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if scfg.Auth.Token == "" {
-			fmt.Fprintln(os.Stderr, "error: auth.token must be set in config before starting the server")
+		if scfg.Token == "" {
+			fmt.Fprintln(os.Stderr, "error: token must be set in config before starting the server")
 			os.Exit(1)
 		}
 

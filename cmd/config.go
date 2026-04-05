@@ -20,11 +20,11 @@ var configSetCmd = &cobra.Command{
 	Short: "Set a configuration value",
 	Long: `Set a configuration value.
 
-Local key (written to this machine's config file only):
+Local keys (written to this machine's config file):
   server        URL of the Poof! server. Omit value on the server machine itself.
-
-Server keys (sent to the server and also saved locally where applicable):
   token         API token for authenticating with the server.
+
+Server keys (sent to the remote server — requires server and token to be set):
   domain        Default domain for new projects (e.g. mydomain.com).
   github-user   GitHub username used for automatic CI setup.
   github-token  GitHub personal access token.`,
@@ -93,17 +93,11 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		if value == "" {
 			fatal("value required: poof config set token <token>")
 		}
-		if cfg.Server == "" {
-			fatal("server not configured — run: poof config set server <url> first")
-		}
-		if err := apiPatch("/config/token", map[string]string{"value": value}, nil); err != nil {
-			fatal("%v", err)
-		}
 		path := config.ClientConfigPath()
 		if err := config.WriteClientSetting(path, "token", value); err != nil {
 			fatal("writing config: %v", err)
 		}
-		fmt.Printf("token updated\n")
+		fmt.Printf("token updated  →  %s\n", path)
 
 	case "domain", "github-user", "github-token":
 		if value == "" {

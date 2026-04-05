@@ -32,12 +32,9 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store) {
 	t.Cleanup(func() { st.Close() })
 
 	cfg := &config.ServerConfig{
-		Domain:    "rac.so",
 		APIPort:   9000,
 		PublicURL: "https://poof.rac.so",
-		Auth:      config.AuthConfig{Token: "global-test-token"},
-		GitHub:    config.GitHubConfig{User: "racso"},
-		// No GitHub.Token — disables GitHub API calls during tests.
+		Token:     "global-test-token",
 	}
 
 	srv := server.New(cfg, st)
@@ -128,7 +125,9 @@ func TestCreateAndListProjects(t *testing.T) {
 }
 
 func TestCreateProjectAppliesDefaults(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
 
 	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "myapp"}, globalToken)
 	if rr.Code != http.StatusCreated {
