@@ -55,6 +55,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /projects/{name}/env", s.auth(s.getEnv))
 	mux.HandleFunc("PUT /projects/{name}/env", s.auth(s.setEnv))
 	mux.HandleFunc("DELETE /projects/{name}/env/{key}", s.auth(s.unsetEnv))
+	mux.HandleFunc("POST /projects/{name}/env/copy-to/{target}", s.auth(s.copyEnv))
 
 	// Volumes
 	mux.HandleFunc("GET /projects/{name}/volumes", s.auth(s.listVolumes))

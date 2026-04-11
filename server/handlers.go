@@ -516,6 +516,58 @@ func (s *Server) unsetEnv(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "removed"})
 }
 
+func (s *Server) copyEnv(w http.ResponseWriter, r *http.Request) {
+	source := r.PathValue("name")
+	target := r.PathValue("target")
+
+	// Verify target project exists.
+	tp, err := s.store.GetProject(target)
+	if err != nil || tp == nil {
+		jsonError(w, "target project not found: "+target, http.StatusNotFound)
+		return
+	}
+
+	vars, err := s.store.GetEnvVars(source)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// If a "keys" array is provided, copy only those.
+	var req struct {
+		Keys []string `json:"keys"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	if len(req.Keys) > 0 {
+		allowed := map[string]bool{}
+		for _, k := range req.Keys {
+			allowed[k] = true
+		}
+		for k := range vars {
+			if !allowed[k] {
+				delete(vars, k)
+			}
+		}
+	}
+
+	for k, v := range vars {
+		if err := s.store.SetEnvVar(target, k, v); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	log.Printf("env copy: %s → %s (%d key(s))", source, target, len(vars))
+	copied := make([]string, 0, len(vars))
+	for k := range vars {
+		copied = append(copied, k)
+	}
+	jsonOK(w, map[string]interface{}{"status": "copied", "keys": copied})
+}
+
 // --- Redirects ---
 
 func (s *Server) listRedirects(w http.ResponseWriter, r *http.Request) {
