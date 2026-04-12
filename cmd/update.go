@@ -79,9 +79,13 @@ func doUpdateLocal(version string) {
 
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
+	suffix := ""
+	if goos == "windows" {
+		suffix = ".exe"
+	}
 	url := fmt.Sprintf(
-		"https://github.com/Racso/poof/releases/download/%s/poof-%s-%s",
-		tag, goos, goarch,
+		"https://github.com/Racso/poof/releases/download/%s/poof-%s-%s%s",
+		tag, goos, goarch, suffix,
 	)
 
 	exe, err := os.Executable()
