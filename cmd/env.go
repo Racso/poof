@@ -80,6 +80,85 @@ var envUnsetCmd = &cobra.Command{
 	},
 }
 
+// copyEnvVars copies environment variables from source to target using the
+// given selection mode. Exactly one of all, only, except, or ask must be set.
+// Called by both "env copy" and "clone --env".
+func copyEnvVars(source, target string, all bool, only, except string, ask bool) {
+	// Validate exactly one mode.
+	flags := 0
+	if all {
+		flags++
+	}
+	if only != "" {
+		flags++
+	}
+	if except != "" {
+		flags++
+	}
+	if ask {
+		flags++
+	}
+	if flags != 1 {
+		fatal("exactly one of --all, --only, --except, or --ask is required")
+	}
+
+	// Fetch available keys from source.
+	var result map[string]interface{}
+	if err := apiGet("/projects/"+source+"/env", &result); err != nil {
+		fatal("%v", err)
+	}
+	rawKeys, _ := result["keys"].([]interface{})
+	if len(rawKeys) == 0 {
+		fmt.Printf("no env vars in %q — nothing to copy\n", source)
+		return
+	}
+	allKeys := make([]string, len(rawKeys))
+	for i, k := range rawKeys {
+		allKeys[i] = fmt.Sprint(k)
+	}
+
+	// Determine which keys to copy.
+	var keys []string
+	switch {
+	case all:
+		keys = allKeys
+	case only != "":
+		keys = splitCSV(only)
+		validateKeys(keys, allKeys, source)
+	case except != "":
+		excluded := toSet(splitCSV(except))
+		for _, k := range allKeys {
+			if !excluded[k] {
+				keys = append(keys, k)
+			}
+		}
+	case ask:
+		reader := bufio.NewReader(os.Stdin)
+		for _, k := range allKeys {
+			fmt.Printf("Copy %s? [y/N] ", k)
+			line, _ := reader.ReadString('\n')
+			line = strings.TrimSpace(strings.ToLower(line))
+			if line == "y" || line == "yes" {
+				keys = append(keys, k)
+			}
+		}
+	}
+
+	if len(keys) == 0 {
+		fmt.Println("no keys selected — nothing to copy")
+		return
+	}
+
+	// Ask server to copy.
+	payload := map[string]interface{}{"keys": keys}
+	var copyResult map[string]interface{}
+	if err := apiPost("/projects/"+source+"/env/copy-to/"+target, payload, &copyResult); err != nil {
+		fatal("%v", err)
+	}
+
+	fmt.Printf("✓ copied %d env var(s) from %q to %q\n", len(keys), source, target)
+}
+
 var envCopyAll bool
 var envCopyOnly string
 var envCopyExcept string
@@ -96,82 +175,7 @@ Exactly one selection flag is required:
   --ask            interactively confirm each key`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		source := args[0]
-		target := args[1]
-
-		// Validate exactly one flag.
-		flags := 0
-		if envCopyAll {
-			flags++
-		}
-		if envCopyOnly != "" {
-			flags++
-		}
-		if envCopyExcept != "" {
-			flags++
-		}
-		if envCopyAsk {
-			flags++
-		}
-		if flags != 1 {
-			fatal("exactly one of --all, --only, --except, or --ask is required")
-		}
-
-		// Fetch available keys from source.
-		var result map[string]interface{}
-		if err := apiGet("/projects/"+source+"/env", &result); err != nil {
-			fatal("%v", err)
-		}
-		rawKeys, _ := result["keys"].([]interface{})
-		if len(rawKeys) == 0 {
-			fmt.Printf("no env vars in %q — nothing to copy\n", source)
-			return
-		}
-		allKeys := make([]string, len(rawKeys))
-		for i, k := range rawKeys {
-			allKeys[i] = fmt.Sprint(k)
-		}
-
-		// Determine which keys to copy.
-		var keys []string
-		switch {
-		case envCopyAll:
-			keys = allKeys
-		case envCopyOnly != "":
-			keys = splitCSV(envCopyOnly)
-			validateKeys(keys, allKeys, source)
-		case envCopyExcept != "":
-			excluded := toSet(splitCSV(envCopyExcept))
-			for _, k := range allKeys {
-				if !excluded[k] {
-					keys = append(keys, k)
-				}
-			}
-		case envCopyAsk:
-			reader := bufio.NewReader(os.Stdin)
-			for _, k := range allKeys {
-				fmt.Printf("Copy %s? [y/N] ", k)
-				line, _ := reader.ReadString('\n')
-				line = strings.TrimSpace(strings.ToLower(line))
-				if line == "y" || line == "yes" {
-					keys = append(keys, k)
-				}
-			}
-		}
-
-		if len(keys) == 0 {
-			fmt.Println("no keys selected — nothing to copy")
-			return
-		}
-
-		// Ask server to copy.
-		payload := map[string]interface{}{"keys": keys}
-		var copyResult map[string]interface{}
-		if err := apiPost("/projects/"+source+"/env/copy-to/"+target, payload, &copyResult); err != nil {
-			fatal("%v", err)
-		}
-
-		fmt.Printf("✓ copied %d env var(s) from %q to %q\n", len(keys), source, target)
+		copyEnvVars(args[0], args[1], envCopyAll, envCopyOnly, envCopyExcept, envCopyAsk)
 		fmt.Println("  run 'poof deploy' to apply changes")
 	},
 }
