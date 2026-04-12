@@ -1,4 +1,4 @@
-name: Poof! Deploy
+name: Poof! deploy (landing)
 
 on:
   push:
@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   deploy:
+    if: vars.POOF_DISABLE != '1'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +27,7 @@ jobs:
       - name: Deploy via Poof!
         run: |
           curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/poof/deploy" \
-            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN_POOF }}" \
+            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"image\": \"${{ env.IMAGE }}\"}"
 
