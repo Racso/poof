@@ -129,7 +129,7 @@ import = "~/.config/poof/work.toml"
 
 ```
 poof add <name> [flags]            register project + automate GitHub setup
-poof update <name> [flags]         update project configuration (token is preserved)
+poof configure <name> [flags]      update project configuration (token is preserved)
 poof remove <name>                 remove project, stop container
 poof list                          list all projects and status
 poof status <name>                 project details + last deployment
@@ -149,7 +149,9 @@ poof redirect add <from> <to>      add a domain redirect (301)
 poof redirect list                 list all redirects
 poof redirect delete <id>          delete a redirect by ID
 poof apply [-f file] [--dry-run] [--prune]   declarative project sync
-poof update-remote                 update the server to the latest image
+poof update local [version]        update the local CLI binary (latest or pinned)
+poof update server [version]       update the server (latest or pinned)
+poof update both [version]         update server first, then local CLI
 poof version                       print client version
 poof config                        show client and server configuration
 poof config set <key> [value]      set a client or server configuration value
@@ -212,7 +214,7 @@ By default, projects are only reachable at their subdomain (`myapp.yourdomain.co
 
 ```sh
 poof add myapp --subpath=redirect
-poof update myapp --subpath=proxy
+poof configure myapp --subpath=proxy
 poof deploy myapp   # redeploy required for routing changes to take effect
 ```
 

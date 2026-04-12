@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,7 +14,19 @@ import (
 )
 
 func (s *Server) updateServer(w http.ResponseWriter, r *http.Request) {
-	image := fmt.Sprintf("ghcr.io/%s/poof:latest", strings.ToLower(s.settingGitHubUser()))
+	var req struct {
+		Version string `json:"version"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&req) // empty body is fine
+	}
+
+	tag := "latest"
+	if req.Version != "" {
+		tag = req.Version
+	}
+
+	image := fmt.Sprintf("ghcr.io/%s/poof:%s", strings.ToLower(s.settingGitHubUser()), tag)
 
 	log.Printf("update: current version=%s commit=%s", version.Number, version.Commit)
 	log.Printf("update: pulling %s", image)

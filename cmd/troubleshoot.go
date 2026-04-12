@@ -23,7 +23,7 @@ var troubleshootCmd = &cobra.Command{
    cat <path>     — confirm the server URL and token look right
 
 2. The server may be mid-restart
-   If you recently ran ` + "`poof update-remote`" + `, it is likely just restarting.
+   If you recently ran ` + "`poof update server`" + `, it is likely just restarting.
    Wait a few seconds, then confirm with:
    poof version
 
