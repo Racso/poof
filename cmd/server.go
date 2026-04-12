@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/server"
@@ -14,6 +15,10 @@ var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the Poof! daemon",
 	Run: func(cmd *cobra.Command, args []string) {
+		if runtime.GOOS == "windows" {
+			fatal("Poof! server requires Linux — Windows is supported for the CLI client only")
+		}
+
 		scfg, err := config.LoadServer()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
