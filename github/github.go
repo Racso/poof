@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/racso/poof/defaults"
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -24,7 +25,7 @@ const apiBase = "https://api.github.com"
 //   POOF_PROJECT_NAME  → Poof! project name (may differ from GitHub repo name in monorepos)
 //   POOF_PKG_NAME      → GHCR package name for cleanup
 //   POOF_TOKEN_SECRET  → secret name: POOF_TOKEN for root builds, POOF_TOKEN_<NAME> for folder builds
-const workflowTemplate = `name: Poof! Deploy
+const workflowTemplate = `name: POOF_WORKFLOW_NAME
 
 on:
   push:
@@ -222,7 +223,21 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder 
 		buildArgs = fmt.Sprintf("-f %s/Dockerfile %s", folder, folder)
 	}
 
-	workflow := strings.ReplaceAll(workflowTemplate, "POOF_BRANCH", branch)
+	// Build human-readable workflow name.
+	workflowName := "Poof! deploy"
+	var qualifiers []string
+	if folder != "" {
+		qualifiers = append(qualifiers, strings.TrimRight(folder, "/"))
+	}
+	if branch != defaults.Branch {
+		qualifiers = append(qualifiers, branch)
+	}
+	if len(qualifiers) > 0 {
+		workflowName += " (" + strings.Join(qualifiers, ", ") + ")"
+	}
+
+	workflow := strings.ReplaceAll(workflowTemplate, "POOF_WORKFLOW_NAME", workflowName)
+	workflow = strings.ReplaceAll(workflow, "POOF_BRANCH", branch)
 	workflow = strings.ReplaceAll(workflow, "POOF_PATHS_BLOCK", pathsBlock)
 	workflow = strings.ReplaceAll(workflow, "POOF_IMAGE_BASE", imgBase)
 	workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
