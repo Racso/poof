@@ -32,6 +32,9 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("domain:  %s\n", p["domain"])
 		fmt.Printf("image:   %s\n", p["image"])
 		fmt.Printf("repo:    %s\n", p["repo"])
+		if folder, _ := p["folder"].(string); folder != "" {
+			fmt.Printf("folder:  %s\n", folder)
+		}
 		fmt.Printf("branch:  %s\n", p["branch"])
 		fmt.Printf("port:    %.0f\n", p["port"])
 

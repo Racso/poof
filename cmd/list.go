@@ -20,19 +20,24 @@ var listCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("%-20s %-35s %-8s %s\n", "NAME", "DOMAIN", "STATUS", "IMAGE")
-		fmt.Printf("%-20s %-35s %-8s %s\n", "----", "------", "------", "-----")
+		fmt.Printf("%-20s %-35s %-8s %s\n", "NAME", "DOMAIN", "STATUS", "REPO")
+		fmt.Printf("%-20s %-35s %-8s %s\n", "----", "------", "------", "----")
 		for _, p := range projects {
 			name, _ := p["name"].(string)
 			domain, _ := p["domain"].(string)
-			image, _ := p["image"].(string)
+			repo, _ := p["repo"].(string)
+			folder, _ := p["folder"].(string)
 			running, _ := p["running"].(bool)
 
 			status := "stopped"
 			if running {
 				status = "running"
 			}
-			fmt.Printf("%-20s %-35s %-8s %s\n", name, domain, status, image)
+			repoCol := repo
+			if folder != "" {
+				repoCol += " (/" + folder + ")"
+			}
+			fmt.Printf("%-20s %-35s %-8s %s\n", name, domain, status, repoCol)
 		}
 	},
 }
