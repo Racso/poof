@@ -344,6 +344,38 @@ func (s *Store) GetEnvVars(project string) (map[string]string, error) {
 	return vars, rows.Err()
 }
 
+// CopyEnvVars copies env vars from source to target. If keys is nil or
+// contains "*", all vars are copied. Otherwise only the listed keys.
+// Returns the list of keys that were actually copied.
+func (s *Store) CopyEnvVars(source, target string, keys []string) ([]string, error) {
+	vars, err := s.GetEnvVars(source)
+	if err != nil {
+		return nil, err
+	}
+
+	copyAll := len(keys) == 0 || (len(keys) == 1 && keys[0] == "*")
+	if !copyAll {
+		allowed := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			allowed[k] = true
+		}
+		for k := range vars {
+			if !allowed[k] {
+				delete(vars, k)
+			}
+		}
+	}
+
+	copied := make([]string, 0, len(vars))
+	for k, v := range vars {
+		if err := s.SetEnvVar(target, k, v); err != nil {
+			return nil, fmt.Errorf("copy env var %q: %w", k, err)
+		}
+		copied = append(copied, k)
+	}
+	return copied, nil
+}
+
 // --- Redirects ---
 
 func (s *Store) CreateRedirect(from, to string) (*Redirect, error) {

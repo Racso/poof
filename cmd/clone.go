@@ -31,64 +31,42 @@ Use --env to also copy environment variables (requires exactly one of
 	Run: func(cmd *cobra.Command, args []string) {
 		source := args[0]
 		suffix := args[1]
+
+		payload := map[string]interface{}{
+			"suffix": suffix,
+		}
+
+		// Resolve env keys if --env is set.
+		if cloneEnv {
+			payload["env_keys"] = resolveEnvKeys(source, cloneEnvAll, cloneEnvOnly, cloneEnvExcept, cloneEnvAsk)
+		}
+
+		var result map[string]interface{}
+		if err := apiPost("/projects/"+source+"/clone", payload, &result); err != nil {
+			fatal("%v", err)
+		}
+
+		proj, _ := result["project"].(map[string]interface{})
 		cloneName := source + "-" + suffix
 
-		// Fetch source project.
-		var result map[string]interface{}
-		if err := apiGet("/projects/"+source, &result); err != nil {
-			fatal("%v", err)
-		}
-		proj, ok := result["project"].(map[string]interface{})
-		if !ok {
-			fatal("could not read project %q", source)
-		}
-
-		// Build the new project payload from source, overriding name and branch.
-		payload := map[string]interface{}{
-			"name":   cloneName,
-			"branch": suffix,
-		}
-
-		// Copy config from source, adjusting domain.
-		if repo, ok := proj["repo"].(string); ok && repo != "" {
-			payload["repo"] = repo
-		}
-		if image, ok := proj["image"].(string); ok && image != "" {
-			payload["image"] = image
-		}
-		if port, ok := proj["port"].(float64); ok && port != 0 {
-			payload["port"] = int(port)
-		}
-		if subpath, ok := proj["subpath"].(string); ok && subpath != "" {
-			payload["subpath"] = subpath
-		}
-		if folder, ok := proj["folder"].(string); ok && folder != "" {
-			payload["folder"] = folder
-		}
-		// Domain: leave empty so the server generates <cloneName>.<root-domain>.
-
-		var createResult map[string]interface{}
-		if err := apiPost("/projects", payload, &createResult); err != nil {
-			fatal("%v", err)
-		}
-
 		fmt.Printf("✓ cloned %q → %q (branch: %s)\n", source, cloneName, suffix)
-		if d, ok := createResult["domain"].(string); ok {
-			fmt.Printf("  domain:  %s\n", d)
-		}
-		if i, ok := createResult["image"].(string); ok {
-			fmt.Printf("  image:   %s\n", i)
-		}
-		if r, ok := createResult["repo"].(string); ok {
-			fmt.Printf("  repo:    %s\n", r)
-		}
-		if f, ok := createResult["folder"].(string); ok && f != "" {
-			fmt.Printf("  folder:  %s\n", f)
+		if proj != nil {
+			if d, ok := proj["domain"].(string); ok {
+				fmt.Printf("  domain:  %s\n", d)
+			}
+			if i, ok := proj["image"].(string); ok {
+				fmt.Printf("  image:   %s\n", i)
+			}
+			if r, ok := proj["repo"].(string); ok {
+				fmt.Printf("  repo:    %s\n", r)
+			}
+			if f, ok := proj["folder"].(string); ok && f != "" {
+				fmt.Printf("  folder:  %s\n", f)
+			}
 		}
 
-		// Copy env vars if requested.
-		if cloneEnv {
-			copyEnvVars(source, cloneName, cloneEnvAll, cloneEnvOnly, cloneEnvExcept, cloneEnvAsk)
+		if copied, ok := result["env_keys_copied"].([]interface{}); ok && len(copied) > 0 {
+			fmt.Printf("  env:     %d var(s) copied\n", len(copied))
 		}
 	},
 }

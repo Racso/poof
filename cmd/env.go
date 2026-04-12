@@ -80,10 +80,10 @@ var envUnsetCmd = &cobra.Command{
 	},
 }
 
-// copyEnvVars copies environment variables from source to target using the
-// given selection mode. Exactly one of all, only, except, or ask must be set.
-// Called by both "env copy" and "clone --env".
-func copyEnvVars(source, target string, all bool, only, except string, ask bool) {
+// resolveEnvKeys resolves which env keys to act on based on the selection flags.
+// Returns ["*"] for --all, or a concrete list for --only/--except/--ask.
+// Fatals if exactly one flag is not set.
+func resolveEnvKeys(source string, all bool, only, except string, ask bool) []string {
 	// Validate exactly one mode.
 	flags := 0
 	if all {
@@ -102,29 +102,30 @@ func copyEnvVars(source, target string, all bool, only, except string, ask bool)
 		fatal("exactly one of --all, --only, --except, or --ask is required")
 	}
 
-	// Fetch available keys from source.
+	// --all and --only don't need to fetch keys from the server.
+	if all {
+		return []string{"*"}
+	}
+	if only != "" {
+		return splitCSV(only)
+	}
+
+	// --except and --ask need the current key list.
 	var result map[string]interface{}
 	if err := apiGet("/projects/"+source+"/env", &result); err != nil {
 		fatal("%v", err)
 	}
 	rawKeys, _ := result["keys"].([]interface{})
 	if len(rawKeys) == 0 {
-		fmt.Printf("no env vars in %q — nothing to copy\n", source)
-		return
+		return nil
 	}
 	allKeys := make([]string, len(rawKeys))
 	for i, k := range rawKeys {
 		allKeys[i] = fmt.Sprint(k)
 	}
 
-	// Determine which keys to copy.
 	var keys []string
 	switch {
-	case all:
-		keys = allKeys
-	case only != "":
-		keys = splitCSV(only)
-		validateKeys(keys, allKeys, source)
 	case except != "":
 		excluded := toSet(splitCSV(except))
 		for _, k := range allKeys {
@@ -143,20 +144,24 @@ func copyEnvVars(source, target string, all bool, only, except string, ask bool)
 			}
 		}
 	}
+	return keys
+}
 
+// copyEnvVars copies environment variables from source to target.
+func copyEnvVars(source, target string, all bool, only, except string, ask bool) {
+	keys := resolveEnvKeys(source, all, only, except, ask)
 	if len(keys) == 0 {
 		fmt.Println("no keys selected — nothing to copy")
 		return
 	}
 
-	// Ask server to copy.
 	payload := map[string]interface{}{"keys": keys}
 	var copyResult map[string]interface{}
 	if err := apiPost("/projects/"+source+"/env/copy-to/"+target, payload, &copyResult); err != nil {
 		fatal("%v", err)
 	}
 
-	fmt.Printf("✓ copied %d env var(s) from %q to %q\n", len(keys), source, target)
+	fmt.Printf("✓ copied env var(s) from %q to %q\n", source, target)
 }
 
 var envCopyAll bool

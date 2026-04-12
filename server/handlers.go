@@ -362,6 +362,109 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
+type cloneRequest struct {
+	Suffix  string   `json:"suffix"`
+	EnvKeys []string `json:"env_keys,omitempty"`
+}
+
+func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
+	sourceName := r.PathValue("name")
+	source, err := s.store.GetProject(sourceName)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if source == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	var req cloneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Suffix == "" {
+		jsonError(w, "suffix is required", http.StatusBadRequest)
+		return
+	}
+
+	cloneName := sourceName + "-" + req.Suffix
+
+	// Check duplicate.
+	if existing, _ := s.store.GetProject(cloneName); existing != nil {
+		jsonError(w, "project already exists: "+cloneName, http.StatusConflict)
+		return
+	}
+
+	// Get or create repo token.
+	token, err := s.store.GetRepoToken(source.Repo)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if token == "" {
+		token, err = generateToken()
+		if err != nil {
+			jsonError(w, "failed to generate token", http.StatusInternalServerError)
+			return
+		}
+		if err := s.store.SetRepoToken(source.Repo, token); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Derive clone config from source. Domain is left for the server default.
+	p := store.Project{
+		Name:    cloneName,
+		Domain:  cloneName + "." + s.settingDomain(),
+		Image:   source.Image,
+		Repo:    source.Repo,
+		Branch:  req.Suffix,
+		Port:    source.Port,
+		Subpath: source.Subpath,
+		Folder:  source.Folder,
+	}
+
+	if err := s.store.CreateProject(p); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Copy env vars if requested.
+	var copiedKeys []string
+	if len(req.EnvKeys) > 0 {
+		copiedKeys, err = s.store.CopyEnvVars(sourceName, cloneName, req.EnvKeys)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Set up GitHub.
+	if s.settingGitHubToken() != "" {
+		client := gh.NewClient(s.settingGitHubToken())
+		owner, repoName, found := strings.Cut(source.Repo, "/")
+		if !found {
+			owner = s.settingGitHubUser()
+			repoName = source.Repo
+		}
+		if err := client.SetupRepo(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder); err != nil {
+			log.Printf("warning: GitHub setup for %s failed: %v", cloneName, err)
+		}
+	}
+
+	log.Printf("project cloned: %s → %s (branch=%s)", sourceName, cloneName, req.Suffix)
+
+	result := map[string]interface{}{"project": p}
+	if copiedKeys != nil {
+		result["env_keys_copied"] = copiedKeys
+	}
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, result)
+}
+
 func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	p, err := s.store.GetProject(name)
@@ -581,13 +684,6 @@ func (s *Server) copyEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars, err := s.store.GetEnvVars(source)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// If a "keys" array is provided, copy only those.
 	var req struct {
 		Keys []string `json:"keys"`
 	}
@@ -595,30 +691,13 @@ func (s *Server) copyEnv(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&req)
 	}
 
-	if len(req.Keys) > 0 {
-		allowed := map[string]bool{}
-		for _, k := range req.Keys {
-			allowed[k] = true
-		}
-		for k := range vars {
-			if !allowed[k] {
-				delete(vars, k)
-			}
-		}
+	copied, err := s.store.CopyEnvVars(source, target, req.Keys)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	for k, v := range vars {
-		if err := s.store.SetEnvVar(target, k, v); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	log.Printf("env copy: %s → %s (%d key(s))", source, target, len(vars))
-	copied := make([]string, 0, len(vars))
-	for k := range vars {
-		copied = append(copied, k)
-	}
+	log.Printf("env copy: %s → %s (%d key(s))", source, target, len(copied))
 	jsonOK(w, map[string]interface{}{"status": "copied", "keys": copied})
 }
 
