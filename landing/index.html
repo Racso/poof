@@ -1323,20 +1323,6 @@
             </div>
 
             <div class="cli-card">
-                <span class="cli-cat cli-cat--containerization">containerization</span>
-                <div class="cli-title">Copy env vars between projects</div>
-                <div class="cli-desc">Copy environment variables from one project to another with flexible selection: all, specific keys, exclude keys, or interactive confirmation.</div>
-                <div class="cli-code">
-<span class="cm">poof env copy myapp myapp-test --all</span><br>
-<span class="cm">poof env copy myapp myapp-test --except DB_URL</span><br>
-<span class="cm">poof env copy myapp myapp-test --ask</span><br>
-<br>
-<span class="co"># see available keys (comma-separated)</span><br>
-<span class="cm">poof env get myapp</span>
-                </div>
-            </div>
-
-            <div class="cli-card">
                 <span class="cli-cat cli-cat--ops">ops</span>
                 <div class="cli-title">Rollback</div>
                 <div class="cli-desc">Something broke after a deploy? Poof<span class="exclaim">!</span> keeps a deployment history and can restore the previous image in seconds.</div>
