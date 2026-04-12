@@ -19,7 +19,6 @@ type Project struct {
 	Repo      string    `json:"repo"`
 	Branch    string    `json:"branch"`
 	Port      int       `json:"port"`
-	Token     string    `json:"token"`
 	Subpath   string    `json:"subpath"`
 	Folder    string    `json:"folder"`
 	CreatedAt time.Time `json:"created_at"`
@@ -119,14 +118,21 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS repo_tokens (
+			repo  TEXT PRIMARY KEY,
+			token TEXT NOT NULL
+		);
+
 		PRAGMA foreign_keys = ON;
 	`)
 	if err != nil {
 		return err
 	}
 	// Add folder column to existing databases that predate this field.
-	// Ignore the error — it fires on "duplicate column name" when already present.
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN folder TEXT NOT NULL DEFAULT ''`)
+	// Migrate per-project tokens to repo_tokens (idempotent).
+	s.db.Exec(`INSERT OR IGNORE INTO repo_tokens (repo, token)
+		SELECT repo, token FROM projects WHERE token != '' GROUP BY repo`)
 	return nil
 }
 
@@ -135,8 +141,8 @@ func (s *Store) migrate() error {
 func (s *Store) CreateProject(p Project) error {
 	_, err := s.db.Exec(
 		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Token, p.Subpath, p.Folder,
+		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -147,9 +153,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT name, domain, image, repo, branch, port, token, subpath, folder, created_at
+		`SELECT name, domain, image, repo, branch, port, subpath, folder, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.Folder, &p.CreatedAt)
+	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -161,7 +167,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, domain, image, repo, branch, port, token, subpath, folder, created_at
+		`SELECT name, domain, image, repo, branch, port, subpath, folder, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -172,12 +178,48 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Token, &p.Subpath, &p.Folder, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
 	}
 	return projects, rows.Err()
+}
+
+func (s *Store) GetRepoToken(repo string) (string, error) {
+	var token string
+	err := s.db.QueryRow(
+		`SELECT token FROM repo_tokens WHERE repo = ?`, repo,
+	).Scan(&token)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get repo token: %w", err)
+	}
+	return token, nil
+}
+
+func (s *Store) SetRepoToken(repo, token string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO repo_tokens (repo, token) VALUES (?, ?)
+		 ON CONFLICT(repo) DO UPDATE SET token = excluded.token`,
+		repo, token,
+	)
+	return err
+}
+
+func (s *Store) DeleteRepoToken(repo string) error {
+	_, err := s.db.Exec(`DELETE FROM repo_tokens WHERE repo = ?`, repo)
+	return err
+}
+
+func (s *Store) CountProjectsForRepo(repo string) (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM projects WHERE repo = ?`, repo,
+	).Scan(&count)
+	return count, err
 }
 
 func (s *Store) UpdateProject(p Project) error {

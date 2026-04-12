@@ -24,7 +24,7 @@ const apiBase = "https://api.github.com"
 //   POOF_BUILD_ARGS    → docker build args ("." for root, "-f folder/Dockerfile folder" for subfolders)
 //   POOF_PROJECT_NAME  → Poof! project name (may differ from GitHub repo name in monorepos)
 //   POOF_PKG_NAME      → GHCR package name for cleanup
-//   POOF_TOKEN_SECRET  → secret name: POOF_TOKEN for root builds, POOF_TOKEN_<NAME> for folder builds
+//   All projects in the same repo share a single POOF_TOKEN secret.
 const workflowTemplate = `name: POOF_WORKFLOW_NAME
 
 on:
@@ -52,7 +52,7 @@ jobs:
       - name: Deploy via Poof!
         run: |
           curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy" \
-            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN_SECRET }}" \
+            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"image\": \"${{ env.IMAGE }}\"}"
 
@@ -73,41 +73,15 @@ func NewClient(token string) *Client {
 	return &Client{token: token}
 }
 
-// tokenSecretName returns the GitHub secret name used to store the per-project
-// deploy token. Root builds use the plain "POOF_TOKEN" so existing repos are
-// unaffected. Folder builds use "POOF_TOKEN_<NAME>" (uppercased, hyphens →
-// underscores) so multiple projects in the same monorepo don't collide.
-func tokenSecretName(projectName, folder string) string {
-	if folder == "" {
-		return "POOF_TOKEN"
-	}
-	var b strings.Builder
-	b.WriteString("POOF_TOKEN_")
-	for _, r := range strings.ToUpper(projectName) {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
-}
-
-// SetupRepo sets the POOF_URL and deploy-token repo secrets and commits
-// the deploy workflow file. This is called once by `poof add` and on updates
-// that change repo, branch, or folder.
-//
-// projectName is the Poof! project name (may differ from the GitHub repo name
-// in monorepos). image is the custom image base (e.g. "ghcr.io/myorg/myimage");
-// pass "" to derive it from the GitHub repository name. folder is the repo
-// subfolder containing the Dockerfile (e.g. "frontend"); pass "" for a root build.
+// SetupRepo sets the POOF_URL and POOF_TOKEN repo secrets and commits the
+// deploy workflow file. All projects in the same repo share a single
+// POOF_TOKEN secret.
 func (c *Client) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch, image, folder string) error {
 	if err := c.setSecret(owner, repo, "POOF_URL", poofURL); err != nil {
 		return fmt.Errorf("set POOF_URL secret: %w", err)
 	}
-	secretName := tokenSecretName(projectName, folder)
-	if err := c.setSecret(owner, repo, secretName, poofToken); err != nil {
-		return fmt.Errorf("set %s secret: %w", secretName, err)
+	if err := c.setSecret(owner, repo, "POOF_TOKEN", poofToken); err != nil {
+		return fmt.Errorf("set POOF_TOKEN secret: %w", err)
 	}
 	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder); err != nil {
 		return fmt.Errorf("commit workflow: %w", err)
@@ -115,11 +89,14 @@ func (c *Client) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch,
 	return nil
 }
 
-// RemoveRepo removes the deploy-token secret and deletes the workflow file.
-func (c *Client) RemoveRepo(owner, repo, projectName, folder string) error {
-	_ = c.deleteSecret(owner, repo, tokenSecretName(projectName, folder))
-	_ = c.deleteSecret(owner, repo, "POOF_URL")
+// RemoveRepo deletes the workflow file. If deleteToken is true (last project
+// for this repo), also removes the POOF_TOKEN and POOF_URL secrets.
+func (c *Client) RemoveRepo(owner, repo, projectName string, deleteToken bool) error {
 	_ = c.deleteWorkflow(owner, repo, projectName)
+	if deleteToken {
+		_ = c.deleteSecret(owner, repo, "POOF_TOKEN")
+		_ = c.deleteSecret(owner, repo, "POOF_URL")
+	}
 	return nil
 }
 
@@ -243,7 +220,6 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder 
 	workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
 	workflow = strings.ReplaceAll(workflow, "POOF_PROJECT_NAME", projectName)
 	workflow = strings.ReplaceAll(workflow, "POOF_PKG_NAME", pkgName)
-	workflow = strings.ReplaceAll(workflow, "POOF_TOKEN_SECRET", tokenSecretName(projectName, folder))
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 
 	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-%s.yml", owner, repo, projectName)

@@ -189,7 +189,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authFlex middleware: accepts global token OR the project's per-project token.
+// authFlex middleware: accepts global token OR the repo-level deploy token.
 // Used for /deploy so the GH Action can call it without the global token.
 func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -197,15 +197,16 @@ func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Try per-project token
+		// Try repo-level deploy token.
 		name := r.PathValue("name")
 		p, err := s.store.GetProject(name)
 		if err != nil || p == nil {
 			jsonError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		repoToken, _ := s.store.GetRepoToken(p.Repo)
 		token := bearerToken(r)
-		if token == "" || token != p.Token {
+		if token == "" || repoToken == "" || token != repoToken {
 			jsonError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

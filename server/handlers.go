@@ -169,11 +169,22 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate per-project deploy token
-	token, err := generateToken()
+	// Get or create a deploy token for this repo.
+	token, err := s.store.GetRepoToken(req.Repo)
 	if err != nil {
-		jsonError(w, "failed to generate token", http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if token == "" {
+		token, err = generateToken()
+		if err != nil {
+			jsonError(w, "failed to generate token", http.StatusInternalServerError)
+			return
+		}
+		if err := s.store.SetRepoToken(req.Repo, token); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	p := store.Project{
@@ -183,7 +194,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Repo:    req.Repo,
 		Branch:  req.Branch,
 		Port:    req.Port,
-		Token:   token,
 		Subpath: req.Subpath,
 		Folder:  req.Folder,
 	}
@@ -203,7 +213,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := client.SetupRepo(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
-			// Don't fail — project is registered, user can retry manually.
 		}
 	}
 
@@ -279,13 +288,14 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("project updated: %s", name)
 	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged) {
+		repoToken, _ := s.store.GetRepoToken(p.Repo)
 		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, p.Token, p.Branch, p.Image, p.Folder); err != nil {
+		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder); err != nil {
 			log.Printf("warning: GitHub update for %s failed: %v", name, err)
 		}
 	}
@@ -310,7 +320,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		log.Printf("warning: stopping container for %s: %v", name, err)
 	}
 
-	// Clean up GitHub if PAT is configured
+	// Clean up GitHub if PAT is configured.
 	if s.settingGitHubToken() != "" {
 		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
@@ -318,8 +328,14 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
-		if err := client.RemoveRepo(owner, repoName, name, p.Folder); err != nil {
+		// Only delete the POOF_TOKEN secret if this is the last project for this repo.
+		siblings, _ := s.store.CountProjectsForRepo(p.Repo)
+		lastForRepo := siblings <= 1
+		if err := client.RemoveRepo(owner, repoName, name, lastForRepo); err != nil {
 			log.Printf("warning: GitHub cleanup for %s: %v", name, err)
+		}
+		if lastForRepo {
+			_ = s.store.DeleteRepoToken(p.Repo)
 		}
 	}
 

@@ -33,7 +33,6 @@ func sampleProject(name string) store.Project {
 		Repo:   "racso/" + name,
 		Branch: "main",
 		Port:   80,
-		Token:  "tok-" + name,
 	}
 }
 
@@ -60,8 +59,8 @@ func TestCreateAndGetProject(t *testing.T) {
 	if got.Domain != p.Domain {
 		t.Errorf("domain: got %q, want %q", got.Domain, p.Domain)
 	}
-	if got.Token != p.Token {
-		t.Errorf("token: got %q, want %q", got.Token, p.Token)
+	if got.Repo != p.Repo {
+		t.Errorf("repo: got %q, want %q", got.Repo, p.Repo)
 	}
 }
 

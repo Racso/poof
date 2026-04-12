@@ -237,25 +237,25 @@ func TestDeleteProject(t *testing.T) {
 
 // --- Per-project token auth on /deploy ---
 
-func TestDeployAcceptsPerProjectToken(t *testing.T) {
+func TestDeployAcceptsRepoToken(t *testing.T) {
 	srv, st := newTestServer(t)
 
-	// Create project directly in store so we know the token.
 	p := store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
-		Repo: "racso/demo", Branch: "main", Port: 8080, Token: "per-project-tok",
+		Repo: "racso/demo", Branch: "main", Port: 8080,
 	}
 	if err := st.CreateProject(p); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	st.SetRepoToken("racso/demo", "repo-tok")
 
-	// Deploy with per-project token — Docker will fail (not running in test),
+	// Deploy with repo token — Docker will fail (not running in test),
 	// but auth should pass (we get past 401).
 	rr := do(t, srv, "POST", "/projects/demo/deploy",
-		map[string]interface{}{"image": "img:v2"}, "per-project-tok")
+		map[string]interface{}{"image": "img:v2"}, "repo-tok")
 
 	if rr.Code == http.StatusUnauthorized {
-		t.Error("per-project token should be accepted for /deploy")
+		t.Error("repo token should be accepted for /deploy")
 	}
 }
 
@@ -264,9 +264,10 @@ func TestDeployRejectsWrongToken(t *testing.T) {
 
 	p := store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
-		Repo: "racso/demo", Branch: "main", Port: 8080, Token: "correct-token",
+		Repo: "racso/demo", Branch: "main", Port: 8080,
 	}
 	st.CreateProject(p)
+	st.SetRepoToken("racso/demo", "correct-token")
 
 	rr := do(t, srv, "POST", "/projects/demo/deploy",
 		map[string]interface{}{"image": "img:v2"}, "wrong-token")
@@ -281,7 +282,7 @@ func TestDeployAcceptsGlobalToken(t *testing.T) {
 
 	p := store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
-		Repo: "racso/demo", Branch: "main", Port: 8080, Token: "per-project-tok",
+		Repo: "racso/demo", Branch: "main", Port: 8080,
 	}
 	st.CreateProject(p)
 
