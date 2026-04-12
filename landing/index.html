@@ -1290,7 +1290,7 @@
 <span class="cm">poof env set myapp KEY=val1 SECRET=val2</span><br>
 <br>
 <span class="cm">poof env get myapp</span><br>
-<span class="ok">&nbsp;&nbsp;DATABASE_URL  SECRET  KEY</span>
+<span class="ok">&nbsp;&nbsp;DATABASE_URL,SECRET,KEY</span>
                 </div>
             </div>
 
@@ -1305,6 +1305,34 @@
 <span class="co"># explicit host path</span><br>
 <span class="cm">poof volume add myapp /mnt/uploads:/app/uploads</span><br>
 <span class="cm">poof deploy myapp</span>
+                </div>
+            </div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--ops">ops</span>
+                <div class="cli-title">Clone environments</div>
+                <div class="cli-desc">Spin up a test or staging environment by cloning an existing project. The clone deploys from a branch matching the suffix. Optionally copy env vars in one go.</div>
+                <div class="cli-code">
+<span class="cm">poof clone myapp test</span><br>
+<span class="ok">&nbsp;&nbsp;✓ cloned "myapp" → "myapp-test" (branch: test)</span><br>
+<span class="ok">&nbsp;&nbsp;  domain:  myapp-test.mydomain.com</span><br>
+<br>
+<span class="co"># clone with env vars</span><br>
+<span class="cm">poof clone myapp staging --env --all</span>
+                </div>
+            </div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--containerization">containerization</span>
+                <div class="cli-title">Copy env vars between projects</div>
+                <div class="cli-desc">Copy environment variables from one project to another with flexible selection: all, specific keys, exclude keys, or interactive confirmation.</div>
+                <div class="cli-code">
+<span class="cm">poof env copy myapp myapp-test --all</span><br>
+<span class="cm">poof env copy myapp myapp-test --except DB_URL</span><br>
+<span class="cm">poof env copy myapp myapp-test --ask</span><br>
+<br>
+<span class="co"># see available keys (comma-separated)</span><br>
+<span class="cm">poof env get myapp</span>
                 </div>
             </div>
 

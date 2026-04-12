@@ -136,9 +136,12 @@ poof status <name>                 project details + last deployment
 poof deploy <name>                 trigger manual redeploy
 poof rollback <name>               redeploy previous image
 poof logs <name> [--lines N]       container log lines
-poof env get <name>                list env var keys (values never shown)
+poof env get <name>                list env var keys (comma-separated, values never shown)
 poof env set <name> KEY=VALUE      set env vars
 poof env unset <name> KEY          remove env var
+poof env copy <src> <dst> <mode>   copy env vars (--all, --only, --except, --ask)
+poof clone <name> <suffix>         clone project as <name>-<suffix> on branch <suffix>
+poof refresh <name>                re-sync GitHub secrets and workflow
 poof volume add <name> <mount>     add a volume mount to a project
 poof volume list <name>            list volume mounts for a project
 poof volume remove <name> <id>     remove a volume mount from a project
@@ -161,6 +164,44 @@ Global flags (all client commands):
 ```
 
 All flags have smart defaults — `poof add myapp` is usually enough.
+
+## Cloning (environments)
+
+Clone a project to create a test, staging, or other parallel environment:
+
+```sh
+poof clone myapp test              # creates myapp-test, deploys from "test" branch
+poof clone myapp staging --env --all  # same, plus copies all env vars
+```
+
+The clone inherits the source project's repo, image, port, subpath, and folder. The domain is automatically set to `<name>-<suffix>.<root-domain>`, and the branch is set to the suffix. GitHub Actions workflow is set up automatically.
+
+Copy env vars selectively:
+
+```sh
+poof clone myapp test --env --only API_KEY,FEATURE_FLAGS
+poof clone myapp test --env --except DATABASE_URL
+poof clone myapp test --env --ask     # interactive per-key confirmation
+```
+
+You can also copy env vars between any two projects independently:
+
+```sh
+poof env copy myapp myapp-test --all
+poof env copy myapp myapp-test --except DATABASE_URL,REDIS_HOST
+```
+
+Use `poof env get <name>` to see available keys (comma-separated, ready for `--only`/`--except`).
+
+## Refreshing GitHub config
+
+Re-sync secrets and workflow files for a project:
+
+```sh
+poof refresh myapp
+```
+
+Useful after template changes or server upgrades. Skips the workflow commit if the file is already up to date.
 
 ## Subpath routing
 
