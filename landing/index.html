@@ -1192,29 +1192,24 @@
                 <div class="alt-scenario-title">Not GitHub Actions? No GitHub at all? Using multiple domains?</div>
                 <div class="alt-scenario-body">
                     <div class="alt-prose">
-                        <p>Set up your own CI to build and push Docker images to any registry you want. Trigger deploys by posting the new image tag to Poof's deploy API.</p>
-                        <p>Use as many domains and subdomains as you want for your projects. Set aliases and redirects for www prefixes, legacy domains or domain migrations.</p>
-                        <p>You can update or override anything at any time.</p>
+                        <p>Use any domains and subdomains you need for your projects. Set aliases and redirects in seconds.</p>
+                        <p>Set up your own CI to build and push Docker images to any registry you want. Deploy by calling Poof's API.</p>
+                        <p>Poof<span class="exclaim">!</span> got you covered, and it allows you to update anything at any time.</p>
                     </div>
                     <div class="code-block code-block--sm" role="region" aria-label="Alternative configuration examples">
+<span class="co"># Register with a custom domain and redirect an alias</span><br>
+<span class="cm">poof add otherapp --domain my-other-domain.com</span><br>
+<span class="cm">poof redirect add www.my-other-domain.com my-other-domain.com</span><br>
+<br>
 <span class="co"># Build &amp; push with any CI tool</span><br>
 <span class="cm">docker build -t myimage:v1 .</span><br>
 <span class="cm">docker push myimage:v1</span><br>
 <br>
 <span class="co"># Trigger deploy via API</span><br>
-<span class="cm">curl -X POST https://poof.mydomain.com/myapp/deploy \</span><br>
+<span class="cm">curl -X POST https://poof.mydomain.com/otherapp/deploy \</span><br>
 <span class="cm">  -H "Authorization: Bearer $POOF_TOKEN" \</span><br>
 <span class="cm">  -d '{"image":"myimage:v1"}'</span><br>
-<span class="hi">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✦ https://myapp.mydomain.com is live</span><br>
-<br>
-<span class="co"># Register with a custom domain</span><br>
-<span class="cm">poof add myapp --domain app.mydomain.com</span><br>
-<br>
-<span class="co"># Redirect an alias</span><br>
-<span class="cm">poof redirect add www.mydomain.com mydomain.com</span><br>
-<br>
-<span class="co"># Change domain anytime</span><br>
-<span class="cm">poof update myapp --domain new.mydomain.com</span>
+<span class="hi">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✦ https://my-other-domain.com is live</span>
                     </div>
                 </div>
             </div>
