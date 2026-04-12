@@ -589,6 +589,8 @@
             font-size: 0.72rem;
             line-height: 2.1;
             box-shadow: 0 16px 48px rgba(0,0,0,0.35);
+            white-space: nowrap;
+            overflow-x: auto;
         }
 
         .code-block .co  { color: var(--n4); }
@@ -995,6 +997,8 @@
             font-size: 0.68rem;
             line-height: 1.9;
             margin-top: 0.2rem;
+            white-space: nowrap;
+            overflow-x: auto;
         }
         .cli-code .cm { color: var(--n5); }
         .cli-code .co { color: var(--n4); }
@@ -1185,35 +1189,24 @@
 
         <div class="alt-scenarios">
             <div class="alt-scenario">
-                <div class="alt-scenario-title">No GitHub token? Not using GitHub at all?</div>
+                <div class="alt-scenario-title">Not GitHub Actions? No GitHub at all? Using multiple domains?</div>
                 <div class="alt-scenario-body">
                     <div class="alt-prose">
-                        <p>Skip the GitHub token in your config entirely.</p>
-                        <p>Set up your own CI to build and push a Docker image to any registry your server can pull from.</p>
-                        <p>Trigger deploys by posting the new image tag to Poof's deploy API.</p>
+                        <p>Set up your own CI to build and push Docker images to any registry you want. Trigger deploys by posting the new image tag to Poof's deploy API.</p>
+                        <p>Use as many domains and subdomains as you want for your projects. Set aliases and redirects for www prefixes, legacy domains or domain migrations.</p>
+                        <p>You can update or override anything at any time.</p>
                     </div>
-                    <div class="code-block code-block--sm" role="region" aria-label="Manual deploy example">
+                    <div class="code-block code-block--sm" role="region" aria-label="Alternative configuration examples">
 <span class="co"># Build &amp; push with any CI tool</span><br>
 <span class="cm">docker build -t myimage:v1 .</span><br>
 <span class="cm">docker push myimage:v1</span><br>
 <br>
 <span class="co"># Trigger deploy via API</span><br>
-<span class="cm">curl -X POST https://poof.mydomain.com/projects/myapp/deploy \</span><br>
+<span class="cm">curl -X POST https://poof.mydomain.com/myapp/deploy \</span><br>
 <span class="cm">  -H "Authorization: Bearer $POOF_TOKEN" \</span><br>
 <span class="cm">  -d '{"image":"myimage:v1"}'</span><br>
-<span class="hi">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✦ https://myapp.mydomain.com is live</span>
-                    </div>
-                </div>
-            </div>
-            <div class="alt-scenario">
-                <div class="alt-scenario-title">Deploying to multiple domains?</div>
-                <div class="alt-scenario-body">
-                    <div class="alt-prose">
-                        <p>Override the default subdomain by specifying a custom domain at registration time.</p>
-                        <p>Add aliases and redirects for www prefixes, legacy domains, or domain migrations.</p>
-                        <p>Each project lives on its own domain, independently of your base domain. You can also update the domain at any time.</p>
-                    </div>
-                    <div class="code-block code-block--sm" role="region" aria-label="Multi-domain example">
+<span class="hi">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✦ https://myapp.mydomain.com is live</span><br>
+<br>
 <span class="co"># Register with a custom domain</span><br>
 <span class="cm">poof add myapp --domain app.mydomain.com</span><br>
 <br>
