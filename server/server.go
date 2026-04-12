@@ -47,6 +47,7 @@ func (s *Server) handler() http.Handler {
 	// so the GH Action can call /projects/:name/deploy with its per-project token.
 	mux.HandleFunc("POST /projects/{name}/deploy", s.authFlex(s.deployProject))
 	mux.HandleFunc("POST /projects/{name}/rollback", s.auth(s.rollbackProject))
+	mux.HandleFunc("POST /projects/{name}/refresh", s.auth(s.refreshProject))
 
 	// Logs
 	mux.HandleFunc("GET /projects/{name}/logs", s.auth(s.getLogs))

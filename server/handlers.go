@@ -362,6 +362,44 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
+func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	if s.settingGitHubToken() == "" {
+		jsonError(w, "no GitHub PAT configured on server", http.StatusPreconditionFailed)
+		return
+	}
+
+	repoToken, _ := s.store.GetRepoToken(p.Repo)
+	if repoToken == "" {
+		jsonError(w, "no deploy token found for repo "+p.Repo, http.StatusPreconditionFailed)
+		return
+	}
+
+	client := gh.NewClient(s.settingGitHubToken())
+	owner, repoName, found := strings.Cut(p.Repo, "/")
+	if !found {
+		owner = s.settingGitHubUser()
+		repoName = p.Repo
+	}
+	if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder); err != nil {
+		jsonError(w, fmt.Sprintf("GitHub setup failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("project refreshed: %s", name)
+	jsonOK(w, map[string]string{"status": "refreshed"})
+}
+
 // --- Deploy & Rollback ---
 
 type deployRequest struct {

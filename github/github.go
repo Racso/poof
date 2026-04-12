@@ -37,6 +37,7 @@ permissions:
 
 jobs:
   deploy:
+    if: vars.POOF_DISABLE != '1'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,7 +160,8 @@ type fileContent struct {
 }
 
 type getFileResponse struct {
-	SHA string `json:"sha"`
+	SHA     string `json:"sha"`
+	Content string `json:"content"`
 }
 
 // imageBase strips any tag from image and returns the bare image reference.
@@ -229,10 +231,17 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder 
 	sha := ""
 	if err := c.get(path, &existing); err == nil {
 		sha = existing.SHA
+		// Skip commit if content is unchanged.
+		existingContent, err := base64.StdEncoding.DecodeString(
+			strings.ReplaceAll(existing.Content, "\n", ""),
+		)
+		if err == nil && string(existingContent) == workflow {
+			return nil
+		}
 	}
 
 	payload := fileContent{
-		Message: "chore: add Poof! deploy workflow",
+		Message: "chore: update Poof! deploy workflow",
 		Content: encoded,
 		SHA:     sha,
 	}
