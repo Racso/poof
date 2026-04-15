@@ -17,17 +17,27 @@ import (
 	"github.com/racso/poof/version"
 )
 
-type Server struct {
-	cfg     *config.ServerConfig
-	store   *store.Store
-	logPath string
+// RepoManager abstracts GitHub repository operations (secrets + workflow files)
+// so that handlers can be tested without hitting the GitHub API.
+type RepoManager interface {
+	SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string) error
+	RemoveRepoCI(owner, repo, projectName string, deleteSecrets bool) error
+	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, deleteSecrets bool) error
 }
 
-func New(cfg *config.ServerConfig, st *store.Store) *Server {
+type Server struct {
+	cfg       *config.ServerConfig
+	store     *store.Store
+	logPath   string
+	ghFactory func(token string) RepoManager
+}
+
+func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string) RepoManager) *Server {
 	return &Server{
-		cfg:     cfg,
-		store:   st,
-		logPath: filepath.Join(cfg.DataDir, "server.log"),
+		cfg:       cfg,
+		store:     st,
+		logPath:   filepath.Join(cfg.DataDir, "server.log"),
+		ghFactory: ghFactory,
 	}
 }
 
