@@ -14,9 +14,35 @@ import (
 	"github.com/racso/poof/store"
 )
 
+// --- Mock RepoManager ---
+
+type mockRepoManager struct {
+	setupCalls  []mockSetupCall
+	removeCalls []mockRemoveCall
+}
+
+type mockSetupCall struct {
+	Owner, Repo, ProjectName, PoofURL, PoofToken, Branch, Image, Folder string
+}
+
+type mockRemoveCall struct {
+	Owner, Repo, ProjectName string
+	DeleteToken              bool
+}
+
+func (m *mockRepoManager) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch, image, folder string) error {
+	m.setupCalls = append(m.setupCalls, mockSetupCall{owner, repo, projectName, poofURL, poofToken, branch, image, folder})
+	return nil
+}
+
+func (m *mockRepoManager) RemoveRepo(owner, repo, projectName string, deleteToken bool) error {
+	m.removeCalls = append(m.removeCalls, mockRemoveCall{owner, repo, projectName, deleteToken})
+	return nil
+}
+
 // --- Test helpers ---
 
-func newTestServer(t *testing.T) (*server.Server, *store.Store) {
+func newTestServer(t *testing.T) (*server.Server, *store.Store, *mockRepoManager) {
 	t.Helper()
 	f, err := os.CreateTemp("", "poof-server-test-*.db")
 	if err != nil {
@@ -38,7 +64,13 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store) {
 	}
 
 	srv := server.New(cfg, st)
-	return srv, st
+
+	mock := &mockRepoManager{}
+	srv.SetRepoManagerFactory(func(token string) server.RepoManager {
+		return mock
+	})
+
+	return srv, st, mock
 }
 
 func do(t *testing.T, srv *server.Server, method, path string, body interface{}, token string) *httptest.ResponseRecorder {
@@ -71,7 +103,7 @@ const globalToken = "global-test-token"
 // --- Auth ---
 
 func TestAuthRejectsNoToken(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rr := do(t, srv, "GET", "/projects", nil, "")
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rr.Code)
@@ -79,7 +111,7 @@ func TestAuthRejectsNoToken(t *testing.T) {
 }
 
 func TestAuthRejectsWrongToken(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rr := do(t, srv, "GET", "/projects", nil, "wrong-token")
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rr.Code)
@@ -87,7 +119,7 @@ func TestAuthRejectsWrongToken(t *testing.T) {
 }
 
 func TestAuthAcceptsGlobalToken(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rr := do(t, srv, "GET", "/projects", nil, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -97,7 +129,7 @@ func TestAuthAcceptsGlobalToken(t *testing.T) {
 // --- Project CRUD ---
 
 func TestCreateAndListProjects(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 
 	// Empty list
 	rr := do(t, srv, "GET", "/projects", nil, globalToken)
@@ -125,7 +157,7 @@ func TestCreateAndListProjects(t *testing.T) {
 }
 
 func TestCreateProjectAppliesDefaults(t *testing.T) {
-	srv, st := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
 	st.SetSetting("github-user", "racso")
 
@@ -155,7 +187,7 @@ func TestCreateProjectAppliesDefaults(t *testing.T) {
 }
 
 func TestCreateProjectOverridesDefaults(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 
 	rr := do(t, srv, "POST", "/projects", map[string]interface{}{
 		"name":   "api",
@@ -182,7 +214,7 @@ func TestCreateProjectOverridesDefaults(t *testing.T) {
 }
 
 func TestCreateProjectDuplicateReturns409(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 
 	do(t, srv, "POST", "/projects", map[string]interface{}{"name": "demo"}, globalToken)
 	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "demo"}, globalToken)
@@ -192,7 +224,7 @@ func TestCreateProjectDuplicateReturns409(t *testing.T) {
 }
 
 func TestGetProjectNotFound(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rr := do(t, srv, "GET", "/projects/nonexistent", nil, globalToken)
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", rr.Code)
@@ -200,7 +232,7 @@ func TestGetProjectNotFound(t *testing.T) {
 }
 
 func TestGetProject(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	do(t, srv, "POST", "/projects", map[string]interface{}{"name": "demo"}, globalToken)
 
 	rr := do(t, srv, "GET", "/projects/demo", nil, globalToken)
@@ -221,7 +253,7 @@ func TestGetProject(t *testing.T) {
 }
 
 func TestDeleteProject(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	do(t, srv, "POST", "/projects", map[string]interface{}{"name": "demo"}, globalToken)
 
 	rr := do(t, srv, "DELETE", "/projects/demo", nil, globalToken)
@@ -238,7 +270,7 @@ func TestDeleteProject(t *testing.T) {
 // --- Per-project token auth on /deploy ---
 
 func TestDeployAcceptsRepoToken(t *testing.T) {
-	srv, st := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 
 	p := store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
@@ -260,7 +292,7 @@ func TestDeployAcceptsRepoToken(t *testing.T) {
 }
 
 func TestDeployRejectsWrongToken(t *testing.T) {
-	srv, st := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 
 	p := store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
@@ -278,7 +310,7 @@ func TestDeployRejectsWrongToken(t *testing.T) {
 }
 
 func TestDeployAcceptsGlobalToken(t *testing.T) {
-	srv, st := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 
 	p := store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
@@ -298,7 +330,7 @@ func TestDeployAcceptsGlobalToken(t *testing.T) {
 // --- Env vars ---
 
 func TestSetAndGetEnv(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	do(t, srv, "POST", "/projects", map[string]interface{}{"name": "demo"}, globalToken)
 
 	// Set vars
@@ -328,7 +360,7 @@ func TestSetAndGetEnv(t *testing.T) {
 }
 
 func TestUnsetEnv(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	do(t, srv, "POST", "/projects", map[string]interface{}{"name": "demo"}, globalToken)
 	do(t, srv, "PUT", "/projects/demo/env", map[string]string{"A": "1", "B": "2"}, globalToken)
 
@@ -350,7 +382,7 @@ func TestUnsetEnv(t *testing.T) {
 }
 
 func TestEnvRequiresExistingProject(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 
 	rr := do(t, srv, "PUT", "/projects/ghost/env",
 		map[string]string{"KEY": "val"}, globalToken)

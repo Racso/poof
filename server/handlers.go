@@ -14,7 +14,6 @@ import (
 	"github.com/racso/poof/caddy"
 	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/docker"
-	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/store"
 )
 
@@ -205,7 +204,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 
 	// Set up GitHub repo (secrets + workflow) if a PAT is configured.
 	if s.settingGitHubToken() != "" {
-		client := gh.NewClient(s.settingGitHubToken())
+		client := s.ghFactory(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(req.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
@@ -289,7 +288,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	log.Printf("project updated: %s", name)
 	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged) {
 		repoToken, _ := s.store.GetRepoToken(p.Repo)
-		client := gh.NewClient(s.settingGitHubToken())
+		client := s.ghFactory(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
@@ -322,7 +321,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 
 	// Clean up GitHub if PAT is configured.
 	if s.settingGitHubToken() != "" {
-		client := gh.NewClient(s.settingGitHubToken())
+		client := s.ghFactory(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
@@ -444,7 +443,7 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 
 	// Set up GitHub.
 	if s.settingGitHubToken() != "" {
-		client := gh.NewClient(s.settingGitHubToken())
+		client := s.ghFactory(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(source.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
@@ -488,7 +487,7 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := gh.NewClient(s.settingGitHubToken())
+	client := s.ghFactory(s.settingGitHubToken())
 	owner, repoName, found := strings.Cut(p.Repo, "/")
 	if !found {
 		owner = s.settingGitHubUser()

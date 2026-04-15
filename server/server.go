@@ -13,14 +13,23 @@ import (
 	"time"
 
 	"github.com/racso/poof/config"
+	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/store"
 	"github.com/racso/poof/version"
 )
 
+// RepoManager abstracts GitHub repository operations (secrets + workflow files)
+// so that handlers can be tested without hitting the GitHub API.
+type RepoManager interface {
+	SetupRepo(owner, repo, projectName, poofURL, poofToken, branch, image, folder string) error
+	RemoveRepo(owner, repo, projectName string, deleteToken bool) error
+}
+
 type Server struct {
-	cfg     *config.ServerConfig
-	store   *store.Store
-	logPath string
+	cfg       *config.ServerConfig
+	store     *store.Store
+	logPath   string
+	ghFactory func(token string) RepoManager
 }
 
 func New(cfg *config.ServerConfig, st *store.Store) *Server {
@@ -28,7 +37,15 @@ func New(cfg *config.ServerConfig, st *store.Store) *Server {
 		cfg:     cfg,
 		store:   st,
 		logPath: filepath.Join(cfg.DataDir, "server.log"),
+		ghFactory: func(token string) RepoManager {
+			return gh.NewClient(token)
+		},
 	}
+}
+
+// SetRepoManagerFactory overrides the default GitHub client factory.
+func (s *Server) SetRepoManagerFactory(fn func(token string) RepoManager) {
+	s.ghFactory = fn
 }
 
 // handler builds and returns the HTTP mux. Separated from Run so tests can
