@@ -44,23 +44,46 @@ Monorepo / subfolder builds:
 		port, _ := cmd.Flags().GetInt("port")
 		subpath, _ := cmd.Flags().GetString("subpath")
 		folder, _ := cmd.Flags().GetString("folder")
+		staticFlag, _ := cmd.Flags().GetBool("static")
+		spaFlag, _ := cmd.Flags().GetBool("spa")
+		ciVal, _ := cmd.Flags().GetString("ci")
 
-		// Validate Dockerfile presence when no --folder is given.
-		if folder == "" {
-			if _, err := os.Stat("Dockerfile"); os.IsNotExist(err) {
-				suggestions := findDockerfileSubfolders()
-				fmt.Fprintln(os.Stderr, "Error: no Dockerfile found at the repo root.")
-				fmt.Fprintln(os.Stderr)
-				if len(suggestions) > 0 {
-					fmt.Fprintln(os.Stderr, "Found Dockerfiles in subdirectories. Use --folder to specify one:")
+		// --spa implies --static.
+		isStatic := staticFlag || spaFlag
+		staticMode := ""
+		if spaFlag {
+			staticMode = "spa"
+		} else if staticFlag {
+			staticMode = "static"
+		}
+
+		// Parse --ci flag.
+		if ciVal != "" {
+			ci, err := parseCIFlag(ciVal)
+			if err != nil {
+				fatal("%v", err)
+			}
+			_ = ci // used below
+		}
+
+		// Validate Dockerfile presence: required for container projects, optional for static.
+		if !isStatic {
+			if folder == "" {
+				if _, err := os.Stat("Dockerfile"); os.IsNotExist(err) {
+					suggestions := findDockerfileSubfolders()
+					fmt.Fprintln(os.Stderr, "Error: no Dockerfile found at the repo root.")
 					fmt.Fprintln(os.Stderr)
-					for _, s := range suggestions {
-						fmt.Fprintf(os.Stderr, "  poof add %s --folder %s\n", name, s)
+					if len(suggestions) > 0 {
+						fmt.Fprintln(os.Stderr, "Found Dockerfiles in subdirectories. Use --folder to specify one:")
+						fmt.Fprintln(os.Stderr)
+						for _, s := range suggestions {
+							fmt.Fprintf(os.Stderr, "  poof add %s --folder %s\n", name, s)
+						}
+						fmt.Fprintln(os.Stderr)
 					}
-					fmt.Fprintln(os.Stderr)
+					fmt.Fprintln(os.Stderr, "Or add a Dockerfile at the repo root.")
+					os.Exit(1)
 				}
-				fmt.Fprintln(os.Stderr, "Or add a Dockerfile at the repo root.")
-				os.Exit(1)
 			}
 		}
 
@@ -95,6 +118,13 @@ Monorepo / subfolder builds:
 		if folder != "" {
 			payload["folder"] = folder
 		}
+		if staticMode != "" {
+			payload["static"] = staticMode
+		}
+		if ciVal != "" {
+			ci, _ := parseCIFlag(ciVal)
+			payload["ci"] = ci
+		}
 
 		var result map[string]interface{}
 		if err := apiPost("/projects", payload, &result); err != nil {
@@ -105,7 +135,7 @@ Monorepo / subfolder builds:
 		if d, ok := result["domain"].(string); ok {
 			fmt.Printf("  domain:  %s\n", d)
 		}
-		if i, ok := result["image"].(string); ok {
+		if i, ok := result["image"].(string); ok && i != "" {
 			fmt.Printf("  image:   %s\n", i)
 		}
 		if r, ok := result["repo"].(string); ok {
@@ -113,6 +143,9 @@ Monorepo / subfolder builds:
 		}
 		if f, ok := result["folder"].(string); ok && f != "" {
 			fmt.Printf("  folder:  %s\n", f)
+		}
+		if s, ok := result["static"].(string); ok && s != "" {
+			fmt.Printf("  static:  %s\n", s)
 		}
 	},
 }
@@ -145,4 +178,7 @@ func init() {
 	addCmd.Flags().Int("port", 0, fmt.Sprintf("container port (default: %d)", defaults.Port))
 	addCmd.Flags().String("subpath", "", "subpath routing mode: disabled, redirect, or proxy (default: server's subpath_default)")
 	addCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (for monorepos)")
+	addCmd.Flags().Bool("static", false, "deploy as a static site served by Caddy")
+	addCmd.Flags().Bool("spa", false, "deploy as a single-page app (implies --static, adds try_files)")
+	addCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
 }

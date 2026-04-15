@@ -47,6 +47,7 @@ func (s *Server) handler() http.Handler {
 	// Deploy & rollback — accept both global token AND per-project token
 	// so the GH Action can call /projects/:name/deploy with its per-project token.
 	mux.HandleFunc("POST /projects/{name}/deploy", s.authFlex(s.deployProject))
+	mux.HandleFunc("POST /projects/{name}/deploy/static", s.authFlex(s.deployStaticProject))
 	mux.HandleFunc("POST /projects/{name}/rollback", s.auth(s.rollbackProject))
 	mux.HandleFunc("POST /projects/{name}/refresh", s.auth(s.refreshProject))
 

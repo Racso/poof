@@ -66,6 +66,67 @@ jobs:
           delete-only-untagged-versions: false
 `
 
+// staticWorkflowDockerTemplate is used for static projects that have a Dockerfile.
+// The Dockerfile builds the site; the output is extracted from /poof in the container.
+const staticWorkflowDockerTemplate = `name: POOF_WORKFLOW_NAME
+
+on:
+  push:
+    branches: ["POOF_BRANCH"]
+POOF_PATHS_BLOCK
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.POOF_DISABLE != '1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build static site
+        run: |
+          docker build -t poof-build POOF_BUILD_ARGS
+          docker create --name poof-extract poof-build
+          docker cp poof-extract:/poof ./poof-output
+          docker rm poof-extract
+
+      - name: Deploy to Poof!
+        run: |
+          tar -czf site.tar.gz -C ./poof-output .
+          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy/static" \
+            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @site.tar.gz
+`
+
+// staticWorkflowDirectTemplate is used for static projects without a Dockerfile.
+// The source directory is tarred and uploaded directly.
+const staticWorkflowDirectTemplate = `name: POOF_WORKFLOW_NAME
+
+on:
+  push:
+    branches: ["POOF_BRANCH"]
+POOF_PATHS_BLOCK
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.POOF_DISABLE != '1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Poof!
+        run: |
+          tar -czf site.tar.gz -C POOF_FOLDER .
+          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy/static" \
+            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @site.tar.gz
+`
+
 type Client struct {
 	token string
 }
@@ -77,14 +138,14 @@ func NewClient(token string) *Client {
 // SetupRepo sets the POOF_URL and POOF_TOKEN repo secrets and commits the
 // deploy workflow file. All projects in the same repo share a single
 // POOF_TOKEN secret.
-func (c *Client) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch, image, folder string) error {
+func (c *Client) SetupRepo(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string) error {
 	if err := c.setSecret(owner, repo, "POOF_URL", poofURL); err != nil {
 		return fmt.Errorf("set POOF_URL secret: %w", err)
 	}
 	if err := c.setSecret(owner, repo, "POOF_TOKEN", poofToken); err != nil {
 		return fmt.Errorf("set POOF_TOKEN secret: %w", err)
 	}
-	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder); err != nil {
+	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder, static); err != nil {
 		return fmt.Errorf("commit workflow: %w", err)
 	}
 	return nil
@@ -184,29 +245,27 @@ func imagePackageName(image string) string {
 	return base
 }
 
-func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder string) error {
-	// Default placeholders derive image and package name from the GitHub repo.
-	imgBase := `ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')`
-	pkgName := `${{ github.event.repository.name }}`
-	if image != "" {
-		imgBase = imageBase(image)
-		pkgName = imagePackageName(image)
-	}
+func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder, static string) error {
+	isStatic := static == "static" || static == "spa"
 
 	// folder support: path filter and build args
 	pathsBlock := ""
 	buildArgs := "."
+	cleanFolder := folder
 	if folder != "" {
-		folder = strings.TrimRight(folder, "/")
-		pathsBlock = fmt.Sprintf("    paths:\n      - \"%s/**\"", folder)
-		buildArgs = fmt.Sprintf("-f %s/Dockerfile %s", folder, folder)
+		cleanFolder = strings.TrimRight(folder, "/")
+		pathsBlock = fmt.Sprintf("    paths:\n      - \"%s/**\"", cleanFolder)
+		buildArgs = fmt.Sprintf("-f %s/Dockerfile %s", cleanFolder, cleanFolder)
 	}
 
 	// Build human-readable workflow name.
 	workflowName := "Poof! deploy"
 	var qualifiers []string
-	if folder != "" {
-		qualifiers = append(qualifiers, strings.TrimRight(folder, "/"))
+	if isStatic {
+		qualifiers = append(qualifiers, "static")
+	}
+	if cleanFolder != "" {
+		qualifiers = append(qualifiers, cleanFolder)
 	}
 	if branch != defaults.Branch {
 		qualifiers = append(qualifiers, branch)
@@ -215,13 +274,42 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder 
 		workflowName += " (" + strings.Join(qualifiers, ", ") + ")"
 	}
 
-	workflow := strings.ReplaceAll(workflowTemplate, "POOF_WORKFLOW_NAME", workflowName)
+	var workflow string
+	if isStatic {
+		// For static projects with a folder, the Docker build template uses the folder.
+		// For static projects without a folder, use the direct upload template.
+		// We determine "has Dockerfile" by whether an image was configured (non-empty image
+		// means a container project converted, empty means pure static).
+		hasDockerBuild := image != ""
+		if hasDockerBuild {
+			workflow = staticWorkflowDockerTemplate
+			workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
+		} else {
+			workflow = staticWorkflowDirectTemplate
+			uploadFolder := "."
+			if cleanFolder != "" {
+				uploadFolder = cleanFolder
+			}
+			workflow = strings.ReplaceAll(workflow, "POOF_FOLDER", uploadFolder)
+		}
+	} else {
+		// Container workflow (existing behavior).
+		imgBase := `ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')`
+		pkgName := `${{ github.event.repository.name }}`
+		if image != "" {
+			imgBase = imageBase(image)
+			pkgName = imagePackageName(image)
+		}
+		workflow = workflowTemplate
+		workflow = strings.ReplaceAll(workflow, "POOF_IMAGE_BASE", imgBase)
+		workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
+		workflow = strings.ReplaceAll(workflow, "POOF_PKG_NAME", pkgName)
+	}
+
+	workflow = strings.ReplaceAll(workflow, "POOF_WORKFLOW_NAME", workflowName)
 	workflow = strings.ReplaceAll(workflow, "POOF_BRANCH", branch)
 	workflow = strings.ReplaceAll(workflow, "POOF_PATHS_BLOCK", pathsBlock)
-	workflow = strings.ReplaceAll(workflow, "POOF_IMAGE_BASE", imgBase)
-	workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
 	workflow = strings.ReplaceAll(workflow, "POOF_PROJECT_NAME", projectName)
-	workflow = strings.ReplaceAll(workflow, "POOF_PKG_NAME", pkgName)
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 
 	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-%s.yml", owner, repo, projectName)

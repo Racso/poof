@@ -21,7 +21,14 @@ type Project struct {
 	Port      int       `json:"port"`
 	Subpath   string    `json:"subpath"`
 	Folder    string    `json:"folder"`
+	Static    string    `json:"static"`
+	CI        bool      `json:"ci"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// IsStatic returns true if the project is a static site or SPA.
+func (p Project) IsStatic() bool {
+	return p.Static == "static" || p.Static == "spa"
 }
 
 type Volume struct {
@@ -133,6 +140,9 @@ func (s *Store) migrate() error {
 	// Migrate per-project tokens to repo_tokens (idempotent).
 	s.db.Exec(`INSERT OR IGNORE INTO repo_tokens (repo, token)
 		SELECT repo, token FROM projects WHERE token != '' GROUP BY repo`)
+	// Add static and ci columns for static site support and CI opt-out.
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN static TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
 	return nil
 }
 
@@ -140,9 +150,9 @@ func (s *Store) migrate() error {
 
 func (s *Store) CreateProject(p Project) error {
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder)
-		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, ci)
+		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.CI,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -153,9 +163,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT name, domain, image, repo, branch, port, subpath, folder, created_at
+		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, ci, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.CreatedAt)
+	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.CI, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -167,7 +177,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, domain, image, repo, branch, port, subpath, folder, created_at
+		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, ci, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -178,7 +188,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.CI, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -224,8 +234,8 @@ func (s *Store) CountProjectsForRepo(repo string) (int, error) {
 
 func (s *Store) UpdateProject(p Project) error {
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, ci=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.CI, p.Name,
 	)
 	return err
 }

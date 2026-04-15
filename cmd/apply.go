@@ -18,6 +18,8 @@ type projectSpec struct {
 	Repo   string
 	Branch string
 	Port   int
+	Static string
+	CI     string // "yes"/"no" or empty (server default)
 }
 
 type remoteProject struct {
@@ -27,6 +29,8 @@ type remoteProject struct {
 	Repo    string `json:"repo"`
 	Branch  string `json:"branch"`
 	Port    int    `json:"port"`
+	Static  string `json:"static"`
+	CI      bool   `json:"ci"`
 	Running bool   `json:"running"`
 }
 
@@ -160,6 +164,17 @@ Example file (poof.ini):
 			if spec.Port != 0 {
 				payload["port"] = spec.Port
 			}
+			if spec.Static != "" {
+				payload["static"] = spec.Static
+			}
+			if spec.CI != "" {
+				ci, err := parseCIFlag(spec.CI)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  error: %s has invalid ci value: %v\n", spec.Name, err)
+					continue
+				}
+				payload["ci"] = ci
+			}
 			var result map[string]interface{}
 			if err := apiPost("/projects", payload, &result); err != nil {
 				fmt.Fprintf(os.Stderr, "  error adding %s: %v\n", spec.Name, err)
@@ -216,6 +231,15 @@ func buildPatch(spec projectSpec, cur remoteProject) map[string]interface{} {
 	if spec.Port != 0 && spec.Port != cur.Port {
 		patch["port"] = spec.Port
 	}
+	if spec.Static != "" && spec.Static != cur.Static {
+		patch["static"] = spec.Static
+	}
+	if spec.CI != "" {
+		ci, err := parseCIFlag(spec.CI)
+		if err == nil && ci != cur.CI {
+			patch["ci"] = ci
+		}
+	}
 	return patch
 }
 
@@ -265,6 +289,10 @@ func parseProjectsFile(path string) (map[string]projectSpec, error) {
 			if n, err := strconv.Atoi(v); err == nil {
 				spec.Port = n
 			}
+		case "static":
+			spec.Static = v
+		case "ci":
+			spec.CI = v
 		}
 		specs[currentName] = spec
 	}

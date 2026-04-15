@@ -15,6 +15,7 @@ import (
 	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/docker"
 	gh "github.com/racso/poof/github"
+	staticPkg "github.com/racso/poof/static"
 	"github.com/racso/poof/store"
 )
 
@@ -83,7 +84,13 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	var result []projectStatus
 	for _, p := range projects {
-		result = append(result, projectStatus{p, docker.IsRunning(p.Name)})
+		running := false
+		if p.IsStatic() {
+			running = staticPkg.IsDeployed(s.cfg.DataDir, p.Name)
+		} else {
+			running = docker.IsRunning(p.Name)
+		}
+		result = append(result, projectStatus{p, running})
 	}
 	jsonOK(w, result)
 }
@@ -102,9 +109,16 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 
 	last, _ := s.store.LastDeployment(name)
 
+	running := false
+	if p.IsStatic() {
+		running = staticPkg.IsDeployed(s.cfg.DataDir, name)
+	} else {
+		running = docker.IsRunning(name)
+	}
+
 	jsonOK(w, map[string]interface{}{
 		"project":    p,
-		"running":    docker.IsRunning(name),
+		"running":    running,
 		"deployment": last,
 	})
 }
@@ -118,6 +132,8 @@ type createProjectRequest struct {
 	Port    int    `json:"port"`
 	Subpath string `json:"subpath"`
 	Folder  string `json:"folder"`
+	Static  string `json:"static"`
+	CI      *bool  `json:"ci"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -127,12 +143,24 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate static mode.
+	if req.Static != "" && req.Static != "static" && req.Static != "spa" {
+		jsonError(w, "static must be empty, \"static\", or \"spa\"", http.StatusBadRequest)
+		return
+	}
+	isStatic := req.Static == "static" || req.Static == "spa"
+
 	// Apply defaults
 	if req.Domain == "" {
 		req.Domain = req.Name + "." + s.settingDomain()
 	}
-	if req.Image == "" {
-		req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.settingGitHubUser()), strings.ToLower(req.Name))
+	if !isStatic {
+		if req.Image == "" {
+			req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.settingGitHubUser()), strings.ToLower(req.Name))
+		}
+		if req.Port == 0 {
+			req.Port = defaults.Port
+		}
 	}
 	if req.Repo == "" {
 		req.Repo = fmt.Sprintf("%s/%s", s.settingGitHubUser(), req.Name)
@@ -140,8 +168,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if req.Branch == "" {
 		req.Branch = defaults.Branch
 	}
-	if req.Port == 0 {
-		req.Port = defaults.Port
+
+	// CI defaults to true.
+	ci := true
+	if req.CI != nil {
+		ci = *req.CI
 	}
 
 	// Apply subpath default and validate
@@ -196,6 +227,8 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Port:    req.Port,
 		Subpath: req.Subpath,
 		Folder:  req.Folder,
+		Static:  req.Static,
+		CI:      ci,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -203,20 +236,20 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set up GitHub repo (secrets + workflow) if a PAT is configured.
-	if s.settingGitHubToken() != "" {
+	// Set up GitHub repo (secrets + workflow) if a PAT is configured and CI is enabled.
+	if p.CI && s.settingGitHubToken() != "" {
 		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(req.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
 			repoName = req.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder); err != nil {
+		if err := client.SetupRepo(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 		}
 	}
 
-	log.Printf("project created: %s (repo=%s branch=%s image=%s)", p.Name, p.Repo, p.Branch, p.Image)
+	log.Printf("project created: %s (repo=%s branch=%s image=%s static=%s ci=%v)", p.Name, p.Repo, p.Branch, p.Image, p.Static, p.CI)
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, p)
 }
@@ -229,6 +262,8 @@ type updateProjectRequest struct {
 	Port    int    `json:"port"`
 	Subpath string `json:"subpath"`
 	Folder  string `json:"folder"`
+	Static  string `json:"static"`
+	CI      *bool  `json:"ci"`
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +287,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	repoChanged := req.Repo != "" && req.Repo != p.Repo
 	branchChanged := req.Branch != "" && req.Branch != p.Branch
 	folderChanged := req.Folder != p.Folder && (req.Folder != "" || p.Folder != "")
+	staticChanged := req.Static != "" && req.Static != p.Static
 
 	if req.Domain != "" {
 		p.Domain = req.Domain
@@ -280,6 +316,34 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	if req.Folder != "" || folderChanged {
 		p.Folder = req.Folder
 	}
+	if req.Static != "" {
+		if req.Static != "static" && req.Static != "spa" && req.Static != "container" {
+			jsonError(w, "static must be \"static\", \"spa\", or \"container\"", http.StatusBadRequest)
+			return
+		}
+		if req.Static == "container" {
+			p.Static = ""
+		} else {
+			p.Static = req.Static
+		}
+	}
+
+	ciChanged := false
+	if req.CI != nil {
+		ciChanged = *req.CI != p.CI
+		p.CI = *req.CI
+	}
+
+	// If switching from container to static, stop the container.
+	if staticChanged && p.IsStatic() {
+		if err := docker.Stop(name); err != nil {
+			log.Printf("warning: stopping container for %s during static conversion: %v", name, err)
+		}
+	}
+	// If switching from static to container, clean up static files.
+	if staticChanged && !p.IsStatic() {
+		staticPkg.Remove(s.cfg.DataDir, name)
+	}
 
 	if err := s.store.UpdateProject(*p); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -287,7 +351,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged) {
+	if p.CI && s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged || staticChanged || ciChanged) {
 		repoToken, _ := s.store.GetRepoToken(p.Repo)
 		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
@@ -295,9 +359,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder); err != nil {
+		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static); err != nil {
 			log.Printf("warning: GitHub update for %s failed: %v", name, err)
 		}
+	}
+
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after update failed: %v", err)
 	}
 
 	jsonOK(w, p)
@@ -315,9 +383,13 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stop container
-	if err := docker.Stop(name); err != nil {
-		log.Printf("warning: stopping container for %s: %v", name, err)
+	// Stop container or clean up static files.
+	if p.IsStatic() {
+		staticPkg.Remove(s.cfg.DataDir, name)
+	} else {
+		if err := docker.Stop(name); err != nil {
+			log.Printf("warning: stopping container for %s: %v", name, err)
+		}
 	}
 
 	// Clean up GitHub if PAT is configured.
@@ -425,6 +497,8 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 		Port:    source.Port,
 		Subpath: source.Subpath,
 		Folder:  source.Folder,
+		Static:  source.Static,
+		CI:      source.CI,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -443,14 +517,14 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set up GitHub.
-	if s.settingGitHubToken() != "" {
+	if p.CI && s.settingGitHubToken() != "" {
 		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(source.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
 			repoName = source.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder); err != nil {
+		if err := client.SetupRepo(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", cloneName, err)
 		}
 	}
@@ -477,6 +551,11 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !p.CI {
+		jsonError(w, "CI is disabled for this project (--ci no)", http.StatusBadRequest)
+		return
+	}
+
 	if s.settingGitHubToken() == "" {
 		jsonError(w, "no GitHub PAT configured on server", http.StatusPreconditionFailed)
 		return
@@ -494,7 +573,7 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		owner = s.settingGitHubUser()
 		repoName = p.Repo
 	}
-	if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder); err != nil {
+	if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static); err != nil {
 		jsonError(w, fmt.Sprintf("GitHub setup failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -517,6 +596,11 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if p.IsStatic() {
+		jsonError(w, "this is a static project — use POST /projects/"+name+"/deploy/static", http.StatusBadRequest)
+		return
+	}
+
 	var req deployRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Image == "" {
 		// No body — redeploy with latest recorded image.
@@ -531,6 +615,43 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 	s.runDeploy(w, p, req.Image)
 }
 
+func (s *Server) deployStaticProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	if !p.IsStatic() {
+		jsonError(w, "this is not a static project", http.StatusBadRequest)
+		return
+	}
+
+	// Limit upload size (500MB).
+	r.Body = http.MaxBytesReader(w, r.Body, 500<<20)
+
+	depID, _ := s.store.RecordDeployment(name, "static", "running")
+
+	if err := staticPkg.Deploy(s.cfg.DataDir, name, depID, r.Body); err != nil {
+		s.store.UpdateDeploymentStatus(depID, "failed")
+		jsonError(w, fmt.Sprintf("static deploy failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	s.store.UpdateDeploymentStatus(depID, "success")
+	log.Printf("static deployed: %s (v%d)", name, depID)
+
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after static deploy failed: %v", err)
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"status": "deployed",
+		"domain": p.Domain,
+	})
+}
+
 func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	p, err := s.store.GetProject(name)
@@ -542,6 +663,22 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 	prev, err := s.store.PreviousDeployment(name)
 	if err != nil || prev == nil {
 		jsonError(w, "no previous deployment to roll back to", http.StatusBadRequest)
+		return
+	}
+
+	if p.IsStatic() {
+		log.Printf("static rollback triggered: %s → v%d", name, prev.ID)
+		if err := staticPkg.Rollback(s.cfg.DataDir, name, prev.ID); err != nil {
+			jsonError(w, fmt.Sprintf("rollback failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := s.syncCaddy(); err != nil {
+			log.Printf("warning: caddy sync after rollback failed: %v", err)
+		}
+		jsonOK(w, map[string]interface{}{
+			"status": "rolled back",
+			"domain": p.Domain,
+		})
 		return
 	}
 
@@ -604,6 +741,14 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 
 func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+
+	p, _ := s.store.GetProject(name)
+	if p != nil && p.IsStatic() {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("no container logs for static projects\n"))
+		return
+	}
+
 	lines := 100
 	if l := r.URL.Query().Get("lines"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
@@ -822,6 +967,11 @@ func (s *Server) addVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if p.IsStatic() {
+		jsonError(w, "volumes are not supported for static projects", http.StatusBadRequest)
+		return
+	}
+
 	var req addVolumeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Mount == "" {
 		jsonError(w, "mount is required", http.StatusBadRequest)
@@ -925,7 +1075,11 @@ func (s *Server) syncCaddy() error {
 	}
 	var running []store.Project
 	for _, p := range projects {
-		if docker.IsRunning(p.Name) {
+		if p.IsStatic() {
+			if staticPkg.IsDeployed(s.cfg.DataDir, p.Name) {
+				running = append(running, p)
+			}
+		} else if docker.IsRunning(p.Name) {
 			running = append(running, p)
 		}
 	}

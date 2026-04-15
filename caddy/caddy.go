@@ -42,7 +42,17 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, roo
 		if poofHost != "" && p.Domain == poofHost {
 			continue
 		}
-		fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n}\n\n", p.Domain, p.Name, p.Port)
+
+		if p.IsStatic() {
+			staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
+			fmt.Fprintf(&b, "%s {\n\troot * %s\n", p.Domain, staticRoot)
+			if p.Static == "spa" {
+				fmt.Fprintf(&b, "\ttry_files {path} /index.html\n")
+			}
+			fmt.Fprintf(&b, "\tfile_server\n}\n\n")
+		} else {
+			fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n}\n\n", p.Domain, p.Name, p.Port)
+		}
 
 		if rootDomain != "" && p.Domain != rootDomain && p.Subpath != "disabled" {
 			switch p.Subpath {
@@ -50,8 +60,18 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, roo
 				subpathLines[rootDomain] = append(subpathLines[rootDomain],
 					fmt.Sprintf("\thandle_path /%s/* {\n\t\tredir https://%s{uri} 301\n\t}", p.Name, p.Domain))
 			case "proxy":
-				subpathLines[rootDomain] = append(subpathLines[rootDomain],
-					fmt.Sprintf("\thandle_path /%s/* {\n\t\treverse_proxy poof-%s:%d\n\t}", p.Name, p.Name, p.Port))
+				if p.IsStatic() {
+					staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
+					block := fmt.Sprintf("\thandle_path /%s/* {\n\t\troot * %s\n", p.Name, staticRoot)
+					if p.Static == "spa" {
+						block += "\t\ttry_files {path} /index.html\n"
+					}
+					block += "\t\tfile_server\n\t}"
+					subpathLines[rootDomain] = append(subpathLines[rootDomain], block)
+				} else {
+					subpathLines[rootDomain] = append(subpathLines[rootDomain],
+						fmt.Sprintf("\thandle_path /%s/* {\n\t\treverse_proxy poof-%s:%d\n\t}", p.Name, p.Name, p.Port))
+				}
 			}
 		}
 	}

@@ -25,6 +25,13 @@ The project token is never affected — GitHub Actions integrations remain valid
 		subpath, _ := cmd.Flags().GetString("subpath")
 		folder, _ := cmd.Flags().GetString("folder")
 		folderSet := cmd.Flags().Changed("folder")
+		ciVal, _ := cmd.Flags().GetString("ci")
+		ciSet := cmd.Flags().Changed("ci")
+
+		// Determine static mode. --spa takes precedence over --static.
+		// Use "container" to revert from static to container.
+		staticFlag, _ := cmd.Flags().GetBool("static")
+		spaFlag, _ := cmd.Flags().GetBool("spa")
 
 		payload := map[string]interface{}{}
 		if domain != "" {
@@ -47,6 +54,21 @@ The project token is never affected — GitHub Actions integrations remain valid
 		}
 		if folderSet {
 			payload["folder"] = folder // allows clearing with --folder ""
+		}
+		if spaFlag {
+			payload["static"] = "spa"
+		} else if staticFlag {
+			payload["static"] = "static"
+		} else if cmd.Flags().Changed("static") {
+			// --static=false → revert to container
+			payload["static"] = "container"
+		}
+		if ciSet {
+			ci, err := parseCIFlag(ciVal)
+			if err != nil {
+				fatal("%v", err)
+			}
+			payload["ci"] = ci
 		}
 
 		if len(payload) == 0 {
@@ -86,4 +108,7 @@ func init() {
 	configureCmd.Flags().Int("port", 0, "new container port")
 	configureCmd.Flags().String("subpath", "", "new subpath routing mode: disabled, redirect, or proxy")
 	configureCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (use \"\" to clear)")
+	configureCmd.Flags().Bool("static", false, "convert to a static site served by Caddy")
+	configureCmd.Flags().Bool("spa", false, "convert to a single-page app (implies --static, adds try_files)")
+	configureCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
 }
