@@ -18,11 +18,16 @@ Useful after template changes or token migrations.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
 
-		if err := apiPost("/projects/"+name+"/refresh", nil, nil); err != nil {
+		var result map[string]string
+		if err := apiPost("/projects/"+name+"/refresh", nil, &result); err != nil {
 			fatal("%v", err)
 		}
 
-		fmt.Printf("✓ refreshed GitHub config for %q\n", name)
+		if result["status"] == "ci removed" {
+			fmt.Printf("✓ removed Poof-managed CI for %q\n", name)
+		} else {
+			fmt.Printf("✓ refreshed GitHub config for %q\n", name)
+		}
 	},
 }
 

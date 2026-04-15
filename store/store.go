@@ -232,6 +232,17 @@ func (s *Store) CountProjectsForRepo(repo string) (int, error) {
 	return count, err
 }
 
+// CountCIEnabledProjectsForRepo counts projects in the same repo that have
+// CI enabled, excluding the named project. Used to decide whether it's safe
+// to remove shared repo secrets.
+func (s *Store) CountCIEnabledProjectsForRepo(repo, excludeName string) (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM projects WHERE repo = ? AND ci = 1 AND name != ?`, repo, excludeName,
+	).Scan(&count)
+	return count, err
+}
+
 func (s *Store) UpdateProject(p Project) error {
 	_, err := s.db.Exec(
 		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, ci=? WHERE name=?`,

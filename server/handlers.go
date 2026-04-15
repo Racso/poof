@@ -244,7 +244,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.settingGitHubUser()
 			repoName = req.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static); err != nil {
+		if err := client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 		}
 	}
@@ -351,16 +351,20 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if p.CI && s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged || staticChanged || ciChanged) {
-		repoToken, _ := s.store.GetRepoToken(p.Repo)
+	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged || staticChanged || ciChanged) {
 		client := gh.NewClient(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
 			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static); err != nil {
-			log.Printf("warning: GitHub update for %s failed: %v", name, err)
+		repoToken, _ := s.store.GetRepoToken(p.Repo)
+		ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
+		if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, ciSiblings == 0); err != nil {
+			log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
+		}
+		if !p.CI && ciSiblings == 0 {
+			_ = s.store.DeleteRepoToken(p.Repo)
 		}
 	}
 
@@ -403,7 +407,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		// Only delete the POOF_TOKEN secret if this is the last project for this repo.
 		siblings, _ := s.store.CountProjectsForRepo(p.Repo)
 		lastForRepo := siblings <= 1
-		if err := client.RemoveRepo(owner, repoName, name, lastForRepo); err != nil {
+		if err := client.RemoveRepoCI(owner, repoName, name, lastForRepo); err != nil {
 			log.Printf("warning: GitHub cleanup for %s: %v", name, err)
 		}
 		if lastForRepo {
@@ -524,7 +528,7 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.settingGitHubUser()
 			repoName = source.Repo
 		}
-		if err := client.SetupRepo(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static); err != nil {
+		if err := client.SetRepoCI(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", cloneName, err)
 		}
 	}
@@ -551,18 +555,13 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !p.CI {
-		jsonError(w, "CI is disabled for this project (--ci no)", http.StatusBadRequest)
-		return
-	}
-
 	if s.settingGitHubToken() == "" {
 		jsonError(w, "no GitHub PAT configured on server", http.StatusPreconditionFailed)
 		return
 	}
 
 	repoToken, _ := s.store.GetRepoToken(p.Repo)
-	if repoToken == "" {
+	if p.CI && repoToken == "" {
 		jsonError(w, "no deploy token found for repo "+p.Repo, http.StatusPreconditionFailed)
 		return
 	}
@@ -573,13 +572,22 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		owner = s.settingGitHubUser()
 		repoName = p.Repo
 	}
-	if err := client.SetupRepo(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static); err != nil {
-		jsonError(w, fmt.Sprintf("GitHub setup failed: %v", err), http.StatusInternalServerError)
+
+	ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
+	if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, ciSiblings == 0); err != nil {
+		jsonError(w, fmt.Sprintf("GitHub CI refresh failed: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if !p.CI && ciSiblings == 0 {
+		_ = s.store.DeleteRepoToken(p.Repo)
+	}
 
-	log.Printf("project refreshed: %s", name)
-	jsonOK(w, map[string]string{"status": "refreshed"})
+	status := "refreshed"
+	if !p.CI {
+		status = "ci removed"
+	}
+	log.Printf("project CI refreshed: %s (status=%s)", name, status)
+	jsonOK(w, map[string]string{"status": status})
 }
 
 // --- Deploy & Rollback ---
