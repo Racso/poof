@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/racso/poof/config"
-	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/store"
 	"github.com/racso/poof/version"
 )
@@ -32,20 +31,13 @@ type Server struct {
 	ghFactory func(token string) RepoManager
 }
 
-func New(cfg *config.ServerConfig, st *store.Store) *Server {
+func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string) RepoManager) *Server {
 	return &Server{
-		cfg:     cfg,
-		store:   st,
-		logPath: filepath.Join(cfg.DataDir, "server.log"),
-		ghFactory: func(token string) RepoManager {
-			return gh.NewClient(token)
-		},
+		cfg:       cfg,
+		store:     st,
+		logPath:   filepath.Join(cfg.DataDir, "server.log"),
+		ghFactory: ghFactory,
 	}
-}
-
-// SetRepoManagerFactory overrides the default GitHub client factory.
-func (s *Server) SetRepoManagerFactory(fn func(token string) RepoManager) {
-	s.ghFactory = fn
 }
 
 // handler builds and returns the HTTP mux. Separated from Run so tests can

@@ -6,6 +6,7 @@ import (
 	"runtime"
 
 	"github.com/racso/poof/config"
+	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/server"
 	"github.com/racso/poof/store"
 	"github.com/spf13/cobra"
@@ -42,7 +43,9 @@ var serverCmd = &cobra.Command{
 		}
 		defer st.Close()
 
-		srv := server.New(scfg, st)
+		srv := server.New(scfg, st, func(token string) server.RepoManager {
+			return gh.NewClient(token)
+		})
 		if err := srv.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: server: %v\n", err)
 			os.Exit(1)

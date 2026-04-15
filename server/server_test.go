@@ -63,10 +63,8 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *mockRepoManager
 		Token:     "global-test-token",
 	}
 
-	srv := server.New(cfg, st)
-
 	mock := &mockRepoManager{}
-	srv.SetRepoManagerFactory(func(token string) server.RepoManager {
+	srv := server.New(cfg, st, func(token string) server.RepoManager {
 		return mock
 	})
 
