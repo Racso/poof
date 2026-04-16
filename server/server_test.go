@@ -502,3 +502,433 @@ func TestEnvRequiresExistingProject(t *testing.T) {
 		t.Errorf("expected 404 for nonexistent project, got %d", rr.Code)
 	}
 }
+
+// --- GitHub integration (RepoManager) ---
+
+func TestCreateProjectCallsSetRepoCI(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.setupCalls) != 1 {
+		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
+	}
+	c := mocks.repo.setupCalls[0]
+	if c.Owner != "racso" || c.Repo != "web" {
+		t.Errorf("owner/repo: got %s/%s, want racso/web", c.Owner, c.Repo)
+	}
+	if c.ProjectName != "web" {
+		t.Errorf("projectName: got %q, want web", c.ProjectName)
+	}
+	if c.PoofURL != "https://poof.rac.so" {
+		t.Errorf("poofURL: got %q", c.PoofURL)
+	}
+	if c.Branch != "main" {
+		t.Errorf("branch: got %q, want main", c.Branch)
+	}
+}
+
+func TestCreateProjectSkipsGitHubWithoutPAT(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	// No github-token set.
+
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.setupCalls) != 0 {
+		t.Errorf("expected no SetRepoCI calls without PAT, got %d", len(mocks.repo.setupCalls))
+	}
+}
+
+func TestCreateProjectSkipsGitHubWhenCIDisabled(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	ci := false
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "ci": ci}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.setupCalls) != 0 {
+		t.Errorf("expected no SetRepoCI calls with ci=false, got %d", len(mocks.repo.setupCalls))
+	}
+}
+
+func TestDeleteProjectCallsRemoveRepoCI(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "DELETE", "/projects/web", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.removeCalls) != 1 {
+		t.Fatalf("expected 1 RemoveRepoCI call, got %d", len(mocks.repo.removeCalls))
+	}
+	c := mocks.repo.removeCalls[0]
+	if c.Owner != "racso" || c.Repo != "web" {
+		t.Errorf("owner/repo: got %s/%s", c.Owner, c.Repo)
+	}
+	if c.ProjectName != "web" {
+		t.Errorf("projectName: got %q", c.ProjectName)
+	}
+	if !c.DeleteSecrets {
+		t.Error("expected deleteSecrets=true for last project in repo")
+	}
+}
+
+func TestDeleteProjectKeepsSecretsWhenSiblingsExist(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	// Two projects sharing the same repo.
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/monorepo", Branch: "main", Port: 80,
+	})
+	st.CreateProject(store.Project{
+		Name: "api", Domain: "api.rac.so", Image: "ghcr.io/racso/api",
+		Repo: "racso/monorepo", Branch: "main", Port: 3000,
+	})
+
+	do(t, srv, "DELETE", "/projects/web", nil, globalToken)
+
+	if len(mocks.repo.removeCalls) != 1 {
+		t.Fatalf("expected 1 RemoveRepoCI call, got %d", len(mocks.repo.removeCalls))
+	}
+	if mocks.repo.removeCalls[0].DeleteSecrets {
+		t.Error("expected deleteSecrets=false when sibling project still exists")
+	}
+}
+
+func TestUpdateProjectRefreshesCIOnBranchChange(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
+	})
+	st.SetRepoToken("racso/web", "repo-tok")
+
+	rr := do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"branch": "production"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.refreshCalls) != 1 {
+		t.Fatalf("expected 1 RefreshProjectCI call, got %d", len(mocks.repo.refreshCalls))
+	}
+	c := mocks.repo.refreshCalls[0]
+	if c.Branch != "production" {
+		t.Errorf("branch: got %q, want production", c.Branch)
+	}
+	if !c.CI {
+		t.Error("expected ci=true to be passed through")
+	}
+}
+
+func TestUpdateProjectNoGitHubCallWhenNothingCIRelatedChanges(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
+	})
+
+	// Only changing domain — no CI-related fields.
+	do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"domain": "app.rac.so"}, globalToken)
+
+	if len(mocks.repo.refreshCalls) != 0 {
+		t.Errorf("expected no RefreshProjectCI calls for domain-only change, got %d", len(mocks.repo.refreshCalls))
+	}
+}
+
+func TestCloneProjectCallsSetRepoCI(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
+	})
+	st.SetRepoToken("racso/web", "repo-tok")
+
+	rr := do(t, srv, "POST", "/projects/web/clone",
+		map[string]interface{}{"suffix": "staging"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("clone: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.setupCalls) != 1 {
+		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
+	}
+	c := mocks.repo.setupCalls[0]
+	if c.ProjectName != "web-staging" {
+		t.Errorf("projectName: got %q, want web-staging", c.ProjectName)
+	}
+	if c.Branch != "staging" {
+		t.Errorf("branch: got %q, want staging", c.Branch)
+	}
+}
+
+func TestRefreshProjectCallsRefreshProjectCI(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
+	})
+	st.SetRepoToken("racso/web", "repo-tok")
+
+	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("refresh: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.repo.refreshCalls) != 1 {
+		t.Fatalf("expected 1 RefreshProjectCI call, got %d", len(mocks.repo.refreshCalls))
+	}
+	c := mocks.repo.refreshCalls[0]
+	if c.Owner != "racso" || c.Repo != "web" {
+		t.Errorf("owner/repo: got %s/%s", c.Owner, c.Repo)
+	}
+	if c.RepoToken != "repo-tok" {
+		t.Errorf("repoToken: got %q", c.RepoToken)
+	}
+}
+
+// --- Container deploy ---
+
+func TestDeployCallsContainerDeploy(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetEnvVar("web", "DB", "pg://localhost")
+
+	rr := do(t, srv, "POST", "/projects/web/deploy",
+		map[string]interface{}{"image": "ghcr.io/racso/web:v2"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.container.deployCalls) != 1 {
+		t.Fatalf("expected 1 container.Deploy call, got %d", len(mocks.container.deployCalls))
+	}
+	c := mocks.container.deployCalls[0]
+	if c.Name != "web" {
+		t.Errorf("name: got %q", c.Name)
+	}
+	if c.Image != "ghcr.io/racso/web:v2" {
+		t.Errorf("image: got %q", c.Image)
+	}
+	if c.EnvVars["DB"] != "pg://localhost" {
+		t.Errorf("env DB: got %q", c.EnvVars["DB"])
+	}
+}
+
+func TestDeployWithoutImageRedeploysLatest(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	// Record a prior deployment.
+	st.RecordDeployment("web", "ghcr.io/racso/web:v3", "success")
+
+	rr := do(t, srv, "POST", "/projects/web/deploy", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.container.deployCalls) != 1 {
+		t.Fatalf("expected 1 deploy call, got %d", len(mocks.container.deployCalls))
+	}
+	if mocks.container.deployCalls[0].Image != "ghcr.io/racso/web:v3" {
+		t.Errorf("expected redeploy of latest recorded image, got %q", mocks.container.deployCalls[0].Image)
+	}
+}
+
+func TestDeploySyncsCaddy(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "POST", "/projects/web/deploy",
+		map[string]interface{}{"image": "img:v1"}, globalToken)
+
+	if mocks.caddy.reloadCalls < 1 {
+		t.Error("expected caddy reload after deploy")
+	}
+}
+
+// --- Delete cleanup ---
+
+func TestDeleteProjectStopsContainer(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "DELETE", "/projects/web", nil, globalToken)
+
+	if len(mocks.container.stopCalls) != 1 || mocks.container.stopCalls[0] != "web" {
+		t.Errorf("expected container.Stop(web), got %v", mocks.container.stopCalls)
+	}
+}
+
+func TestDeleteStaticProjectRemovesStaticFiles(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so",
+		Repo: "racso/site", Branch: "main", Static: "static",
+	})
+
+	do(t, srv, "DELETE", "/projects/site", nil, globalToken)
+
+	if len(mocks.static.removeCalls) != 1 || mocks.static.removeCalls[0] != "site" {
+		t.Errorf("expected static.Remove(site), got %v", mocks.static.removeCalls)
+	}
+	// Should NOT stop a container for a static project.
+	if len(mocks.container.stopCalls) != 0 {
+		t.Errorf("expected no container.Stop for static project, got %v", mocks.container.stopCalls)
+	}
+}
+
+// --- List running status ---
+
+func TestListProjectsShowsRunningStatus(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	mocks.container.running = map[string]bool{"web": true}
+
+	rr := do(t, srv, "GET", "/projects", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: %d", rr.Code)
+	}
+
+	var projects []map[string]interface{}
+	decode(t, rr, &projects)
+	if len(projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(projects))
+	}
+	if projects[0]["running"] != true {
+		t.Errorf("expected running=true, got %v", projects[0]["running"])
+	}
+}
+
+// --- Rollback ---
+
+func TestRollbackRedeploysPreviousImage(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.RecordDeployment("web", "img:v1", "success")
+	st.RecordDeployment("web", "img:v2", "success")
+
+	rr := do(t, srv, "POST", "/projects/web/rollback", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("rollback: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.container.deployCalls) != 1 {
+		t.Fatalf("expected 1 deploy call, got %d", len(mocks.container.deployCalls))
+	}
+	if mocks.container.deployCalls[0].Image != "img:v1" {
+		t.Errorf("expected rollback to img:v1, got %q", mocks.container.deployCalls[0].Image)
+	}
+}
+
+func TestRollbackFailsWithNoPreviousDeployment(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/rollback", nil, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 with no previous deployment, got %d", rr.Code)
+	}
+}
+
+// --- Update project side effects ---
+
+func TestUpdateProjectSyncsCaddy(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"domain": "app.rac.so"}, globalToken)
+
+	if mocks.caddy.reloadCalls < 1 {
+		t.Error("expected caddy reload after project update")
+	}
+}
+
+func TestDeleteProjectSyncsCaddy(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "DELETE", "/projects/web", nil, globalToken)
+
+	if mocks.caddy.reloadCalls < 1 {
+		t.Error("expected caddy reload after project delete")
+	}
+}
