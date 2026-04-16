@@ -13,8 +13,6 @@ import (
 
 	"github.com/racso/poof/caddy"
 	"github.com/racso/poof/defaults"
-	"github.com/racso/poof/docker"
-	staticPkg "github.com/racso/poof/static"
 	"github.com/racso/poof/store"
 )
 
@@ -85,9 +83,9 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	for _, p := range projects {
 		running := false
 		if p.IsStatic() {
-			running = staticPkg.IsDeployed(s.cfg.DataDir, p.Name)
+			running = s.static.IsDeployed(s.cfg.DataDir, p.Name)
 		} else {
-			running = docker.IsRunning(p.Name)
+			running = s.container.IsRunning(p.Name)
 		}
 		result = append(result, projectStatus{p, running})
 	}
@@ -110,9 +108,9 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 
 	running := false
 	if p.IsStatic() {
-		running = staticPkg.IsDeployed(s.cfg.DataDir, name)
+		running = s.static.IsDeployed(s.cfg.DataDir, name)
 	} else {
-		running = docker.IsRunning(name)
+		running = s.container.IsRunning(name)
 	}
 
 	jsonOK(w, map[string]interface{}{
@@ -335,13 +333,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 
 	// If switching from container to static, stop the container.
 	if staticChanged && p.IsStatic() {
-		if err := docker.Stop(name); err != nil {
+		if err := s.container.Stop(name); err != nil {
 			log.Printf("warning: stopping container for %s during static conversion: %v", name, err)
 		}
 	}
 	// If switching from static to container, clean up static files.
 	if staticChanged && !p.IsStatic() {
-		staticPkg.Remove(s.cfg.DataDir, name)
+		s.static.Remove(s.cfg.DataDir, name)
 	}
 
 	if err := s.store.UpdateProject(*p); err != nil {
@@ -388,9 +386,9 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 
 	// Stop container or clean up static files.
 	if p.IsStatic() {
-		staticPkg.Remove(s.cfg.DataDir, name)
+		s.static.Remove(s.cfg.DataDir, name)
 	} else {
-		if err := docker.Stop(name); err != nil {
+		if err := s.container.Stop(name); err != nil {
 			log.Printf("warning: stopping container for %s: %v", name, err)
 		}
 	}
@@ -640,7 +638,7 @@ func (s *Server) deployStaticProject(w http.ResponseWriter, r *http.Request) {
 
 	depID, _ := s.store.RecordDeployment(name, "static", "running")
 
-	if err := staticPkg.Deploy(s.cfg.DataDir, name, depID, r.Body); err != nil {
+	if err := s.static.Deploy(s.cfg.DataDir, name, depID, r.Body); err != nil {
 		s.store.UpdateDeploymentStatus(depID, "failed")
 		jsonError(w, fmt.Sprintf("static deploy failed: %v", err), http.StatusInternalServerError)
 		return
@@ -675,7 +673,7 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 
 	if p.IsStatic() {
 		log.Printf("static rollback triggered: %s → v%d", name, prev.ID)
-		if err := staticPkg.Rollback(s.cfg.DataDir, name, prev.ID); err != nil {
+		if err := s.static.Rollback(s.cfg.DataDir, name, prev.ID); err != nil {
 			jsonError(w, fmt.Sprintf("rollback failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -713,7 +711,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
-	err = docker.Deploy(docker.DeployConfig{
+	err = s.container.Deploy(ContainerDeployConfig{
 		Name:          p.Name,
 		Image:         image,
 		EnvVars:       envVars,
@@ -763,7 +761,7 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logs, err := docker.Logs(name, lines)
+	logs, err := s.container.Logs(name, lines)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1083,10 +1081,10 @@ func (s *Server) syncCaddy() error {
 	var running []store.Project
 	for _, p := range projects {
 		if p.IsStatic() {
-			if staticPkg.IsDeployed(s.cfg.DataDir, p.Name) {
+			if s.static.IsDeployed(s.cfg.DataDir, p.Name) {
 				running = append(running, p)
 			}
-		} else if docker.IsRunning(p.Name) {
+		} else if s.container.IsRunning(p.Name) {
 			running = append(running, p)
 		}
 	}
@@ -1095,7 +1093,7 @@ func (s *Server) syncCaddy() error {
 		return err
 	}
 	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
-	return caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
+	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 
 // --- Helpers ---

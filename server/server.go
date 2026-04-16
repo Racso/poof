@@ -25,19 +25,56 @@ type RepoManager interface {
 	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, deleteSecrets bool) error
 }
 
+// ContainerManager abstracts Docker container operations.
+type ContainerManager interface {
+	Deploy(cfg ContainerDeployConfig) error
+	Stop(projectName string) error
+	IsRunning(projectName string) bool
+	Logs(projectName string, lines int) (string, error)
+}
+
+// ContainerDeployConfig mirrors docker.DeployConfig for the interface boundary.
+type ContainerDeployConfig struct {
+	Name          string
+	Image         string
+	EnvVars       map[string]string
+	Volumes       []string
+	RegistryUser  string
+	RegistryToken string
+}
+
+// StaticDeployer abstracts static site deployment operations.
+type StaticDeployer interface {
+	Deploy(dataDir, project string, depID int64, tarball io.Reader) error
+	Rollback(dataDir, project string, depID int64) error
+	IsDeployed(dataDir, project string) bool
+	Remove(dataDir, project string)
+}
+
+// CaddySyncer abstracts Caddy configuration reload.
+type CaddySyncer interface {
+	Reload(adminURL, caddyfile string) error
+}
+
 type Server struct {
 	cfg       *config.ServerConfig
 	store     *store.Store
 	logPath   string
 	ghFactory func(token string) RepoManager
+	container ContainerManager
+	static    StaticDeployer
+	caddy     CaddySyncer
 }
 
-func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string) RepoManager) *Server {
+func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string) RepoManager, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
 	return &Server{
 		cfg:       cfg,
 		store:     st,
 		logPath:   filepath.Join(cfg.DataDir, "server.log"),
 		ghFactory: ghFactory,
+		container: container,
+		static:    static,
+		caddy:     caddySyncer,
 	}
 }
 

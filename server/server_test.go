@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,9 +54,104 @@ func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci b
 	return nil
 }
 
+// --- Mock ContainerManager ---
+
+type mockContainerManager struct {
+	deployCalls []server.ContainerDeployConfig
+	stopCalls   []string
+	running     map[string]bool
+	logs        map[string]string
+}
+
+func (m *mockContainerManager) Deploy(cfg server.ContainerDeployConfig) error {
+	m.deployCalls = append(m.deployCalls, cfg)
+	return nil
+}
+
+func (m *mockContainerManager) Stop(name string) error {
+	m.stopCalls = append(m.stopCalls, name)
+	return nil
+}
+
+func (m *mockContainerManager) IsRunning(name string) bool {
+	if m.running == nil {
+		return false
+	}
+	return m.running[name]
+}
+
+func (m *mockContainerManager) Logs(name string, lines int) (string, error) {
+	if m.logs != nil {
+		if l, ok := m.logs[name]; ok {
+			return l, nil
+		}
+	}
+	return "", nil
+}
+
+// --- Mock StaticDeployer ---
+
+type mockStaticDeployer struct {
+	deployCalls   []mockStaticDeployCall
+	rollbackCalls []mockStaticRollbackCall
+	removeCalls   []string
+	deployed      map[string]bool
+}
+
+type mockStaticDeployCall struct {
+	DataDir, Project string
+	DepID            int64
+}
+
+type mockStaticRollbackCall struct {
+	DataDir, Project string
+	DepID            int64
+}
+
+func (m *mockStaticDeployer) Deploy(dataDir, project string, depID int64, _ io.Reader) error {
+	m.deployCalls = append(m.deployCalls, mockStaticDeployCall{dataDir, project, depID})
+	return nil
+}
+
+func (m *mockStaticDeployer) Rollback(dataDir, project string, depID int64) error {
+	m.rollbackCalls = append(m.rollbackCalls, mockStaticRollbackCall{dataDir, project, depID})
+	return nil
+}
+
+func (m *mockStaticDeployer) IsDeployed(_, project string) bool {
+	if m.deployed == nil {
+		return false
+	}
+	return m.deployed[project]
+}
+
+func (m *mockStaticDeployer) Remove(_, project string) {
+	m.removeCalls = append(m.removeCalls, project)
+}
+
+// --- Mock CaddySyncer ---
+
+type mockCaddySyncer struct {
+	reloadCalls int
+}
+
+func (m *mockCaddySyncer) Reload(_, _ string) error {
+	m.reloadCalls++
+	return nil
+}
+
+// --- Test mocks aggregate ---
+
+type testMocks struct {
+	repo      *mockRepoManager
+	container *mockContainerManager
+	static    *mockStaticDeployer
+	caddy     *mockCaddySyncer
+}
+
 // --- Test helpers ---
 
-func newTestServer(t *testing.T) (*server.Server, *store.Store, *mockRepoManager) {
+func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 	t.Helper()
 	f, err := os.CreateTemp("", "poof-server-test-*.db")
 	if err != nil {
@@ -76,12 +172,17 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *mockRepoManager
 		Token:     "global-test-token",
 	}
 
-	mock := &mockRepoManager{}
+	mocks := &testMocks{
+		repo:      &mockRepoManager{},
+		container: &mockContainerManager{},
+		static:    &mockStaticDeployer{},
+		caddy:     &mockCaddySyncer{},
+	}
 	srv := server.New(cfg, st, func(token string) server.RepoManager {
-		return mock
-	})
+		return mocks.repo
+	}, mocks.container, mocks.static, mocks.caddy)
 
-	return srv, st, mock
+	return srv, st, mocks
 }
 
 func do(t *testing.T, srv *server.Server, method, path string, body interface{}, token string) *httptest.ResponseRecorder {
