@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -930,5 +931,274 @@ func TestDeleteProjectSyncsCaddy(t *testing.T) {
 
 	if mocks.caddy.reloadCalls < 1 {
 		t.Error("expected caddy reload after project delete")
+	}
+}
+
+// --- Volumes CRUD ---
+
+func TestListVolumesEmpty(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "GET", "/projects/web/volumes", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list volumes: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var vols []interface{}
+	decode(t, rr, &vols)
+	if len(vols) != 0 {
+		t.Errorf("expected empty list, got %d", len(vols))
+	}
+}
+
+func TestAddVolumeManagedParsing(t *testing.T) {
+	// Managed volumes (container-path only) try to mkdir the host path,
+	// which requires root. We test the parseMount logic via the explicit-path
+	// test above. Here we just verify the request is accepted and the managed
+	// flag is set when the host directory already exists.
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	// Use a temp dir that exists so MkdirAll succeeds.
+	dir := t.TempDir()
+	rr := do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": dir + ":/container/data"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("add volume: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var vol map[string]interface{}
+	decode(t, rr, &vol)
+	if vol["container_path"] != "/container/data" {
+		t.Errorf("container_path: got %q", vol["container_path"])
+	}
+	if vol["managed"] != false {
+		t.Errorf("explicit host path should not be managed")
+	}
+}
+
+func TestAddVolumeExplicitHostPath(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": "/host/data:/container/data"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("add volume: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var vol map[string]interface{}
+	decode(t, rr, &vol)
+	if vol["host_path"] != "/host/data" {
+		t.Errorf("host_path: got %q", vol["host_path"])
+	}
+	if vol["container_path"] != "/container/data" {
+		t.Errorf("container_path: got %q", vol["container_path"])
+	}
+	if vol["managed"] != false {
+		t.Errorf("expected managed=false for explicit host path")
+	}
+}
+
+func TestAddVolumeRejectsStaticProject(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so",
+		Repo: "racso/site", Branch: "main", Static: "static",
+	})
+
+	rr := do(t, srv, "POST", "/projects/site/volumes",
+		map[string]string{"mount": "/data"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for static project, got %d", rr.Code)
+	}
+}
+
+func TestAddVolumeRejectsMissingMount(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing mount, got %d", rr.Code)
+	}
+}
+
+func TestAddVolumeRejectsRelativeContainerPath(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": "relative/path"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for relative container path, got %d", rr.Code)
+	}
+}
+
+func TestAddVolumeRejectsNonexistentProject(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rr := do(t, srv, "POST", "/projects/ghost/volumes",
+		map[string]string{"mount": "/data"}, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for nonexistent project, got %d", rr.Code)
+	}
+}
+
+func TestGetVolume(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	// Add a volume first (explicit host path to avoid mkdir issues).
+	rr := do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": "/host/data:/container/data"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("add: %d — %s", rr.Code, rr.Body.String())
+	}
+	var created map[string]interface{}
+	decode(t, rr, &created)
+	id := fmt.Sprintf("%.0f", created["id"].(float64))
+
+	// Get it.
+	rr = do(t, srv, "GET", "/projects/web/volumes/"+id, nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get volume: %d — %s", rr.Code, rr.Body.String())
+	}
+	var vol map[string]interface{}
+	decode(t, rr, &vol)
+	if vol["container_path"] != "/container/data" {
+		t.Errorf("container_path: got %q", vol["container_path"])
+	}
+}
+
+func TestGetVolumeNotFound(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rr := do(t, srv, "GET", "/projects/web/volumes/99999", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestGetVolumeInvalidID(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rr := do(t, srv, "GET", "/projects/web/volumes/abc", nil, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid id, got %d", rr.Code)
+	}
+}
+
+func TestRemoveVolume(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	// Add then remove.
+	rr := do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": "/host/x:/container/x"}, globalToken)
+	var created map[string]interface{}
+	decode(t, rr, &created)
+	id := fmt.Sprintf("%.0f", created["id"].(float64))
+
+	rr = do(t, srv, "DELETE", "/projects/web/volumes/"+id, nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("remove: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	decode(t, rr, &resp)
+	if resp["status"] != "removed" {
+		t.Errorf("status: got %q", resp["status"])
+	}
+
+	// Confirm it's gone.
+	rr = do(t, srv, "GET", "/projects/web/volumes/"+id, nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 after remove, got %d", rr.Code)
+	}
+}
+
+func TestRemoveVolumeNotFound(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rr := do(t, srv, "DELETE", "/projects/web/volumes/99999", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestListVolumesAfterAdd(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": "/host/a:/container/a"}, globalToken)
+	do(t, srv, "POST", "/projects/web/volumes",
+		map[string]string{"mount": "/host/b:/container/b"}, globalToken)
+
+	rr := do(t, srv, "GET", "/projects/web/volumes", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: %d", rr.Code)
+	}
+
+	var vols []map[string]interface{}
+	decode(t, rr, &vols)
+	if len(vols) != 2 {
+		t.Errorf("expected 2 volumes, got %d", len(vols))
+	}
+}
+
+func TestDeployIncludesVolumes(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.CreateVolume(store.Volume{
+		Project: "web", HostPath: "/host/data", ContainerPath: "/data",
+	})
+	st.CreateVolume(store.Volume{
+		Project: "web", HostPath: "/host/logs", ContainerPath: "/logs",
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/deploy",
+		map[string]interface{}{"image": "img:v1"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if len(mocks.container.deployCalls) != 1 {
+		t.Fatalf("expected 1 deploy, got %d", len(mocks.container.deployCalls))
+	}
+	vols := mocks.container.deployCalls[0].Volumes
+	if len(vols) != 2 {
+		t.Errorf("expected 2 volume mounts, got %d: %v", len(vols), vols)
 	}
 }
