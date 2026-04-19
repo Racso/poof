@@ -41,12 +41,13 @@ var statusCmd = &cobra.Command{
 		if port, _ := p["port"].(float64); port != 0 {
 			fmt.Printf("port:    %.0f\n", port)
 		}
-		if static, _ := p["static"].(string); static != "" {
-			fmt.Printf("static:  %s\n", static)
+		isStatic := false
+		if static, _ := p["static"].(string); static == "static" || static == "spa" {
+			isStatic = true
 		}
-		if build, _ := p["build"].(bool); build {
-			fmt.Printf("build:   yes\n")
-		}
+		fmt.Printf("static:  %s\n", yesNo(isStatic))
+		fmt.Printf("spa:     %s\n", yesNo(p["static"] == "spa"))
+		fmt.Printf("build:   %s\n", yesNo(p["build"] == true))
 
 		if dep != nil {
 			fmt.Printf("\nlast deployment:\n")
@@ -57,6 +58,13 @@ var statusCmd = &cobra.Command{
 			fmt.Printf("\nno deployments yet\n")
 		}
 	},
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 func init() {
