@@ -26,6 +26,7 @@ type mockRepoManager struct {
 
 type mockSetupCall struct {
 	Owner, Repo, ProjectName, PoofURL, PoofToken, Branch, Image, Folder, Static string
+	Build                                                                        bool
 }
 
 type mockRemoveCall struct {
@@ -37,11 +38,12 @@ type mockRefreshCall struct {
 	Owner, Repo, ProjectName string
 	CI                       bool
 	PoofURL, RepoToken, Branch, Image, Folder, Static string
+	Build                                              bool
 	DeleteSecrets                                      bool
 }
 
-func (m *mockRepoManager) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string) error {
-	m.setupCalls = append(m.setupCalls, mockSetupCall{owner, repo, projectName, poofURL, poofToken, branch, image, folder, static})
+func (m *mockRepoManager) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string, build bool) error {
+	m.setupCalls = append(m.setupCalls, mockSetupCall{owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, build})
 	return nil
 }
 
@@ -50,8 +52,8 @@ func (m *mockRepoManager) RemoveRepoCI(owner, repo, projectName string, deleteSe
 	return nil
 }
 
-func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, deleteSecrets bool) error {
-	m.refreshCalls = append(m.refreshCalls, mockRefreshCall{owner, repo, projectName, ci, poofURL, repoToken, branch, image, folder, static, deleteSecrets})
+func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, build bool, deleteSecrets bool) error {
+	m.refreshCalls = append(m.refreshCalls, mockRefreshCall{owner, repo, projectName, ci, poofURL, repoToken, branch, image, folder, static, build, deleteSecrets})
 	return nil
 }
 
