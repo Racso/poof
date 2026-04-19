@@ -147,9 +147,9 @@ func NewClient(token string) *Client {
 // Poof-managed workflow (marker-checked) and optionally the shared secrets.
 // deleteSecrets should be true only when no other CI-enabled projects share
 // this repo — the caller is responsible for checking that.
-func (c *Client) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, deleteSecrets bool) error {
+func (c *Client) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, build bool, deleteSecrets bool) error {
 	if ci {
-		return c.SetRepoCI(owner, repo, projectName, poofURL, repoToken, branch, image, folder, static)
+		return c.SetRepoCI(owner, repo, projectName, poofURL, repoToken, branch, image, folder, static, build)
 	}
 	return c.RemoveRepoCI(owner, repo, projectName, deleteSecrets)
 }
@@ -157,14 +157,14 @@ func (c *Client) RefreshProjectCI(owner, repo, projectName string, ci bool, poof
 // SetRepoCI sets the POOF_URL and POOF_TOKEN repo secrets and commits the
 // deploy workflow file. All projects in the same repo share a single
 // POOF_TOKEN secret.
-func (c *Client) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string) error {
+func (c *Client) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string, build bool) error {
 	if err := c.setSecret(owner, repo, "POOF_URL", poofURL); err != nil {
 		return fmt.Errorf("set POOF_URL secret: %w", err)
 	}
 	if err := c.setSecret(owner, repo, "POOF_TOKEN", poofToken); err != nil {
 		return fmt.Errorf("set POOF_TOKEN secret: %w", err)
 	}
-	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder, static); err != nil {
+	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder, static, build); err != nil {
 		return fmt.Errorf("commit workflow: %w", err)
 	}
 	return nil
@@ -270,7 +270,7 @@ func imagePackageName(image string) string {
 	return base
 }
 
-func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder, static string) error {
+func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder, static string, build bool) error {
 	isStatic := static == "static" || static == "spa"
 
 	// folder support: path filter and build args
@@ -301,12 +301,7 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 
 	var workflow string
 	if isStatic {
-		// For static projects with a folder, the Docker build template uses the folder.
-		// For static projects without a folder, use the direct upload template.
-		// We determine "has Dockerfile" by whether an image was configured (non-empty image
-		// means a container project converted, empty means pure static).
-		hasDockerBuild := image != ""
-		if hasDockerBuild {
+		if build {
 			workflow = staticWorkflowDockerTemplate
 			workflow = strings.ReplaceAll(workflow, "POOF_BUILD_ARGS", buildArgs)
 		} else {

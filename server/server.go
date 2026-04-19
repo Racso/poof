@@ -20,9 +20,9 @@ import (
 // RepoManager abstracts GitHub repository operations (secrets + workflow files)
 // so that handlers can be tested without hitting the GitHub API.
 type RepoManager interface {
-	SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string) error
+	SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static string, build bool) error
 	RemoveRepoCI(owner, repo, projectName string, deleteSecrets bool) error
-	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, deleteSecrets bool) error
+	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static string, build bool, deleteSecrets bool) error
 }
 
 // ContainerManager abstracts Docker container operations.

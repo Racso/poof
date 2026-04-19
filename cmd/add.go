@@ -32,7 +32,18 @@ Monorepo / subfolder builds:
 
   Example:
     poof add myapp-frontend --folder frontend/
-    poof add myapp-backend  --folder backend/`, defaults.Branch, defaults.Port),
+    poof add myapp-backend  --folder backend/
+
+Static sites:
+  Use --static to serve files directly via Caddy instead of running a container.
+  Add --spa for single-page apps (adds try_files fallback to index.html).
+  Add --build if the repo has a Dockerfile that produces the static files
+  (output must be placed in /poof inside the container).
+
+  Examples:
+    poof add mysite --static                        # plain static files
+    poof add mysite --static --spa                   # SPA with try_files
+    poof add mysite --static --spa --build            # build with Docker, serve as SPA`, defaults.Branch, defaults.Port),
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
@@ -46,10 +57,18 @@ Monorepo / subfolder builds:
 		folder, _ := cmd.Flags().GetString("folder")
 		staticFlag, _ := cmd.Flags().GetBool("static")
 		spaFlag, _ := cmd.Flags().GetBool("spa")
+		buildFlag, _ := cmd.Flags().GetBool("build")
 		ciVal, _ := cmd.Flags().GetString("ci")
 
-		// --spa implies --static.
-		isStatic := staticFlag || spaFlag
+		// --spa and --build require --static.
+		if spaFlag && !staticFlag {
+			fatal("--spa requires --static")
+		}
+		if buildFlag && !staticFlag {
+			fatal("--build requires --static")
+		}
+
+		isStatic := staticFlag
 		staticMode := ""
 		if spaFlag {
 			staticMode = "spa"
@@ -121,6 +140,9 @@ Monorepo / subfolder builds:
 		if staticMode != "" {
 			payload["static"] = staticMode
 		}
+		if buildFlag {
+			payload["build"] = true
+		}
 		if ciVal != "" {
 			ci, _ := parseCIFlag(ciVal)
 			payload["ci"] = ci
@@ -146,6 +168,9 @@ Monorepo / subfolder builds:
 		}
 		if s, ok := result["static"].(string); ok && s != "" {
 			fmt.Printf("  static:  %s\n", s)
+		}
+		if b, ok := result["build"].(bool); ok && b {
+			fmt.Printf("  build:   yes\n")
 		}
 	},
 }
@@ -179,6 +204,7 @@ func init() {
 	addCmd.Flags().String("subpath", "", "subpath routing mode: disabled, redirect, or proxy (default: server's subpath_default)")
 	addCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (for monorepos)")
 	addCmd.Flags().Bool("static", false, "deploy as a static site served by Caddy")
-	addCmd.Flags().Bool("spa", false, "deploy as a single-page app (implies --static, adds try_files)")
+	addCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
+	addCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
 	addCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
 }

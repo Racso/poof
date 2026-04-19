@@ -19,6 +19,7 @@ type projectSpec struct {
 	Branch string
 	Port   int
 	Static string
+	Build  string // "yes"/"no" or empty
 	CI     string // "yes"/"no" or empty (server default)
 }
 
@@ -30,6 +31,7 @@ type remoteProject struct {
 	Branch  string `json:"branch"`
 	Port    int    `json:"port"`
 	Static  string `json:"static"`
+	Build   bool   `json:"build"`
 	CI      bool   `json:"ci"`
 	Running bool   `json:"running"`
 }
@@ -167,6 +169,14 @@ Example file (poof.ini):
 			if spec.Static != "" {
 				payload["static"] = spec.Static
 			}
+			if spec.Build != "" {
+				build, err := parseCIFlag(spec.Build)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  error: %s has invalid build value: %v\n", spec.Name, err)
+					continue
+				}
+				payload["build"] = build
+			}
 			if spec.CI != "" {
 				ci, err := parseCIFlag(spec.CI)
 				if err != nil {
@@ -234,6 +244,12 @@ func buildPatch(spec projectSpec, cur remoteProject) map[string]interface{} {
 	if spec.Static != "" && spec.Static != cur.Static {
 		patch["static"] = spec.Static
 	}
+	if spec.Build != "" {
+		build, err := parseCIFlag(spec.Build)
+		if err == nil && build != cur.Build {
+			patch["build"] = build
+		}
+	}
 	if spec.CI != "" {
 		ci, err := parseCIFlag(spec.CI)
 		if err == nil && ci != cur.CI {
@@ -291,6 +307,8 @@ func parseProjectsFile(path string) (map[string]projectSpec, error) {
 			}
 		case "static":
 			spec.Static = v
+		case "build":
+			spec.Build = v
 		case "ci":
 			spec.CI = v
 		}

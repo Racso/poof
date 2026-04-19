@@ -32,6 +32,16 @@ The project token is never affected — GitHub Actions integrations remain valid
 		// Use "container" to revert from static to container.
 		staticFlag, _ := cmd.Flags().GetBool("static")
 		spaFlag, _ := cmd.Flags().GetBool("spa")
+		buildFlag, _ := cmd.Flags().GetBool("build")
+		buildSet := cmd.Flags().Changed("build")
+
+		// --spa and --build require --static (or an already-static project being updated).
+		if spaFlag && !staticFlag && !cmd.Flags().Changed("static") {
+			fatal("--spa requires --static")
+		}
+		if buildFlag && !staticFlag && !cmd.Flags().Changed("static") {
+			fatal("--build requires --static")
+		}
 
 		payload := map[string]interface{}{}
 		if domain != "" {
@@ -62,6 +72,9 @@ The project token is never affected — GitHub Actions integrations remain valid
 		} else if cmd.Flags().Changed("static") {
 			// --static=false → revert to container
 			payload["static"] = "container"
+		}
+		if buildSet {
+			payload["build"] = buildFlag
 		}
 		if ciSet {
 			ci, err := parseCIFlag(ciVal)
@@ -109,6 +122,7 @@ func init() {
 	configureCmd.Flags().String("subpath", "", "new subpath routing mode: disabled, redirect, or proxy")
 	configureCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (use \"\" to clear)")
 	configureCmd.Flags().Bool("static", false, "convert to a static site served by Caddy")
-	configureCmd.Flags().Bool("spa", false, "convert to a single-page app (implies --static, adds try_files)")
+	configureCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
+	configureCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
 	configureCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
 }

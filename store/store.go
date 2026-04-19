@@ -22,6 +22,7 @@ type Project struct {
 	Subpath   string    `json:"subpath"`
 	Folder    string    `json:"folder"`
 	Static    string    `json:"static"`
+	Build     bool      `json:"build"`
 	CI        bool      `json:"ci"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -142,6 +143,7 @@ func (s *Store) migrate() error {
 		SELECT repo, token FROM projects WHERE token != '' GROUP BY repo`)
 	// Add static and ci columns for static site support and CI opt-out.
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN static TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN build INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
 	return nil
 }
@@ -150,9 +152,9 @@ func (s *Store) migrate() error {
 
 func (s *Store) CreateProject(p Project) error {
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, ci)
-		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.CI,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci)
+		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -163,9 +165,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, ci, created_at
+		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.CI, &p.CreatedAt)
+	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -177,7 +179,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, ci, created_at
+		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -188,7 +190,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.CI, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -245,8 +247,8 @@ func (s *Store) CountCIEnabledProjectsForRepo(repo, excludeName string) (int, er
 
 func (s *Store) UpdateProject(p Project) error {
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, ci=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.CI, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.Name,
 	)
 	return err
 }
