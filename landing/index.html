@@ -1273,6 +1273,22 @@
 
             <div class="cli-card">
                 <span class="cli-cat cli-cat--containerization">containerization</span>
+                <div class="cli-title">Static sites</div>
+                <div class="cli-desc">Skip the Dockerfile entirely. Serve static files straight from your repo with Caddy. For single-page apps, add <code>--spa</code> and Poof<span class="exclaim">!</span> configures <code>try_files</code> automatically.</div>
+                <div class="cli-code">
+<span class="co"># plain static site</span><br>
+<span class="cm">poof add mysite --repo user/mysite --static</span><br>
+<br>
+<span class="co"># single-page app (React, Angular, Vue…)</span><br>
+<span class="cm">poof add myapp --repo user/myapp --spa</span><br>
+<br>
+<span class="co"># convert an existing project</span><br>
+<span class="cm">poof configure myapp --static</span>
+                </div>
+            </div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--containerization">containerization</span>
                 <div class="cli-title">Environment variables</div>
                 <div class="cli-desc">Inject secrets and config into containers. Keys are listed but values are never exposed. Deploy to apply changes.</div>
                 <div class="cli-code">
