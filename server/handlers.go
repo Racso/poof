@@ -253,19 +253,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, p)
 }
 
-type updateProjectRequest struct {
-	Domain  string `json:"domain"`
-	Image   string `json:"image"`
-	Repo    string `json:"repo"`
-	Branch  string `json:"branch"`
-	Port    int    `json:"port"`
-	Subpath string `json:"subpath"`
-	Folder  string `json:"folder"`
-	Static  string `json:"static"`
-	Build   *bool  `json:"build"`
-	CI      *bool  `json:"ci"`
-}
-
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	p, err := s.store.GetProject(name)
@@ -278,65 +265,76 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req updateProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var patch map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	repoChanged := req.Repo != "" && req.Repo != p.Repo
-	branchChanged := req.Branch != "" && req.Branch != p.Branch
-	folderChanged := req.Folder != p.Folder && (req.Folder != "" || p.Folder != "")
-	staticChanged := req.Static != "" && req.Static != p.Static
-	buildChanged := req.Build != nil && *req.Build != p.Build
-
-	if req.Domain != "" {
-		p.Domain = req.Domain
-	}
-	if req.Image != "" {
-		p.Image = req.Image
-	}
-	if req.Repo != "" {
-		p.Repo = req.Repo
-	}
-	if req.Branch != "" {
-		p.Branch = req.Branch
-	}
-	if req.Port != 0 {
-		p.Port = req.Port
-	}
-	if req.Subpath != "" {
-		if !validSubpath(req.Subpath) {
-			jsonError(w, "subpath must be disabled, redirect, or proxy", http.StatusBadRequest)
-			return
-		}
-		p.Subpath = req.Subpath
-	}
-	// folder can be cleared by passing an explicit empty string via the flag;
-	// only update if the field was present in the request body (handled by folderChanged check above).
-	if req.Folder != "" || folderChanged {
-		p.Folder = req.Folder
-	}
-	if req.Static != "" {
-		if req.Static != "static" && req.Static != "spa" && req.Static != "container" {
-			jsonError(w, "static must be \"static\", \"spa\", or \"container\"", http.StatusBadRequest)
-			return
-		}
-		if req.Static == "container" {
-			p.Static = ""
-		} else {
-			p.Static = req.Static
-		}
-	}
-
-	if req.Build != nil {
-		p.Build = *req.Build
-	}
-
 	ciChanged := false
-	if req.CI != nil {
-		ciChanged = *req.CI != p.CI
-		p.CI = *req.CI
+	repoChanged, branchChanged, folderChanged, staticChanged, buildChanged := false, false, false, false, false
+
+	for key, val := range patch {
+		switch key {
+		case "domain":
+			if v, ok := val.(string); ok && v != "" {
+				p.Domain = v
+			}
+		case "image":
+			if v, ok := val.(string); ok && v != "" {
+				p.Image = v
+			}
+		case "repo":
+			if v, ok := val.(string); ok && v != "" {
+				repoChanged = v != p.Repo
+				p.Repo = v
+			}
+		case "branch":
+			if v, ok := val.(string); ok && v != "" {
+				branchChanged = v != p.Branch
+				p.Branch = v
+			}
+		case "port":
+			if v, ok := val.(float64); ok && v != 0 {
+				p.Port = int(v)
+			}
+		case "subpath":
+			if v, ok := val.(string); ok && v != "" {
+				if !validSubpath(v) {
+					jsonError(w, "subpath must be disabled, redirect, or proxy", http.StatusBadRequest)
+					return
+				}
+				p.Subpath = v
+			}
+		case "folder":
+			if v, ok := val.(string); ok {
+				folderChanged = v != p.Folder
+				p.Folder = v
+			}
+		case "static":
+			if v, ok := val.(string); ok && v != "" {
+				if v != "static" && v != "spa" && v != "container" {
+					jsonError(w, "static must be \"static\", \"spa\", or \"container\"", http.StatusBadRequest)
+					return
+				}
+				staticChanged = v != p.Static && !(v == "container" && p.Static == "")
+				if v == "container" {
+					p.Static = ""
+				} else {
+					p.Static = v
+				}
+			}
+		case "build":
+			if v, ok := val.(bool); ok {
+				buildChanged = v != p.Build
+				p.Build = v
+			}
+		case "ci":
+			if v, ok := val.(bool); ok {
+				ciChanged = v != p.CI
+				p.CI = v
+			}
+		}
 	}
 
 	// If switching from container to static, stop the container and clear
