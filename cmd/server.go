@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"io"
@@ -47,6 +49,8 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		defer st.Close()
+
+		checkCaddySetup(scfg)
 
 		srv := server.New(scfg, st, newGitHubClient, dockerAdapter{}, staticAdapter{}, caddyAdapter{})
 		if err := srv.Run(); err != nil {
@@ -93,6 +97,37 @@ func (staticAdapter) Remove(dataDir, project string)          { static.Remove(da
 type caddyAdapter struct{}
 
 func (caddyAdapter) Reload(adminURL, caddyfile string) error { return caddy.Reload(adminURL, caddyfile) }
+
+// checkCaddySetup inspects the Docker environment and prints warnings if the
+// Caddy container is missing or lacks the shared static-files volume mount.
+func checkCaddySetup(cfg *config.ServerConfig) {
+	caddyName := caddyContainerName(cfg.CaddyAdminURL)
+	if caddyName == "" {
+		return // can't determine container name; skip checks
+	}
+
+	if !docker.ContainerExists(caddyName) {
+		fmt.Fprintf(os.Stderr, "WARNING: Caddy container %q not found. Poof! won't be able to manage routing.\n", caddyName)
+		fmt.Fprintf(os.Stderr, "  Ensure Caddy is running on the %q network with admin API enabled.\n", docker.NetworkName())
+		return
+	}
+
+	staticMount := filepath.Join(cfg.DataDir, "static")
+	if !docker.ContainerHasMount(caddyName, staticMount) {
+		fmt.Fprintf(os.Stderr, "WARNING: Caddy container %q does not mount %s. Static sites will return 404.\n", caddyName, staticMount)
+		fmt.Fprintf(os.Stderr, "  Add  -v %s:%s  to the Caddy container's volume mounts and recreate it.\n", staticMount, staticMount)
+	}
+}
+
+// caddyContainerName extracts the hostname from the Caddy admin URL, which
+// doubles as the container name on the Docker network.
+func caddyContainerName(adminURL string) string {
+	u, err := url.Parse(adminURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
 
 func init() {
 	rootCmd.AddCommand(serverCmd)

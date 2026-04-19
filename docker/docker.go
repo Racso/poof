@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const networkName = "caddy-net"
+const networkName = "poof-net"
 
 type DeployConfig struct {
 	Name          string
@@ -164,7 +164,7 @@ func InspectLabels(image string) map[string]string {
 }
 
 // Deploy pulls the image, stops any existing container for the project, and
-// starts a new one on the caddy-net network.
+// starts a new one on the poof-net network.
 func Deploy(cfg DeployConfig) error {
 	if cfg.RegistryUser != "" && cfg.RegistryToken != "" {
 		if err := login(cfg.Image, cfg.RegistryUser, cfg.RegistryToken); err != nil {
@@ -247,4 +247,33 @@ func IsRunning(projectName string) bool {
 
 func containerFor(projectName string) string {
 	return "poof-" + projectName
+}
+
+// NetworkName returns the Docker network name that Poof uses.
+func NetworkName() string { return networkName }
+
+// ContainerExists reports whether a container with the given name exists
+// (running or stopped).
+func ContainerExists(name string) bool {
+	err := exec.Command("docker", "inspect", "--format", "{{.Id}}", name).Run()
+	return err == nil
+}
+
+// ContainerHasMount reports whether the given container has a bind mount
+// whose destination (container path) matches the specified path.
+func ContainerHasMount(containerName, mountDest string) bool {
+	out, err := exec.Command(
+		"docker", "inspect", "--format",
+		`{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}`,
+		containerName,
+	).Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == mountDest {
+			return true
+		}
+	}
+	return false
 }

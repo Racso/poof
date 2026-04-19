@@ -11,14 +11,14 @@ poof add myapp
 
 1. `poof add myapp` registers a project. If a GitHub PAT is configured, Poof! also sets `POOF_TOKEN` as a repo secret and commits the deploy workflow into the repo.
 2. On every push to `main`, GitHub Actions builds a Docker image, pushes it to GHCR, then calls `POST /projects/myapp/deploy` on your Poof! server.
-3. Poof! pulls the image, starts the container on `caddy-net`, and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
+3. Poof! pulls the image, starts the container on `poof-net`, and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
 
 No DNS changes needed per project — a single wildcard A record (`*.yourdomain.com → server`) covers everything.
 
 ## Requirements
 
 - A Linux server with Docker
-- [Caddy](https://caddyserver.com) running on a `caddy-net` Docker network with `admin 0.0.0.0:2019` in its global config
+- [Caddy](https://caddyserver.com) running on a `poof-net` Docker network with `admin 0.0.0.0:2019` in its global config
 - A wildcard DNS A record pointing to the server
 - A `Dockerfile` in each project repo
 
@@ -71,18 +71,18 @@ services:
     container_name: poof
     restart: always
     networks:
-      - caddy-net
+      - poof-net
     volumes:
       - /etc/poof/poof.toml:/etc/poof/poof.toml:ro
       - /var/lib/poof:/var/lib/poof
       - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
-  caddy-net:
+  poof-net:
     external: true
 ```
 
-Poof! must share `caddy-net` with Caddy so it can reach the admin API by container name.
+Poof! must share `poof-net` with Caddy so it can reach the admin API by container name.
 
 ## Client configuration
 

@@ -29,7 +29,7 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, roo
 	// an empty (or missing) directory is fine — Caddy won't error.
 	fmt.Fprintf(&b, "import %s/*.Caddyfile\n\n", staticDir)
 
-	// Poof's own API — runs as a container on caddy-net, reachable by name.
+	// Poof's own API — runs as a container on poof-net, reachable by name.
 	if poofHost != "" {
 		fmt.Fprintf(&b, "%s {\n\treverse_proxy poof:%d\n}\n\n", poofHost, poofPort)
 	}
