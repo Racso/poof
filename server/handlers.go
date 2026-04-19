@@ -339,8 +339,11 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		p.CI = *req.CI
 	}
 
-	// If switching from container to static, stop the container.
+	// If switching from container to static, stop the container and clear
+	// container-specific fields.
 	if staticChanged && p.IsStatic() {
+		p.Image = ""
+		p.Port = 0
 		if err := s.container.Stop(name); err != nil {
 			log.Printf("warning: stopping container for %s during static conversion: %v", name, err)
 		}

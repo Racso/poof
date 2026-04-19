@@ -30,13 +30,23 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("name:    %s\n", p["name"])
 		fmt.Printf("status:  %s\n", status)
 		fmt.Printf("domain:  %s\n", p["domain"])
-		fmt.Printf("image:   %s\n", p["image"])
+		if img, _ := p["image"].(string); img != "" {
+			fmt.Printf("image:   %s\n", img)
+		}
 		fmt.Printf("repo:    %s\n", p["repo"])
 		if folder, _ := p["folder"].(string); folder != "" {
 			fmt.Printf("folder:  %s\n", folder)
 		}
 		fmt.Printf("branch:  %s\n", p["branch"])
-		fmt.Printf("port:    %.0f\n", p["port"])
+		if port, _ := p["port"].(float64); port != 0 {
+			fmt.Printf("port:    %.0f\n", port)
+		}
+		if static, _ := p["static"].(string); static != "" {
+			fmt.Printf("static:  %s\n", static)
+		}
+		if build, _ := p["build"].(bool); build {
+			fmt.Printf("build:   yes\n")
+		}
 
 		if dep != nil {
 			fmt.Printf("\nlast deployment:\n")
