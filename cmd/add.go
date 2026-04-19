@@ -76,15 +76,6 @@ Static sites:
 			staticMode = "static"
 		}
 
-		// Parse --ci flag.
-		if ciVal != "" {
-			ci, err := parseCIFlag(ciVal)
-			if err != nil {
-				fatal("%v", err)
-			}
-			_ = ci // used below
-		}
-
 		// Validate Dockerfile presence: required for container projects, optional for static.
 		if !isStatic {
 			if folder == "" {

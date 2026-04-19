@@ -28,19 +28,21 @@ The project token is never affected — GitHub Actions integrations remain valid
 		ciVal, _ := cmd.Flags().GetString("ci")
 		ciSet := cmd.Flags().Changed("ci")
 
-		// Determine static mode. --spa takes precedence over --static.
-		// Use "container" to revert from static to container.
-		staticFlag, _ := cmd.Flags().GetBool("static")
-		spaFlag, _ := cmd.Flags().GetBool("spa")
-		buildFlag, _ := cmd.Flags().GetBool("build")
-		buildSet := cmd.Flags().Changed("build")
+		staticOn := cmd.Flags().Changed("static")
+		staticOff := cmd.Flags().Changed("no-static")
+		spaOn := cmd.Flags().Changed("spa")
+		spaOff := cmd.Flags().Changed("no-spa")
+		buildOn := cmd.Flags().Changed("build")
+		buildOff := cmd.Flags().Changed("no-build")
 
-		// --spa and --build require --static (or an already-static project being updated).
-		if spaFlag && !staticFlag && !cmd.Flags().Changed("static") {
-			fatal("--spa requires --static")
+		if staticOn && staticOff {
+			fatal("cannot use --static and --no-static together")
 		}
-		if buildFlag && !staticFlag && !cmd.Flags().Changed("static") {
-			fatal("--build requires --static")
+		if spaOn && spaOff {
+			fatal("cannot use --spa and --no-spa together")
+		}
+		if buildOn && buildOff {
+			fatal("cannot use --build and --no-build together")
 		}
 
 		payload := map[string]interface{}{}
@@ -65,16 +67,19 @@ The project token is never affected — GitHub Actions integrations remain valid
 		if folderSet {
 			payload["folder"] = folder // allows clearing with --folder ""
 		}
-		if spaFlag {
+		if spaOn {
 			payload["static"] = "spa"
-		} else if staticFlag {
+		} else if spaOff {
 			payload["static"] = "static"
-		} else if cmd.Flags().Changed("static") {
-			// --static=false → revert to container
+		} else if staticOn {
+			payload["static"] = "static"
+		} else if staticOff {
 			payload["static"] = "container"
 		}
-		if buildSet {
-			payload["build"] = buildFlag
+		if buildOn {
+			payload["build"] = true
+		} else if buildOff {
+			payload["build"] = false
 		}
 		if ciSet {
 			ci, err := parseCIFlag(ciVal)
@@ -122,7 +127,10 @@ func init() {
 	configureCmd.Flags().String("subpath", "", "new subpath routing mode: disabled, redirect, or proxy")
 	configureCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (use \"\" to clear)")
 	configureCmd.Flags().Bool("static", false, "convert to a static site served by Caddy")
-	configureCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
-	configureCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
+	configureCmd.Flags().Bool("no-static", false, "revert from static to a container project")
+	configureCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback")
+	configureCmd.Flags().Bool("no-spa", false, "disable SPA mode (revert to plain static)")
+	configureCmd.Flags().Bool("build", false, "use Dockerfile to build static files")
+	configureCmd.Flags().Bool("no-build", false, "disable Dockerfile build for static files")
 	configureCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
 }
