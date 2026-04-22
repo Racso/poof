@@ -131,6 +131,12 @@ func (s *Store) migrate() error {
 			token TEXT NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS caddy_snippets (
+			project TEXT PRIMARY KEY,
+			content TEXT NOT NULL,
+			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+		);
+
 		PRAGMA foreign_keys = ON;
 	`)
 	if err != nil {
@@ -549,4 +555,53 @@ func (s *Store) GetAllSettings() (map[string]string, error) {
 		settings[k] = v
 	}
 	return settings, rows.Err()
+}
+
+// --- Caddy Snippets ---
+
+func (s *Store) GetCaddySnippet(project string) (string, error) {
+	var content string
+	err := s.db.QueryRow(`SELECT content FROM caddy_snippets WHERE project = ?`, project).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get caddy snippet: %w", err)
+	}
+	return content, nil
+}
+
+func (s *Store) SetCaddySnippet(project, content string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO caddy_snippets (project, content) VALUES (?, ?)
+		 ON CONFLICT(project) DO UPDATE SET content = excluded.content`,
+		project, content,
+	)
+	return err
+}
+
+func (s *Store) DeleteCaddySnippet(project string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM caddy_snippets WHERE project = ?`, project)
+	if err != nil {
+		return false, fmt.Errorf("delete caddy snippet: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (s *Store) GetAllCaddySnippets() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT project, content FROM caddy_snippets ORDER BY project`)
+	if err != nil {
+		return nil, fmt.Errorf("list caddy snippets: %w", err)
+	}
+	defer rows.Close()
+	snippets := make(map[string]string)
+	for rows.Next() {
+		var p, c string
+		if err := rows.Scan(&p, &c); err != nil {
+			return nil, err
+		}
+		snippets[p] = c
+	}
+	return snippets, rows.Err()
 }

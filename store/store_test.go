@@ -358,3 +358,119 @@ func TestEnvVarsCascadeOnDelete(t *testing.T) {
 		t.Errorf("expected 0 env vars after project delete, got %d", len(vars))
 	}
 }
+
+// --- Caddy Snippets ---
+
+func TestSetAndGetCaddySnippet(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("demo"))
+
+	if err := st.SetCaddySnippet("demo", "redir /install https://example.com 302"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	got, err := st.GetCaddySnippet("demo")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got != "redir /install https://example.com 302" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestGetCaddySnippetEmpty(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("demo"))
+
+	got, err := st.GetCaddySnippet("demo")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty string for nonexistent snippet, got %q", got)
+	}
+}
+
+func TestSetCaddySnippetOverwrite(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("demo"))
+
+	st.SetCaddySnippet("demo", "v1")
+	st.SetCaddySnippet("demo", "v2")
+
+	got, _ := st.GetCaddySnippet("demo")
+	if got != "v2" {
+		t.Errorf("expected v2, got %q", got)
+	}
+}
+
+func TestDeleteCaddySnippet(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("demo"))
+	st.SetCaddySnippet("demo", "content")
+
+	deleted, err := st.DeleteCaddySnippet("demo")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted {
+		t.Error("expected deleted=true")
+	}
+
+	got, _ := st.GetCaddySnippet("demo")
+	if got != "" {
+		t.Errorf("expected empty after delete, got %q", got)
+	}
+}
+
+func TestDeleteCaddySnippetNotFound(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("demo"))
+
+	deleted, err := st.DeleteCaddySnippet("demo")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if deleted {
+		t.Error("expected deleted=false when no snippet exists")
+	}
+}
+
+func TestCaddySnippetCascadeOnDelete(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("demo"))
+	st.SetCaddySnippet("demo", "content")
+
+	st.DeleteProject("demo")
+
+	got, err := st.GetCaddySnippet("demo")
+	if err != nil {
+		t.Fatalf("get after project delete: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty after cascade delete, got %q", got)
+	}
+}
+
+func TestGetAllCaddySnippets(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("alpha"))
+	st.CreateProject(sampleProject("beta"))
+
+	st.SetCaddySnippet("alpha", "snippet-a")
+	st.SetCaddySnippet("beta", "snippet-b")
+
+	all, err := st.GetAllCaddySnippets()
+	if err != nil {
+		t.Fatalf("get all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2, got %d", len(all))
+	}
+	if all["alpha"] != "snippet-a" {
+		t.Errorf("alpha: got %q", all["alpha"])
+	}
+	if all["beta"] != "snippet-b" {
+		t.Errorf("beta: got %q", all["beta"])
+	}
+}

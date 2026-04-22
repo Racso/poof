@@ -15,7 +15,7 @@ import (
 // rootDomain is used to generate subpath routing blocks on the root site.
 // poofHost (e.g. "poof.example.com") and poofPort are used to add a route
 // for the Poof API itself, which runs on the host rather than in a container.
-func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, rootDomain, poofHost string, poofPort int, staticDir string) string {
+func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, snippets map[string]string, rootDomain, poofHost string, poofPort int, staticDir string) string {
 	var b strings.Builder
 
 	// Warning header.
@@ -49,10 +49,18 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, roo
 			if p.Static == "spa" {
 				fmt.Fprintf(&b, "\ttry_files {path} /index.html\n")
 			}
-			fmt.Fprintf(&b, "\tfile_server\n}\n\n")
+			fmt.Fprintf(&b, "\tfile_server\n")
 		} else {
-			fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n}\n\n", p.Domain, p.Name, p.Port)
+			fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n", p.Domain, p.Name, p.Port)
 		}
+		if snip, ok := snippets[p.Name]; ok && snip != "" {
+			for _, line := range strings.Split(snip, "\n") {
+				if line != "" {
+					fmt.Fprintf(&b, "\t%s\n", line)
+				}
+			}
+		}
+		fmt.Fprintf(&b, "}\n\n")
 
 		if rootDomain != "" && p.Domain != rootDomain && p.Subpath != "disabled" {
 			switch p.Subpath {

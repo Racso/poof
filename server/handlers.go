@@ -2,9 +2,11 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -1081,6 +1083,133 @@ func parseMount(project, mount string) (hostPath, containerPath string, managed 
 	return hostPath, containerPath, true
 }
 
+// --- Caddy Snippets ---
+
+const caddySnippetHeader = "# [poof-caddy] hash:sha256:"
+
+// snippetHash computes the SHA-256 hex digest of the given content.
+func snippetHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
+}
+
+func (s *Server) getCaddySnippet(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	content, err := s.store.GetCaddySnippet(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Return the snippet with the hash header prepended.
+	hash := snippetHash(content)
+	body := caddySnippetHeader + hash + "\n" + content
+
+	jsonOK(w, map[string]interface{}{
+		"content": body,
+	})
+}
+
+func (s *Server) setCaddySnippet(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20)) // 1 MB limit
+	if err != nil {
+		jsonError(w, "request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	var req struct {
+		Content string `json:"content"`
+		Force   bool   `json:"force"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		jsonError(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	raw := req.Content
+
+	// Extract hash from header line.
+	var receivedHash string
+	if strings.HasPrefix(raw, caddySnippetHeader) {
+		firstNL := strings.Index(raw, "\n")
+		if firstNL == -1 {
+			receivedHash = raw[len(caddySnippetHeader):]
+			raw = ""
+		} else {
+			receivedHash = raw[len(caddySnippetHeader):firstNL]
+			raw = raw[firstNL+1:]
+		}
+	} else if !req.Force {
+		jsonError(w, "missing hash header — use --force to push without concurrency check", http.StatusConflict)
+		return
+	}
+
+	// Concurrency check: compare received hash with current content hash.
+	if !req.Force && receivedHash != "" {
+		current, err := s.store.GetCaddySnippet(name)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		currentHash := snippetHash(current)
+		if receivedHash != currentHash {
+			jsonError(w, "conflict: snippet was modified since you last pulled it — pull again or use --force", http.StatusConflict)
+			return
+		}
+	}
+
+	if err := s.store.SetCaddySnippet(name, raw); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("caddy snippet updated: %s", name)
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after snippet update failed: %v", err)
+	}
+
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteCaddySnippet(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+
+	deleted, err := s.store.DeleteCaddySnippet(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
+		jsonError(w, "no caddy snippet for this project", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("caddy snippet deleted: %s", name)
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after snippet delete failed: %v", err)
+	}
+
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
 // syncCaddy regenerates the full Caddyfile from the current database state and
 // pushes it to the Caddy admin API for a zero-downtime reload.
 func (s *Server) syncCaddy() error {
@@ -1102,7 +1231,11 @@ func (s *Server) syncCaddy() error {
 	if err != nil {
 		return err
 	}
-	caddyfile := caddy.GenerateCaddyfile(running, redirects, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
+	snippets, err := s.store.GetAllCaddySnippets()
+	if err != nil {
+		return err
+	}
+	caddyfile := caddy.GenerateCaddyfile(running, redirects, snippets, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
 	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 

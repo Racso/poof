@@ -1204,3 +1204,264 @@ func TestDeployIncludesVolumes(t *testing.T) {
 		t.Errorf("expected 2 volume mounts, got %d: %v", len(vols), vols)
 	}
 }
+
+// --- Caddy Snippets ---
+
+func TestGetCaddySnippetReturnsHashHeader(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "redir /install https://example.com 302")
+
+	rr := do(t, srv, "GET", "/projects/web/caddy", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var result map[string]interface{}
+	decode(t, rr, &result)
+	content, _ := result["content"].(string)
+
+	if content == "" {
+		t.Fatal("expected non-empty content")
+	}
+	// Should start with the hash header.
+	prefix := "# [poof-caddy] hash:sha256:"
+	if len(content) < len(prefix) || content[:len(prefix)] != prefix {
+		t.Errorf("content should start with hash header, got: %q", content[:min(len(content), 60)])
+	}
+	// Content after header should be the original snippet.
+	lines := splitFirst(content, "\n")
+	if lines[1] != "redir /install https://example.com 302" {
+		t.Errorf("body after header: got %q", lines[1])
+	}
+}
+
+func TestGetCaddySnippetEmpty(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "GET", "/projects/web/caddy", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var result map[string]interface{}
+	decode(t, rr, &result)
+	content, _ := result["content"].(string)
+
+	// Even with no snippet, should return a hash header (hash of empty string).
+	if content == "" {
+		t.Fatal("expected hash header even for empty snippet")
+	}
+}
+
+func TestGetCaddySnippetNotFoundProject(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rr := do(t, srv, "GET", "/projects/ghost/caddy", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestSetCaddySnippetWithMatchingHash(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	// GET to obtain the hash header (for empty snippet).
+	rr := do(t, srv, "GET", "/projects/web/caddy", nil, globalToken)
+	var getResult map[string]interface{}
+	decode(t, rr, &getResult)
+	headerContent, _ := getResult["content"].(string)
+
+	// Replace the empty body after the header with new content.
+	header := splitFirst(headerContent, "\n")[0]
+	newContent := header + "\nredir /install https://example.com 302"
+
+	beforeReloads := mocks.caddy.reloadCalls
+	rr = do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": newContent}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("set: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify stored content (header stripped).
+	got, _ := st.GetCaddySnippet("web")
+	if got != "redir /install https://example.com 302" {
+		t.Errorf("stored: got %q", got)
+	}
+
+	// Verify Caddy was synced.
+	if mocks.caddy.reloadCalls <= beforeReloads {
+		t.Error("expected caddy reload after set")
+	}
+}
+
+func TestSetCaddySnippetHashMismatch(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	// Pre-populate a snippet so the "current" hash differs from a stale one.
+	st.SetCaddySnippet("web", "original content")
+
+	// Craft a request with a wrong hash.
+	staleContent := "# [poof-caddy] hash:sha256:0000000000000000000000000000000000000000000000000000000000000000\nnew content"
+
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": staleContent}, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Errorf("expected 409 conflict, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Content should be unchanged.
+	got, _ := st.GetCaddySnippet("web")
+	if got != "original content" {
+		t.Errorf("expected content unchanged, got %q", got)
+	}
+}
+
+func TestSetCaddySnippetMissingHeaderRejected(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	// Send content without the hash header and without force.
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "redir /foo https://bar.com 302"}, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Errorf("expected 409 for missing header, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSetCaddySnippetForceBypassesHash(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "old content")
+
+	// Force push with no header.
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "new content", "force": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("force set: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	got, _ := st.GetCaddySnippet("web")
+	if got != "new content" {
+		t.Errorf("expected 'new content', got %q", got)
+	}
+}
+
+func TestSetCaddySnippetForceWithStaleHash(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "original")
+
+	// Force push with a wrong hash — should still succeed.
+	staleContent := "# [poof-caddy] hash:sha256:0000000000000000000000000000000000000000000000000000000000000000\nforced content"
+
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": staleContent, "force": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("force set: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	got, _ := st.GetCaddySnippet("web")
+	if got != "forced content" {
+		t.Errorf("expected 'forced content', got %q", got)
+	}
+}
+
+func TestDeleteCaddySnippet(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "content")
+
+	beforeReloads := mocks.caddy.reloadCalls
+	rr := do(t, srv, "DELETE", "/projects/web/caddy", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	got, _ := st.GetCaddySnippet("web")
+	if got != "" {
+		t.Errorf("expected empty after delete, got %q", got)
+	}
+
+	if mocks.caddy.reloadCalls <= beforeReloads {
+		t.Error("expected caddy reload after delete")
+	}
+}
+
+func TestDeleteCaddySnippetNotFound(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "DELETE", "/projects/web/caddy", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for nonexistent snippet, got %d", rr.Code)
+	}
+}
+
+func TestDeleteProjectCascadesCaddySnippet(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "content")
+
+	rr := do(t, srv, "DELETE", "/projects/web", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete project: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	got, _ := st.GetCaddySnippet("web")
+	if got != "" {
+		t.Errorf("expected snippet cascaded away, got %q", got)
+	}
+}
+
+// splitFirst splits s on the first occurrence of sep, returning [before, after].
+// If sep is not found, returns [s, ""].
+func splitFirst(s, sep string) [2]string {
+	i := 0
+	for i < len(s) {
+		if i+len(sep) <= len(s) && s[i:i+len(sep)] == sep {
+			return [2]string{s[:i], s[i+len(sep):]}
+		}
+		i++
+	}
+	return [2]string{s, ""}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
