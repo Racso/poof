@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -115,10 +116,13 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		running = s.container.IsRunning(name)
 	}
 
+	snippet, _ := s.store.GetCaddySnippet(name)
+
 	jsonOK(w, map[string]interface{}{
-		"project":    p,
-		"running":    running,
-		"deployment": last,
+		"project":          p,
+		"running":          running,
+		"deployment":       last,
+		"has_caddy_snippet": snippet != "",
 	})
 }
 
@@ -1086,6 +1090,21 @@ func parseMount(project, mount string) (hostPath, containerPath string, managed 
 // --- Caddy Snippets ---
 
 const caddySnippetHeader = "# [poof-caddy] hash:sha256:"
+
+func (s *Server) listCaddySnippets(w http.ResponseWriter, r *http.Request) {
+	snippets, err := s.store.GetAllCaddySnippets()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Return just the project names that have snippets.
+	names := make([]string, 0, len(snippets))
+	for name := range snippets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	jsonOK(w, names)
+}
 
 // snippetHash computes the SHA-256 hex digest of the given content.
 func snippetHash(content string) string {

@@ -13,6 +13,26 @@ var caddyCmd = &cobra.Command{
 	Short: "Manage per-project Caddy configuration snippets",
 }
 
+var caddyListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List projects that have custom Caddy snippets",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		var names []string
+		if err := apiGet("/caddy/snippets", &names); err != nil {
+			fatal("%v", err)
+		}
+
+		if len(names) == 0 {
+			fmt.Println("no custom caddy snippets")
+			return
+		}
+		for _, name := range names {
+			fmt.Println(name)
+		}
+	},
+}
+
 var caddyGetCmd = &cobra.Command{
 	Use:   "get <name>",
 	Short: "Download a project's Caddy snippet for editing",
@@ -96,6 +116,7 @@ func snippetPath(project string) string {
 
 func init() {
 	rootCmd.AddCommand(caddyCmd)
+	caddyCmd.AddCommand(caddyListCmd)
 	caddyCmd.AddCommand(caddyGetCmd)
 	caddyCmd.AddCommand(caddySetCmd)
 	caddyCmd.AddCommand(caddyDeleteCmd)

@@ -1446,6 +1446,78 @@ func TestDeleteProjectCascadesCaddySnippet(t *testing.T) {
 	}
 }
 
+func TestListCaddySnippets(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "alpha", Domain: "alpha.rac.so", Image: "img",
+		Repo: "racso/alpha", Branch: "main", Port: 80,
+	})
+	st.CreateProject(store.Project{
+		Name: "beta", Domain: "beta.rac.so", Image: "img",
+		Repo: "racso/beta", Branch: "main", Port: 80,
+	})
+	st.CreateProject(store.Project{
+		Name: "gamma", Domain: "gamma.rac.so", Image: "img",
+		Repo: "racso/gamma", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("beta", "snippet-b")
+	st.SetCaddySnippet("alpha", "snippet-a")
+
+	rr := do(t, srv, "GET", "/caddy/snippets", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var names []string
+	decode(t, rr, &names)
+	if len(names) != 2 {
+		t.Fatalf("expected 2, got %d", len(names))
+	}
+	// Should be sorted.
+	if names[0] != "alpha" || names[1] != "beta" {
+		t.Errorf("expected [alpha beta], got %v", names)
+	}
+}
+
+func TestListCaddySnippetsEmpty(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rr := do(t, srv, "GET", "/caddy/snippets", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var names []string
+	decode(t, rr, &names)
+	if len(names) != 0 {
+		t.Errorf("expected empty list, got %v", names)
+	}
+}
+
+func TestGetProjectShowsHasCaddySnippet(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	// Without snippet.
+	rr := do(t, srv, "GET", "/projects/web", nil, globalToken)
+	var result map[string]interface{}
+	decode(t, rr, &result)
+	if result["has_caddy_snippet"] != false {
+		t.Errorf("expected has_caddy_snippet=false, got %v", result["has_caddy_snippet"])
+	}
+
+	// With snippet.
+	st.SetCaddySnippet("web", "redir /x https://y.com 302")
+	rr = do(t, srv, "GET", "/projects/web", nil, globalToken)
+	decode(t, rr, &result)
+	if result["has_caddy_snippet"] != true {
+		t.Errorf("expected has_caddy_snippet=true, got %v", result["has_caddy_snippet"])
+	}
+}
+
 // splitFirst splits s on the first occurrence of sep, returning [before, after].
 // If sep is not found, returns [s, ""].
 func splitFirst(s, sep string) [2]string {

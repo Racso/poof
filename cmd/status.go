@@ -49,6 +49,13 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("spa:     %s\n", yesNo(p["static"] == "spa"))
 		fmt.Printf("build:   %s\n", yesNo(p["build"] == true))
 
+		hasCaddy, _ := result["has_caddy_snippet"].(bool)
+		if hasCaddy {
+			fmt.Printf("caddy:   custom\n")
+		} else {
+			fmt.Printf("caddy:   default\n")
+		}
+
 		if dep != nil {
 			fmt.Printf("\nlast deployment:\n")
 			fmt.Printf("  image:  %s\n", dep["image"])

@@ -114,6 +114,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("DELETE /projects/{name}/volumes/{id}", s.auth(s.removeVolume))
 
 	// Caddy snippets (per-project custom Caddy directives)
+	mux.HandleFunc("GET /caddy/snippets", s.auth(s.listCaddySnippets))
 	mux.HandleFunc("GET /projects/{name}/caddy", s.auth(s.getCaddySnippet))
 	mux.HandleFunc("PUT /projects/{name}/caddy", s.auth(s.setCaddySnippet))
 	mux.HandleFunc("DELETE /projects/{name}/caddy", s.auth(s.deleteCaddySnippet))
