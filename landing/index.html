@@ -1113,19 +1113,12 @@
             <div class="start-steps">
                 <div class="step-group">
                     <div class="step-group-label step-group-label--server">on your server</div>
-                    <div class="start-step">
+                    <div class="start-step" style="border-bottom:none">
                         <div class="start-num" aria-hidden="true">1</div>
                         <div>
-                            <div class="start-title">Install the binary</div>
-                            <div class="start-desc">Works on any Linux server with Docker and Caddy already running.</div>
-                        </div>
-                    </div>
-                    <div class="start-step" style="border-bottom:none">
-                        <div class="start-num" aria-hidden="true">2</div>
-                        <div>
-                            <div class="start-title">Configure &amp; start</div>
+                            <div class="start-title">Install Poof<span class="exclaim">!</span></div>
                             <div class="start-desc">
-                                <p>Create a minimal config file with just an auth token. Tell the CLI this machine is the server. Run Poof<span class="exclaim">!</span> in server mode.</p>
+                                <p>One command sets up everything: Caddy, Docker image, config, and starts the server. Only requires Docker.</p>
                             </div>
                         </div>
                     </div>
@@ -1134,21 +1127,21 @@
                 <div class="step-group">
                     <div class="step-group-label step-group-label--local">from your machine</div>
                     <div class="start-step">
-                        <div class="start-num" aria-hidden="true">3</div>
+                        <div class="start-num" aria-hidden="true">2</div>
                         <div>
-                            <div class="start-title">Point your CLI at the server</div>
+                            <div class="start-title">Install the CLI &amp; connect</div>
                             <div class="start-desc">Set the server URL, auth token, base domain, and GitHub credentials — all with <code>poof config set</code>.</div>
                         </div>
                     </div>
                     <div class="start-step">
-                        <div class="start-num" aria-hidden="true">4</div>
+                        <div class="start-num" aria-hidden="true">3</div>
                         <div>
                             <div class="start-title">Register your project</div>
                             <div class="start-desc">Sets up routing, injects deploy secrets into your repo, and commits the GitHub Actions workflow.</div>
                         </div>
                     </div>
                     <div class="start-step">
-                        <div class="start-num" aria-hidden="true">5</div>
+                        <div class="start-num" aria-hidden="true">4</div>
                         <div>
                             <div class="start-title">Push your code</div>
                             <div class="start-desc">
@@ -1162,19 +1155,19 @@
 
             <div class="code-block" role="region" aria-label="Quick start commands">
 <span class="cb-group-label cb-group-label--server">on your server</span>
-<span class="co"># Install the binary</span><br>
-<span class="cm">curl -fsSL https://poof.rac.so/install | sh</span><br>
-<br>
-<span class="co"># Minimal config + start</span><br>
-<span class="cm">nano /etc/poof/poof.toml</span><br>
-<span class="co">&nbsp;&nbsp;&nbsp;&nbsp;token = "your-secret-token"</span><br>
-<span class="cm">poof config set server</span><br>
-<span class="cm">poof server &amp;</span><br>
+<span class="co"># One command — sets up Caddy, builds image, starts Poof!</span><br>
+<span class="cm">curl -fsSL https://poof.rac.so/install | sh -s server</span><br>
+<span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;✓ Caddy is running</span><br>
+<span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;✓ Poof! is running</span><br>
+<span class="ok">&nbsp;&nbsp;&nbsp;&nbsp;API token: a1b2c3d4...</span><br>
 <br>
 <span class="cb-group-label cb-group-label--local">from your machine</span>
-<span class="co"># Point your CLI at the server</span><br>
+<span class="co"># Install the CLI</span><br>
+<span class="cm">curl -fsSL https://poof.rac.so/install | sh -s client</span><br>
+<br>
+<span class="co"># Connect to your server</span><br>
 <span class="cm">poof config set server https://poof.mydomain.com</span><br>
-<span class="cm">poof config set token  your-secret-token</span><br>
+<span class="cm">poof config set token  a1b2c3d4...</span><br>
 <span class="cm">poof config set domain mydomain.com</span><br>
 <span class="cm">poof config set github-user  your-gh-user</span><br>
 <span class="cm">poof config set github-token ghp_...</span><br>
