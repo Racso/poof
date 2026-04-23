@@ -44,11 +44,56 @@ case "$MODE" in
   client)
     DIR="${INSTALL_DIR:-/usr/local/bin}"
     if [ -w "$DIR" ]; then mv /tmp/poof "$DIR/poof"; else sudo mv /tmp/poof "$DIR/poof"; fi
-    echo "Poof! installed to ${DIR}/poof"
-    echo "Run 'poof --help' to get started."
+    echo ""
+    echo "  ✓ Poof! installed to ${DIR}/poof"
+    echo ""
+
+    # Interactive client configuration.
+    printf "  Configure now? [Y/n] "
+    read -r CONFIGURE </dev/tty
+    case "$CONFIGURE" in
+      n|N) echo "  Run 'poof config set' later to connect to your server." ;;
+      *)
+        echo ""
+        printf "  Server URL: "
+        read -r SERVER_URL </dev/tty
+        printf "  API token:  "
+        read -r API_TOKEN </dev/tty
+        echo ""
+
+        if [ -n "$SERVER_URL" ]; then
+          poof config set server "$SERVER_URL"
+        fi
+        if [ -n "$API_TOKEN" ]; then
+          poof config set token "$API_TOKEN"
+        fi
+
+        if [ -n "$SERVER_URL" ] && [ -n "$API_TOKEN" ]; then
+          if poof list >/dev/null 2>&1; then
+            echo ""
+            echo "  ✓ Connected successfully."
+          else
+            echo ""
+            echo "  ✗ Could not connect. Check your server URL and token."
+            echo "    Update with: poof config set server <url>"
+          fi
+        fi
+        ;;
+    esac
+    echo ""
     ;;
   server)
-    /tmp/poof install --yes && rm -f /tmp/poof || { echo ""; echo "Installation NOT completed. Fix any reported issues, then re-run this script."; exit 1; }
+    echo ""
+    echo "  What domain will the Poof! API be reachable at?"
+    echo "  (e.g. poof.example.com — leave blank to configure later)"
+    echo ""
+    printf "  Domain: "
+    read -r POOF_DOMAIN </dev/tty
+    DOMAIN_FLAG=""
+    if [ -n "$POOF_DOMAIN" ]; then
+      DOMAIN_FLAG="--domain $POOF_DOMAIN"
+    fi
+    /tmp/poof install --yes $DOMAIN_FLAG && rm -f /tmp/poof || { echo ""; echo "Installation NOT completed. Fix any reported issues, then re-run this script."; exit 1; }
     ;;
   *)
     echo "Unknown mode: $MODE (expected 'client' or 'server')"

@@ -33,15 +33,13 @@ func init() {
 	installCmd.Flags().Bool("yes", false, "accept all defaults, no prompts")
 	installCmd.Flags().String("use-caddy", "", "use an existing Caddy container by name")
 	installCmd.Flags().String("token", "", "use this auth token instead of generating one")
-	installCmd.Flags().String("public-url", "", "public URL for the Poof! API (e.g. https://poof.example.com)")
-	installCmd.Flags().String("domain", "", "default domain for new projects (e.g. example.com)")
+	installCmd.Flags().String("domain", "", "domain for the Poof! API (e.g. poof.example.com)")
 }
 
 func runInstall(cmd *cobra.Command, args []string) {
 	yes, _ := cmd.Flags().GetBool("yes")
 	useCaddy, _ := cmd.Flags().GetString("use-caddy")
 	tokenFlag, _ := cmd.Flags().GetString("token")
-	publicURL, _ := cmd.Flags().GetString("public-url")
 	domain, _ := cmd.Flags().GetString("domain")
 
 	// ── 1. Check Docker ──────────────────────────────────────────────
@@ -190,7 +188,29 @@ func runInstall(cmd *cobra.Command, args []string) {
 		printOK("Caddy is running")
 	}
 
-	// ── 6. Build Poof! Docker image ──────────────────────────────────
+	// ── 6. Ask for Poof! API domain ──────────────────────────────────
+	if domain == "" && !yes {
+		fmt.Println("")
+		fmt.Println("  What domain will the Poof! API be reachable at?")
+		fmt.Println("  (e.g. poof.example.com — your CLI will connect to this)")
+		fmt.Println("")
+		fmt.Print("  Domain: ")
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		domain = strings.TrimSpace(answer)
+	}
+
+	// Normalize: strip protocol prefix if pasted.
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimRight(domain, "/")
+
+	publicURL := ""
+	if domain != "" {
+		publicURL = "https://" + domain
+	}
+
+	// ── 7. Build Poof! Docker image ─────────────────────────────────
 	printStep("Building Poof! Docker image")
 
 	exe, err := os.Executable()
@@ -227,7 +247,7 @@ func runInstall(cmd *cobra.Command, args []string) {
 	}
 	printOK("Image poof:latest built")
 
-	// ── 7. Generate config ───────────────────────────────────────────
+	// ── 8. Generate config ───────────────────────────────────────────
 	printStep("Configuring Poof!")
 
 	token := tokenFlag
@@ -256,10 +276,6 @@ func runInstall(cmd *cobra.Command, args []string) {
 		printOK("Config written to /etc/poof/poof.toml")
 	}
 
-	// ── 8. Set domain (if provided and config was just created) ──────
-	// Domain is a server-side setting sent via API after the server starts.
-	// We'll handle it after starting the container.
-
 	// ── 9. Start Poof! container ─────────────────────────────────────
 	printStep("Starting Poof!")
 
@@ -285,16 +301,21 @@ func runInstall(cmd *cobra.Command, args []string) {
 	}
 	printOK("Poof! is running")
 
-	// ── 10. Set domain via API (if provided) ─────────────────────────
-	if domain != "" && token != "" {
-		// Wait briefly for the server to be ready, then set domain.
-		setServerSetting(token, "domain", domain)
-	}
-
-	// ── 11. Print summary ────────────────────────────────────────────
+	// ── 10. Print summary ───────────────────────────────────────────
 	fmt.Println("")
 	fmt.Println("  ✓ Poof! is ready.")
 	fmt.Println("")
+
+	if publicURL == "" {
+		fmt.Println("  ⚠ No API domain was configured.")
+		fmt.Println("    The Poof! API is only reachable from this machine (localhost:9000).")
+		fmt.Println("    To allow remote CLI access, set a domain and restart:")
+		fmt.Println("")
+		fmt.Println("      1. Add  public_url = \"https://poof.example.com\"  to /etc/poof/poof.toml")
+		fmt.Println("      2. Point that domain's DNS to this server")
+		fmt.Println("      3. docker restart poof")
+		fmt.Println("")
+	}
 
 	if configCreated {
 		fmt.Printf("  API token: %s\n", token)
@@ -303,11 +324,11 @@ func runInstall(cmd *cobra.Command, args []string) {
 
 	fmt.Println("  From your machine, install the CLI and connect:")
 	fmt.Println("")
-	fmt.Println("    curl -fsSL https://poof.rac.so/install | sh")
+	fmt.Println("    curl -fsSL https://poof.rac.so/install | sh -s client")
 	if publicURL != "" {
 		fmt.Printf("    poof config set server %s\n", publicURL)
 	} else {
-		fmt.Println("    poof config set server https://<this-server>")
+		fmt.Println("    poof config set server https://<your-poof-domain>")
 	}
 	if configCreated {
 		fmt.Printf("    poof config set token  %s\n", token)
@@ -473,24 +494,6 @@ func promptYN(prompt string, defaultYes bool) bool {
 		return defaultYes
 	}
 	return strings.HasPrefix(answer, "y")
-}
-
-// setServerSetting hits the local Poof API to set a server-side config value.
-func setServerSetting(token, key, value string) {
-	// Try a few times — the server may need a moment to start.
-	for range 5 {
-		cmd := exec.Command("docker", "exec", "poof",
-			"wget", "-qO-", "--timeout=2",
-			"--header=Authorization: Bearer "+token,
-			"--header=Content-Type: application/json",
-			"--post-data="+fmt.Sprintf(`{"value":%q}`, value),
-			"http://localhost:9000/config/"+key,
-		)
-		if err := cmd.Run(); err == nil {
-			return
-		}
-		exec.Command("sleep", "1").Run()
-	}
 }
 
 // copyFile copies src to dst.
