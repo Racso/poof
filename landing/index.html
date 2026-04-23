@@ -260,7 +260,7 @@
             border: 1px solid var(--n3);
             border-radius: 8px;
             overflow: hidden;
-            max-width: 430px;
+            max-width: 100%;
             transition: border-color 0.2s;
             flex-wrap: wrap;
         }
@@ -268,7 +268,7 @@
 
         .install-cmd-prefix {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.78rem;
+            font-size: 0.73rem;
             color: var(--n4);
             padding: 0.75rem 0.5rem 0.75rem 1rem;
             user-select: none;
@@ -277,7 +277,7 @@
 
         .install-cmd-text {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.78rem;
+            font-size: 0.73rem;
             color: var(--n5);
             flex: 1;
             padding: 0.75rem 1rem 0.75rem 0.25rem;
@@ -1032,7 +1032,7 @@
         }
         @media (max-width: 580px) {
             .terminal-body { font-size: 0.62rem; min-height: 240px; }
-            .install-cmd { max-width: 100%; }
+            /* install-cmd is already max-width: 100% */
         }
     </style>
 </head>
@@ -1186,7 +1186,7 @@
 
         <div class="alt-scenarios">
             <div class="alt-scenario">
-                <div class="alt-scenario-title">Not GitHub Actions? No GitHub at all? Using multiple domains?</div>
+                <div class="alt-scenario-title">No GitHub Actions? No GitHub at all? Using multiple domains?</div>
                 <div class="alt-scenario-body">
                     <div class="alt-prose">
                         <p>Use any domains and subdomains you need for your projects. Set aliases and redirects in seconds.</p>

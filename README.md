@@ -18,71 +18,53 @@ No DNS changes needed per project — a single wildcard A record (`*.yourdomain.
 ## Requirements
 
 - A Linux server with Docker
-- [Caddy](https://caddyserver.com) running on a `poof-net` Docker network with `admin 0.0.0.0:2019` in its global config
-- A wildcard DNS A record pointing to the server
-- A `Dockerfile` in each project repo
+- A wildcard DNS A record pointing to the server (for subdomains), or individual DNS records per project
+- A `Dockerfile` in each project repo (unless deploying static sites)
 
 ## Installation
 
+### Server
+
+One command sets up everything — Caddy, Docker image, config, and starts the server:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/racso/poof/main/install.sh | sh
+curl -fsSL https://poof.rac.so/install | sh -s server
 ```
+
+Only requires Docker. The installer will prompt for the API domain (e.g. `poof.yourdomain.com`), generate an auth token, and start both Caddy and Poof!.
+
+### Client
+
+```sh
+curl -fsSL https://poof.rac.so/install | sh -s client
+```
+
+The installer will prompt for the server URL and token printed by the server install.
 
 Or download a binary directly from [releases](https://github.com/racso/poof/releases).
 
 ## Server configuration
 
-Create `/etc/poof/poof.toml`:
+The server config lives at `/etc/poof/poof.toml`. The installer creates this automatically, but you can edit it:
 
 ```toml
-token           = "your-secret-token"             # required; used by CLI to authenticate with the server
-api_port        = 9000                            # default; omit to keep
-data_dir        = "/var/lib/poof"                 # default; omit to keep
-public_url      = "https://poof.yourdomain.com"   # set as POOF_URL repo secret
+token            = "your-secret-token"             # required; used by CLI to authenticate with the server
+public_url       = "https://poof.yourdomain.com"   # Caddy routes this domain to the Poof! API
+api_port         = 9000                            # default; omit to keep
+data_dir         = "/var/lib/poof"                 # default; omit to keep
 caddy_admin_url  = "http://caddy-proxy:2019"       # omit if your Caddy container is named caddy-proxy
 caddy_static_dir = "/etc/caddy/conf.d"             # dir for manual Caddyfile snippets (default shown)
-```
-
-Minimal config (just the required field):
-
-```toml
-token = "your-secret-token"
 ```
 
 After the server is running, push the remaining settings from your machine:
 
 ```sh
-poof config set server https://poof.yourdomain.com
-poof config set token  your-secret-token
 poof config set domain yourdomain.com
 poof config set github-user  your-github-username
 poof config set github-token ghp_...    # PAT with scopes: repo, workflow, read:packages, delete:packages
 ```
 
 Run `poof config` at any time to see the current client and server settings.
-
-## Running
-
-```yaml
-# docker-compose.yml
-services:
-  poof:
-    image: ghcr.io/racso/poof:latest
-    container_name: poof
-    restart: always
-    networks:
-      - poof-net
-    volumes:
-      - /etc/poof/poof.toml:/etc/poof/poof.toml:ro
-      - /var/lib/poof:/var/lib/poof
-      - /var/run/docker.sock:/var/run/docker.sock
-
-networks:
-  poof-net:
-    external: true
-```
-
-Poof! must share `poof-net` with Caddy so it can reach the admin API by container name.
 
 ## Client configuration
 
@@ -129,33 +111,34 @@ import = "~/.config/poof/work.toml"
 
 ```
 poof add <name> [flags]            register project + automate GitHub setup
+poof apply [-f file] [--dry-run] [--prune]   declarative project sync
+poof clone <name> <suffix>         clone project as <name>-<suffix> on branch <suffix>
+poof config                        show client and server configuration
+poof config set <key> [value]      set a client or server configuration value
 poof configure <name> [flags]      update project configuration (token is preserved)
-poof remove <name>                 remove project, stop container
-poof list                          list all projects and status
-poof status <name>                 project details + last deployment
 poof deploy <name>                 trigger manual redeploy
-poof rollback <name>               redeploy previous image
-poof logs <name> [--lines N]       container log lines
+poof env copy <src> <dst> <mode>   copy env vars (--all, --only, --except, --ask)
 poof env get <name>                list env var keys (comma-separated, values never shown)
 poof env set <name> KEY=VALUE      set env vars
 poof env unset <name> KEY          remove env var
-poof env copy <src> <dst> <mode>   copy env vars (--all, --only, --except, --ask)
-poof clone <name> <suffix>         clone project as <name>-<suffix> on branch <suffix>
+poof install                       set up a Poof! server on this machine
+poof list                          list all projects and status
+poof logs <name> [--lines N]       container log lines
+poof redirect add <from> <to>      add a domain redirect (301)
+poof redirect delete <id>          delete a redirect by ID
+poof redirect list                 list all redirects
 poof refresh <name>                re-sync GitHub secrets and workflow
+poof remove <name>                 remove project, stop container
+poof rollback <name>               redeploy previous image
+poof server                        start the daemon
+poof status <name>                 project details + last deployment
+poof update both [version]         update server first, then local CLI
+poof update local [version]        update the local CLI binary (latest or pinned)
+poof update server [version]       update the server (latest or pinned)
+poof version                       print client version
 poof volume add <name> <mount>     add a volume mount to a project
 poof volume list <name>            list volume mounts for a project
 poof volume remove <name> <id>     remove a volume mount from a project
-poof redirect add <from> <to>      add a domain redirect (301)
-poof redirect list                 list all redirects
-poof redirect delete <id>          delete a redirect by ID
-poof apply [-f file] [--dry-run] [--prune]   declarative project sync
-poof update local [version]        update the local CLI binary (latest or pinned)
-poof update server [version]       update the server (latest or pinned)
-poof update both [version]         update server first, then local CLI
-poof version                       print client version
-poof config                        show client and server configuration
-poof config set <key> [value]      set a client or server configuration value
-poof server                        start the daemon
 ```
 
 Global flags (all client commands):
