@@ -1,8 +1,9 @@
 #!/bin/sh
-# Poof! installer — downloads the binary and optionally sets up a server.
+# Poof! installer — downloads the binary and sets up either the CLI or a server.
 #
-# CLI only:  curl -fsSL https://poof.rac.so/install | sh
-# Server:    curl -fsSL https://poof.rac.so/install | sh -s server
+# Interactive:  curl -fsSL https://poof.rac.so/install | sh
+# CLI only:     curl -fsSL https://poof.rac.so/install | sh -s client
+# Server:       curl -fsSL https://poof.rac.so/install | sh -s server
 set -e
 
 REPO="racso/poof"
@@ -21,11 +22,36 @@ else
   chmod +x /tmp/poof
 fi
 
-if [ "${1:-}" = "server" ]; then
-  /tmp/poof install --yes && rm -f /tmp/poof || { echo ""; echo "Installation NOT completed. Fix any reported issues, then re-run this script."; exit 1; }
-else
-  DIR="${INSTALL_DIR:-/usr/local/bin}"
-  if [ -w "$DIR" ]; then mv /tmp/poof "$DIR/poof"; else sudo mv /tmp/poof "$DIR/poof"; fi
-  echo "Poof! ${TAG} installed to ${DIR}/poof"
-  echo "Run 'poof --help' to get started."
+# Determine mode: from argument, or ask interactively.
+MODE="${1:-}"
+if [ -z "$MODE" ]; then
+  echo ""
+  echo "  What would you like to install?"
+  echo ""
+  echo "    c) CLI client — for deploying to an existing Poof! server"
+  echo "    s) Server     — sets up Caddy, Docker image, and starts Poof! on this machine"
+  echo ""
+  printf "  Choose [c/s]: "
+  read -r CHOICE </dev/tty
+  case "$CHOICE" in
+    c|C|client)  MODE="client" ;;
+    s|S|server)  MODE="server" ;;
+    *) echo "Invalid choice. Run again and pick c or s."; exit 1 ;;
+  esac
 fi
+
+case "$MODE" in
+  client)
+    DIR="${INSTALL_DIR:-/usr/local/bin}"
+    if [ -w "$DIR" ]; then mv /tmp/poof "$DIR/poof"; else sudo mv /tmp/poof "$DIR/poof"; fi
+    echo "Poof! installed to ${DIR}/poof"
+    echo "Run 'poof --help' to get started."
+    ;;
+  server)
+    /tmp/poof install --yes && rm -f /tmp/poof || { echo ""; echo "Installation NOT completed. Fix any reported issues, then re-run this script."; exit 1; }
+    ;;
+  *)
+    echo "Unknown mode: $MODE (expected 'client' or 'server')"
+    exit 1
+    ;;
+esac
