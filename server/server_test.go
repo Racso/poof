@@ -66,6 +66,8 @@ type mockContainerManager struct {
 	logs          map[string]string
 	gcCalls       []mockGCCall
 	pruneCalls    int
+	diskUsages    []int64 // values returned in order; once exhausted, returns last
+	diskCalls     int
 }
 
 type mockGCCall struct {
@@ -101,6 +103,18 @@ func (m *mockContainerManager) GC(name, image string, keep, olderThanDays int, d
 func (m *mockContainerManager) PruneDangling() error {
 	m.pruneCalls++
 	return nil
+}
+
+func (m *mockContainerManager) ImagesDiskUsage() (int64, error) {
+	idx := m.diskCalls
+	m.diskCalls++
+	if len(m.diskUsages) == 0 {
+		return 0, nil
+	}
+	if idx >= len(m.diskUsages) {
+		return m.diskUsages[len(m.diskUsages)-1], nil
+	}
+	return m.diskUsages[idx], nil
 }
 
 func (m *mockContainerManager) Logs(name string, lines int) (string, error) {
@@ -1599,6 +1613,71 @@ func TestGCFlagOverrideBeatsPolicy(t *testing.T) {
 	c := mocks.container.gcCalls[0]
 	if c.Keep != 1 {
 		t.Errorf("expected keep=1 (override), got %d", c.Keep)
+	}
+}
+
+func TestGCReportsBytesFreed(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
+	})
+	mocks.container.diskUsages = []int64{2_000_000_000, 1_500_000_000} // 500 MB freed
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"project": "demo"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]interface{}
+	decode(t, rr, &resp)
+	freed, ok := resp["bytes_freed"].(float64)
+	if !ok {
+		t.Fatalf("bytes_freed missing or wrong type: %+v", resp)
+	}
+	if int64(freed) != 500_000_000 {
+		t.Errorf("bytes_freed: got %d, want 500000000", int64(freed))
+	}
+}
+
+func TestGCBytesFreedClampsNegativeToZero(t *testing.T) {
+	// A concurrent pull during GC could grow the image disk usage. Diff
+	// must clamp to zero rather than report a nonsense negative number.
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
+	})
+	mocks.container.diskUsages = []int64{1_000_000_000, 1_500_000_000}
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"project": "demo"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d", rr.Code)
+	}
+	var resp map[string]interface{}
+	decode(t, rr, &resp)
+	if int64(resp["bytes_freed"].(float64)) != 0 {
+		t.Errorf("expected clamped 0, got %v", resp["bytes_freed"])
+	}
+}
+
+func TestGCDryRunSkipsBytesMeasurement(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
+	})
+	mocks.container.diskUsages = []int64{2_000_000_000, 1_500_000_000}
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{
+		"project": "demo", "dry_run": true,
+	}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d", rr.Code)
+	}
+	var resp map[string]interface{}
+	decode(t, rr, &resp)
+	if _, present := resp["bytes_freed"]; present {
+		t.Errorf("bytes_freed should be absent in dry-run, got %v", resp["bytes_freed"])
+	}
+	if mocks.container.diskCalls != 0 {
+		t.Errorf("docker system df should not be called in dry-run, got %d calls", mocks.container.diskCalls)
 	}
 }
 

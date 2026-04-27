@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -200,4 +201,65 @@ func PruneDangling() error {
 		return fmt.Errorf("docker image prune: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// ImagesDiskUsage returns the total bytes used by Docker images on this host,
+// per `docker system df`. The figure is layer-sharing-aware (it is the on-disk
+// size, not the sum of per-image apparent sizes).
+func ImagesDiskUsage() (int64, error) {
+	out, err := exec.Command(
+		"docker", "system", "df", "--format", "{{.Type}}\t{{.Size}}",
+	).Output()
+	if err != nil {
+		return 0, fmt.Errorf("docker system df: %w", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if strings.TrimSpace(parts[0]) == "Images" {
+			return parseHumanSize(parts[1])
+		}
+	}
+	return 0, fmt.Errorf("docker system df: no Images row")
+}
+
+// parseHumanSize parses Docker's humanized sizes (SI: 1 kB = 1000 bytes), e.g.
+// "0B", "412kB", "5.2GB", "1.5MB". Returns bytes.
+func parseHumanSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty size")
+	}
+	i := 0
+	for i < len(s) && (s[i] == '.' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	if i == 0 {
+		return 0, fmt.Errorf("parse size %q: no number", s)
+	}
+	num, err := strconv.ParseFloat(s[:i], 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse size %q: %w", s, err)
+	}
+	unit := strings.ToLower(strings.TrimSpace(s[i:]))
+	var mult float64
+	switch unit {
+	case "", "b":
+		mult = 1
+	case "kb":
+		mult = 1e3
+	case "mb":
+		mult = 1e6
+	case "gb":
+		mult = 1e9
+	case "tb":
+		mult = 1e12
+	case "pb":
+		mult = 1e15
+	default:
+		return 0, fmt.Errorf("parse size %q: unknown unit %q", s, unit)
+	}
+	return int64(num * mult), nil
 }

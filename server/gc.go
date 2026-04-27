@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -57,6 +58,17 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 		projects = []store.Project{*p}
 	}
 
+	var beforeBytes int64
+	var measured bool
+	if !req.DryRun {
+		if b, err := s.container.ImagesDiskUsage(); err == nil {
+			beforeBytes = b
+			measured = true
+		} else {
+			log.Printf("warning: docker system df before GC failed: %v", err)
+		}
+	}
+
 	var results []GCResult
 	for _, p := range projects {
 		if p.IsStatic() || p.Image == "" {
@@ -92,16 +104,30 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 		results = append(results, res)
 	}
 
+	resp := map[string]interface{}{
+		"results": results,
+		"dry_run": req.DryRun,
+	}
+
 	if !req.DryRun {
 		if err := s.container.PruneDangling(); err != nil {
 			log.Printf("warning: prune dangling images failed: %v", err)
 		}
+		if measured {
+			afterBytes, err := s.container.ImagesDiskUsage()
+			if err != nil {
+				log.Printf("warning: docker system df after GC failed: %v", err)
+			} else {
+				freed := beforeBytes - afterBytes
+				if freed < 0 {
+					freed = 0
+				}
+				resp["bytes_freed"] = freed
+			}
+		}
 	}
 
-	jsonOK(w, map[string]interface{}{
-		"results": results,
-		"dry_run": req.DryRun,
-	})
+	jsonOK(w, resp)
 }
 
 // gcStatus handles GET /gc/status — returns all stored policies plus the
@@ -251,6 +277,9 @@ func (s *Server) runAutoGC() {
 		log.Printf("auto-gc: list projects: %v", err)
 		return
 	}
+
+	beforeBytes, beforeErr := s.container.ImagesDiskUsage()
+
 	var anyRan bool
 	for _, p := range projects {
 		if p.IsStatic() || p.Image == "" {
@@ -285,6 +314,31 @@ func (s *Server) runAutoGC() {
 		if err := s.container.PruneDangling(); err != nil {
 			log.Printf("auto-gc prune dangling: %v", err)
 		}
+		if beforeErr == nil {
+			if afterBytes, err := s.container.ImagesDiskUsage(); err == nil {
+				freed := beforeBytes - afterBytes
+				if freed < 0 {
+					freed = 0
+				}
+				log.Printf("auto-gc: freed %s", humanBytes(freed))
+			}
+		}
 	}
+}
+
+// humanBytes formats a byte count with SI units (matching docker's output).
+func humanBytes(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d B", n)
+	}
+	const k = 1000.0
+	units := []string{"kB", "MB", "GB", "TB", "PB"}
+	v := float64(n) / k
+	u := 0
+	for v >= k && u < len(units)-1 {
+		v /= k
+		u++
+	}
+	return fmt.Sprintf("%.1f %s", v, units[u])
 }
 

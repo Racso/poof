@@ -58,7 +58,8 @@ For OR semantics, run two separate calls.`,
 				Kept    []string `json:"kept"`
 				Failed  []string `json:"failed"`
 			} `json:"results"`
-			DryRun bool `json:"dry_run"`
+			DryRun     bool   `json:"dry_run"`
+			BytesFreed *int64 `json:"bytes_freed,omitempty"`
 		}
 		if err := apiPost("/gc", payload, &resp); err != nil {
 			fatal("%v", err)
@@ -73,7 +74,7 @@ For OR semantics, run two separate calls.`,
 		if resp.DryRun {
 			verb = "would remove"
 		}
-		totalRemoved, totalFailed := 0, 0
+		totalRemoved, totalKept, totalFailed := 0, 0, 0
 		for _, r := range resp.Results {
 			fmt.Printf("%s: %s %d, kept %d", r.Project, verb, len(r.Removed), len(r.Kept))
 			if len(r.Failed) > 0 {
@@ -87,16 +88,37 @@ For OR semantics, run two separate calls.`,
 				fmt.Printf("  ! %s\n", msg)
 			}
 			totalRemoved += len(r.Removed)
+			totalKept += len(r.Kept)
 			totalFailed += len(r.Failed)
 		}
 		if len(resp.Results) > 1 {
-			fmt.Printf("\ntotal: %s %d", verb, totalRemoved)
+			fmt.Printf("\ntotal: %s %d, kept %d", verb, totalRemoved, totalKept)
 			if totalFailed > 0 {
 				fmt.Printf(", %d failed", totalFailed)
 			}
 			fmt.Println()
 		}
+		if resp.BytesFreed != nil {
+			fmt.Printf("freed: %s\n", humanBytes(*resp.BytesFreed))
+		} else if resp.DryRun && totalRemoved > 0 {
+			fmt.Println("(dry-run: actual bytes freed depends on layer sharing; run without --dry-run to see real reclaim)")
+		}
 	},
+}
+
+func humanBytes(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d B", n)
+	}
+	const k = 1000.0
+	units := []string{"kB", "MB", "GB", "TB", "PB"}
+	v := float64(n) / k
+	u := 0
+	for v >= k && u < len(units)-1 {
+		v /= k
+		u++
+	}
+	return fmt.Sprintf("%.1f %s", v, units[u])
 }
 
 var gcSetCmd = &cobra.Command{

@@ -33,6 +33,7 @@ type ContainerManager interface {
 	Logs(projectName string, lines int) (string, error)
 	GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error)
 	PruneDangling() error
+	ImagesDiskUsage() (int64, error)
 }
 
 // GCResult mirrors docker.GCResult for the interface boundary.

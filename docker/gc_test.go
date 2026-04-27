@@ -72,6 +72,37 @@ func TestParseDockerTime(t *testing.T) {
 	}
 }
 
+func TestParseHumanSize(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"0B", 0},
+		{"412B", 412},
+		{"1kB", 1000},
+		{"1.5kB", 1500},
+		{"5.2GB", 5_200_000_000},
+		{"1MB", 1_000_000},
+		{"  3GB  ", 3_000_000_000},
+		{"2TB", 2_000_000_000_000},
+	}
+	for _, c := range cases {
+		got, err := parseHumanSize(c.in)
+		if err != nil {
+			t.Errorf("parseHumanSize(%q) error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("parseHumanSize(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+	for _, bad := range []string{"", "GB", "1.5XB", "abc"} {
+		if _, err := parseHumanSize(bad); err == nil {
+			t.Errorf("parseHumanSize(%q) expected error", bad)
+		}
+	}
+}
+
 // --- selectForRemoval ---
 
 func TestSelectForRemoval_KeepOnly(t *testing.T) {
