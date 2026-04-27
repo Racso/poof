@@ -80,6 +80,11 @@ func (dockerAdapter) Deploy(cfg server.ContainerDeployConfig) error {
 func (dockerAdapter) Stop(name string) error              { return docker.Stop(name) }
 func (dockerAdapter) IsRunning(name string) bool           { return docker.IsRunning(name) }
 func (dockerAdapter) Logs(name string, lines int) (string, error) { return docker.Logs(name, lines) }
+func (dockerAdapter) GC(name, image string, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
+	r, err := docker.GC(name, image, keep, olderThanDays, dryRun)
+	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
+}
+func (dockerAdapter) PruneDangling() error { return docker.PruneDangling() }
 
 // staticAdapter delegates server.StaticDeployer to the static package functions.
 type staticAdapter struct{}

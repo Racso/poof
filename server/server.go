@@ -31,6 +31,16 @@ type ContainerManager interface {
 	Stop(projectName string) error
 	IsRunning(projectName string) bool
 	Logs(projectName string, lines int) (string, error)
+	GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error)
+	PruneDangling() error
+}
+
+// GCResult mirrors docker.GCResult for the interface boundary.
+type GCResult struct {
+	Project string   `json:"project"`
+	Removed []string `json:"removed,omitempty"`
+	Kept    []string `json:"kept,omitempty"`
+	Failed  []string `json:"failed,omitempty"`
 }
 
 // ContainerDeployConfig mirrors docker.DeployConfig for the interface boundary.
@@ -127,6 +137,12 @@ func (s *Server) handler() http.Handler {
 	// Server settings
 	mux.HandleFunc("GET /config", s.auth(s.getConfig))
 	mux.HandleFunc("PATCH /config/{key}", s.auth(s.setConfig))
+
+	// Garbage collection
+	mux.HandleFunc("POST /gc", s.auth(s.triggerGC))
+	mux.HandleFunc("GET /gc/status", s.auth(s.gcStatus))
+	mux.HandleFunc("PUT /gc/policy/{name}", s.auth(s.setGCPolicy))
+	mux.HandleFunc("DELETE /gc/policy/{name}", s.auth(s.deleteGCPolicy))
 
 	// Server logs, version, and self-update
 	mux.HandleFunc("GET /logs/server", s.auth(s.getServerLogs))

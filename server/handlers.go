@@ -751,6 +751,8 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		log.Printf("warning: caddy sync after deploy failed: %v", err)
 	}
 
+	go s.runAutoGC()
+
 	jsonOK(w, map[string]interface{}{
 		"status": "deployed",
 		"image":  image,

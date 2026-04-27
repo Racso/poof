@@ -56,6 +56,20 @@ type Deployment struct {
 	DeployedAt time.Time `json:"deployed_at"`
 }
 
+// GCPolicyGlobalKey is the project name used to store the global default GC
+// policy that applies to projects without their own override.
+const GCPolicyGlobalKey = "*"
+
+// GCPolicy is the GC retention policy for one project (or the global default).
+// KeepCount and OlderThanDays are nil when not set; Disabled=true means GC is
+// explicitly turned off and the row exists only as an override.
+type GCPolicy struct {
+	Project       string `json:"project"`
+	KeepCount     *int   `json:"keep_count,omitempty"`
+	OlderThanDays *int   `json:"older_than_days,omitempty"`
+	Disabled      bool   `json:"disabled,omitempty"`
+}
+
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -135,6 +149,13 @@ func (s *Store) migrate() error {
 			project TEXT PRIMARY KEY,
 			content TEXT NOT NULL,
 			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+		);
+
+		CREATE TABLE IF NOT EXISTS gc_policies (
+			project         TEXT PRIMARY KEY,
+			keep_count      INTEGER,
+			older_than_days INTEGER,
+			disabled        INTEGER NOT NULL DEFAULT 0
 		);
 
 		PRAGMA foreign_keys = ON;
@@ -604,4 +625,122 @@ func (s *Store) GetAllCaddySnippets() (map[string]string, error) {
 		snippets[p] = c
 	}
 	return snippets, rows.Err()
+}
+
+// --- GC Policies ---
+
+func (s *Store) GetGCPolicy(project string) (*GCPolicy, error) {
+	p := &GCPolicy{Project: project}
+	var keep, older sql.NullInt64
+	var disabled int
+	err := s.db.QueryRow(
+		`SELECT keep_count, older_than_days, disabled FROM gc_policies WHERE project = ?`,
+		project,
+	).Scan(&keep, &older, &disabled)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get gc policy: %w", err)
+	}
+	if keep.Valid {
+		v := int(keep.Int64)
+		p.KeepCount = &v
+	}
+	if older.Valid {
+		v := int(older.Int64)
+		p.OlderThanDays = &v
+	}
+	p.Disabled = disabled != 0
+	return p, nil
+}
+
+func (s *Store) SetGCPolicy(p GCPolicy) error {
+	var keep, older interface{}
+	if p.KeepCount != nil {
+		keep = *p.KeepCount
+	}
+	if p.OlderThanDays != nil {
+		older = *p.OlderThanDays
+	}
+	disabled := 0
+	if p.Disabled {
+		disabled = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO gc_policies (project, keep_count, older_than_days, disabled)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(project) DO UPDATE SET
+		   keep_count = excluded.keep_count,
+		   older_than_days = excluded.older_than_days,
+		   disabled = excluded.disabled`,
+		p.Project, keep, older, disabled,
+	)
+	if err != nil {
+		return fmt.Errorf("set gc policy: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteGCPolicy(project string) error {
+	_, err := s.db.Exec(`DELETE FROM gc_policies WHERE project = ?`, project)
+	if err != nil {
+		return fmt.Errorf("delete gc policy: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListGCPolicies() ([]GCPolicy, error) {
+	rows, err := s.db.Query(
+		`SELECT project, keep_count, older_than_days, disabled FROM gc_policies ORDER BY project`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list gc policies: %w", err)
+	}
+	defer rows.Close()
+
+	var policies []GCPolicy
+	for rows.Next() {
+		var p GCPolicy
+		var keep, older sql.NullInt64
+		var disabled int
+		if err := rows.Scan(&p.Project, &keep, &older, &disabled); err != nil {
+			return nil, err
+		}
+		if keep.Valid {
+			v := int(keep.Int64)
+			p.KeepCount = &v
+		}
+		if older.Valid {
+			v := int(older.Int64)
+			p.OlderThanDays = &v
+		}
+		p.Disabled = disabled != 0
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+// ResolveGCPolicy returns the effective policy for a project. Returns (nil, false)
+// when GC is disabled (either explicitly for the project, or globally with no
+// per-project override). The built-in default keep=3 applies when neither the
+// project nor the global override exists.
+func (s *Store) ResolveGCPolicy(project string) (*GCPolicy, bool) {
+	if p, _ := s.GetGCPolicy(project); p != nil {
+		if p.Disabled {
+			return nil, false
+		}
+		return p, true
+	}
+	if g, _ := s.GetGCPolicy(GCPolicyGlobalKey); g != nil {
+		if g.Disabled {
+			return nil, false
+		}
+		// Project inherits global, but the resolved struct names the project.
+		out := *g
+		out.Project = project
+		return &out, true
+	}
+	def := 3
+	return &GCPolicy{Project: project, KeepCount: &def}, true
 }

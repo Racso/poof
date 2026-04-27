@@ -474,3 +474,144 @@ func TestGetAllCaddySnippets(t *testing.T) {
 		t.Errorf("beta: got %q", all["beta"])
 	}
 }
+
+// --- GC Policies ---
+
+func intPtr(v int) *int { return &v }
+
+func TestSetAndGetGCPolicy(t *testing.T) {
+	st := newTestStore(t)
+
+	if err := st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(5)}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	got, err := st.GetGCPolicy("demo")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got == nil || got.KeepCount == nil || *got.KeepCount != 5 {
+		t.Fatalf("got %+v, want keep=5", got)
+	}
+	if got.OlderThanDays != nil {
+		t.Errorf("older_than: got %v, want nil", *got.OlderThanDays)
+	}
+	if got.Disabled {
+		t.Errorf("disabled: want false")
+	}
+}
+
+func TestGetGCPolicyNotFound(t *testing.T) {
+	st := newTestStore(t)
+	got, err := st.GetGCPolicy("missing")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %+v", got)
+	}
+}
+
+func TestSetGCPolicyOverwrites(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(5)})
+	st.SetGCPolicy(store.GCPolicy{Project: "demo", OlderThanDays: intPtr(14)})
+
+	got, _ := st.GetGCPolicy("demo")
+	if got.KeepCount != nil {
+		t.Errorf("keep_count: got %v, want nil after overwrite", *got.KeepCount)
+	}
+	if got.OlderThanDays == nil || *got.OlderThanDays != 14 {
+		t.Errorf("older_than: got %v, want 14", got.OlderThanDays)
+	}
+}
+
+func TestDeleteGCPolicy(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(5)})
+	if err := st.DeleteGCPolicy("demo"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, _ := st.GetGCPolicy("demo")
+	if got != nil {
+		t.Errorf("expected nil after delete, got %+v", got)
+	}
+}
+
+func TestListGCPolicies(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(3)})
+	st.SetGCPolicy(store.GCPolicy{Project: "alpha", KeepCount: intPtr(5)})
+	st.SetGCPolicy(store.GCPolicy{Project: "beta", Disabled: true})
+
+	all, err := st.ListGCPolicies()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(all))
+	}
+}
+
+func TestResolveGCPolicy_Default(t *testing.T) {
+	st := newTestStore(t)
+	pol, enabled := st.ResolveGCPolicy("demo")
+	if !enabled {
+		t.Fatal("expected enabled with built-in default")
+	}
+	if pol.KeepCount == nil || *pol.KeepCount != 3 {
+		t.Errorf("default keep: got %v, want 3", pol.KeepCount)
+	}
+	if pol.OlderThanDays != nil {
+		t.Errorf("default older_than: got %v, want nil", pol.OlderThanDays)
+	}
+}
+
+func TestResolveGCPolicy_GlobalOverridesDefault(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(7)})
+
+	pol, enabled := st.ResolveGCPolicy("demo")
+	if !enabled {
+		t.Fatal("expected enabled")
+	}
+	if *pol.KeepCount != 7 {
+		t.Errorf("got keep=%d, want 7", *pol.KeepCount)
+	}
+	if pol.Project != "demo" {
+		t.Errorf("project name not rebound: got %q", pol.Project)
+	}
+}
+
+func TestResolveGCPolicy_ProjectOverridesGlobal(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(7)})
+	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(2)})
+
+	pol, _ := st.ResolveGCPolicy("demo")
+	if *pol.KeepCount != 2 {
+		t.Errorf("got keep=%d, want 2", *pol.KeepCount)
+	}
+}
+
+func TestResolveGCPolicy_ProjectDisabledOverridesGlobal(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(7)})
+	st.SetGCPolicy(store.GCPolicy{Project: "demo", Disabled: true})
+
+	if _, enabled := st.ResolveGCPolicy("demo"); enabled {
+		t.Error("expected disabled for project")
+	}
+	if _, enabled := st.ResolveGCPolicy("other"); !enabled {
+		t.Error("expected enabled for other project (still inherits global)")
+	}
+}
+
+func TestResolveGCPolicy_GlobalDisabledSkipsDefault(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, Disabled: true})
+
+	if _, enabled := st.ResolveGCPolicy("demo"); enabled {
+		t.Error("expected disabled — global off should suppress built-in default")
+	}
+}
