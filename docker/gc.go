@@ -98,38 +98,34 @@ func runningImageID(projectName string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// GC removes old images for a project. Behavior:
-//   - Images are sorted newest first.
-//   - The image of the project's running container is never deleted.
+// selectForRemoval applies the keep/age filters and returns which references
+// should be deleted vs kept. It is pure: no docker calls, deterministic given
+// inputs. Behavior:
+//   - Images are sorted newest first before filtering.
+//   - Any image whose ID matches runningID is always kept.
 //   - When both keep and olderThanDays are >0, an image must satisfy BOTH
 //     conditions to be deleted (outside keep window AND older than N days).
 //   - When only one is set, that condition alone governs deletion.
 //   - When both are 0, nothing is deleted.
-//   - dryRun=true reports what would be removed without calling docker rmi.
-func GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error) {
-	res := GCResult{Project: projectName}
+func selectForRemoval(images []LocalImage, runningID string, keep, olderThanDays int, now time.Time) (toDelete, toKeep []LocalImage) {
 	if keep <= 0 && olderThanDays <= 0 {
-		return res, nil
+		return nil, images
 	}
 
-	images, err := listImagesForRepo(image)
-	if err != nil {
-		return res, err
-	}
-	sort.Slice(images, func(i, j int) bool {
-		return images[i].Created.After(images[j].Created)
+	sorted := make([]LocalImage, len(images))
+	copy(sorted, images)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Created.After(sorted[j].Created)
 	})
-
-	runningID := runningImageID(projectName)
 
 	var cutoff time.Time
 	if olderThanDays > 0 {
-		cutoff = time.Now().AddDate(0, 0, -olderThanDays)
+		cutoff = now.AddDate(0, 0, -olderThanDays)
 	}
 
-	for i, img := range images {
+	for i, img := range sorted {
 		if runningID != "" && img.ID == runningID {
-			res.Kept = append(res.Kept, img.Reference)
+			toKeep = append(toKeep, img)
 			continue
 		}
 
@@ -146,16 +142,39 @@ func GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResu
 			eligible = olderThan
 		}
 
-		if !eligible {
-			res.Kept = append(res.Kept, img.Reference)
-			continue
+		if eligible {
+			toDelete = append(toDelete, img)
+		} else {
+			toKeep = append(toKeep, img)
 		}
+	}
+	return toDelete, toKeep
+}
 
+// GC removes old images for a project according to the given retention rules.
+// See selectForRemoval for the filtering semantics. dryRun=true skips the
+// docker rmi calls but still reports what would have been removed.
+func GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error) {
+	res := GCResult{Project: projectName}
+	if keep <= 0 && olderThanDays <= 0 {
+		return res, nil
+	}
+
+	images, err := listImagesForRepo(image)
+	if err != nil {
+		return res, err
+	}
+
+	toDelete, toKeep := selectForRemoval(images, runningImageID(projectName), keep, olderThanDays, time.Now())
+
+	for _, img := range toKeep {
+		res.Kept = append(res.Kept, img.Reference)
+	}
+	for _, img := range toDelete {
 		if dryRun {
 			res.Removed = append(res.Removed, img.Reference)
 			continue
 		}
-
 		if err := removeImage(img.Reference); err != nil {
 			res.Failed = append(res.Failed, fmt.Sprintf("%s: %v", img.Reference, err))
 			continue
