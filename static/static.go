@@ -7,15 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 )
 
-const maxVersions = 5
-
-// Deploy extracts a tar.gz archive into a versioned directory and atomically
-// swaps the "current" symlink to point to it.
+// Deploy saves a tar.gz archive to disk, extracts it into a versioned
+// directory, and atomically swaps the "current" symlink to point to it.
+// Old version cleanup is handled by GC, not here.
 func Deploy(dataDir, project string, depID int64, tarball io.Reader) error {
 	base := projectDir(dataDir, project)
 	versionsDir := filepath.Join(base, "versions")
@@ -23,13 +20,33 @@ func Deploy(dataDir, project string, depID int64, tarball io.Reader) error {
 		return fmt.Errorf("create versions dir: %w", err)
 	}
 
+	// Save tarball to disk.
+	tarPath := filepath.Join(versionsDir, fmt.Sprintf("v%d.tar.gz", depID))
+	tf, err := os.Create(tarPath)
+	if err != nil {
+		return fmt.Errorf("create tarball file: %w", err)
+	}
+	if _, err := io.Copy(tf, tarball); err != nil {
+		tf.Close()
+		os.Remove(tarPath)
+		return fmt.Errorf("save tarball: %w", err)
+	}
+	tf.Close()
+
+	// Re-open saved tarball for extraction.
+	tf, err = os.Open(tarPath)
+	if err != nil {
+		return fmt.Errorf("open tarball for extraction: %w", err)
+	}
+	defer tf.Close()
+
 	// Extract into a temp directory first.
 	tmp, err := os.MkdirTemp(versionsDir, ".tmp-")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
 	}
 
-	if err := extractTarGz(tarball, tmp); err != nil {
+	if err := extractTarGz(tf, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return fmt.Errorf("extract archive: %w", err)
 	}
@@ -53,8 +70,6 @@ func Deploy(dataDir, project string, depID int64, tarball io.Reader) error {
 		return fmt.Errorf("swap symlink: %w", err)
 	}
 
-	// Clean up old versions.
-	pruneVersions(versionsDir)
 	return nil
 }
 
@@ -141,35 +156,3 @@ func extractTarGz(r io.Reader, dest string) error {
 	return nil
 }
 
-func pruneVersions(versionsDir string) {
-	entries, err := os.ReadDir(versionsDir)
-	if err != nil {
-		return
-	}
-
-	// Collect version directories sorted by version number descending.
-	type versionEntry struct {
-		num  int64
-		name string
-	}
-	var versions []versionEntry
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "v") {
-			continue
-		}
-		n, err := strconv.ParseInt(e.Name()[1:], 10, 64)
-		if err != nil {
-			continue
-		}
-		versions = append(versions, versionEntry{num: n, name: e.Name()})
-	}
-
-	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].num > versions[j].num
-	})
-
-	// Remove versions beyond the limit.
-	for i := maxVersions; i < len(versions); i++ {
-		os.RemoveAll(filepath.Join(versionsDir, versions[i].name))
-	}
-}

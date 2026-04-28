@@ -71,10 +71,6 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 
 	var results []GCResult
 	for _, p := range projects {
-		if p.IsStatic() || p.Image == "" {
-			continue
-		}
-
 		var keep, older int
 		if override {
 			if req.Keep != nil {
@@ -96,12 +92,21 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		res, err := s.container.GC(p.Name, p.Image, keep, older, req.DryRun)
-		if err != nil {
-			log.Printf("gc %s failed: %v", p.Name, err)
-			res.Project = p.Name
+		if p.IsStatic() {
+			res, err := s.runStaticGC(p.Name, keep, older, req.DryRun)
+			if err != nil {
+				log.Printf("gc %s (static) failed: %v", p.Name, err)
+			} else {
+				results = append(results, res)
+			}
+		} else if p.Image != "" {
+			res, err := s.container.GC(p.Name, p.Image, keep, older, req.DryRun)
+			if err != nil {
+				log.Printf("gc %s failed: %v", p.Name, err)
+				res.Project = p.Name
+			}
+			results = append(results, res)
 		}
-		results = append(results, res)
 	}
 
 	// Orphan sweep: clean up images from deleted or static-converted projects.
@@ -168,9 +173,6 @@ func (s *Server) gcStatus(w http.ResponseWriter, r *http.Request) {
 
 	resolvedList := make([]resolved, 0, len(projects))
 	for _, p := range projects {
-		if p.IsStatic() {
-			continue
-		}
 		r := resolved{Project: p.Name}
 		if pol, _ := s.store.GetGCPolicy(p.Name); pol != nil {
 			if pol.Disabled {
@@ -296,9 +298,6 @@ func (s *Server) runAutoGC() {
 
 	var anyRan bool
 	for _, p := range projects {
-		if p.IsStatic() || p.Image == "" {
-			continue
-		}
 		policy, enabled := s.store.ResolveGCPolicy(p.Name)
 		if !enabled {
 			continue
@@ -313,15 +312,29 @@ func (s *Server) runAutoGC() {
 		if keep == 0 && older == 0 {
 			continue
 		}
-		res, err := s.container.GC(p.Name, p.Image, keep, older, false)
-		if err != nil {
-			log.Printf("auto-gc %s: %v", p.Name, err)
-			continue
-		}
-		anyRan = true
-		if len(res.Removed) > 0 || len(res.Failed) > 0 {
-			log.Printf("auto-gc %s: removed=%d kept=%d failed=%d",
-				p.Name, len(res.Removed), len(res.Kept), len(res.Failed))
+
+		if p.IsStatic() {
+			res, err := s.runStaticGC(p.Name, keep, older, false)
+			if err != nil {
+				log.Printf("auto-gc %s (static): %v", p.Name, err)
+				continue
+			}
+			anyRan = true
+			if len(res.Removed) > 0 || len(res.Failed) > 0 {
+				log.Printf("auto-gc %s (static): removed=%d failed=%d",
+					p.Name, len(res.Removed), len(res.Failed))
+			}
+		} else if p.Image != "" {
+			res, err := s.container.GC(p.Name, p.Image, keep, older, false)
+			if err != nil {
+				log.Printf("auto-gc %s: %v", p.Name, err)
+				continue
+			}
+			anyRan = true
+			if len(res.Removed) > 0 || len(res.Failed) > 0 {
+				log.Printf("auto-gc %s: removed=%d kept=%d failed=%d",
+					p.Name, len(res.Removed), len(res.Kept), len(res.Failed))
+			}
 		}
 	}
 
@@ -354,6 +367,22 @@ func (s *Server) runAutoGC() {
 			}
 		}
 	}
+}
+
+// runStaticGC queries deployment history for a static project and delegates
+// to the StaticDeployer.GC method.
+func (s *Server) runStaticGC(project string, keep, olderThanDays int, dryRun bool) (GCResult, error) {
+	deps, err := s.store.ListDeployments(project, 0)
+	if err != nil {
+		return GCResult{}, fmt.Errorf("list deployments: %w", err)
+	}
+	var versions []StaticVersion
+	for _, d := range deps {
+		if d.Status == "success" {
+			versions = append(versions, StaticVersion{DepID: d.ID, DeployedAt: d.DeployedAt})
+		}
+	}
+	return s.static.GC(s.cfg.DataDir, project, versions, keep, olderThanDays, dryRun)
 }
 
 // humanBytes formats a byte count with SI units (matching docker's output).

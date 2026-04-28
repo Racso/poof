@@ -102,6 +102,14 @@ func (staticAdapter) Rollback(dataDir, project string, depID int64) error {
 }
 func (staticAdapter) IsDeployed(dataDir, project string) bool { return static.IsDeployed(dataDir, project) }
 func (staticAdapter) Remove(dataDir, project string)          { static.Remove(dataDir, project) }
+func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
+	sv := make([]static.VersionInfo, len(versions))
+	for i, v := range versions {
+		sv[i] = static.VersionInfo{DepID: v.DepID, DeployedAt: v.DeployedAt}
+	}
+	r, err := static.GC(dataDir, project, sv, keep, olderThanDays, dryRun)
+	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
+}
 
 // caddyAdapter delegates server.CaddySyncer to the caddy package.
 type caddyAdapter struct{}

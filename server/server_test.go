@@ -143,6 +143,15 @@ type mockStaticDeployer struct {
 	rollbackCalls []mockStaticRollbackCall
 	removeCalls   []string
 	deployed      map[string]bool
+	gcCalls       []mockStaticGCCall
+}
+
+type mockStaticGCCall struct {
+	Project       string
+	Versions      []server.StaticVersion
+	Keep          int
+	OlderThanDays int
+	DryRun        bool
 }
 
 type mockStaticDeployCall struct {
@@ -174,6 +183,15 @@ func (m *mockStaticDeployer) IsDeployed(_, project string) bool {
 
 func (m *mockStaticDeployer) Remove(_, project string) {
 	m.removeCalls = append(m.removeCalls, project)
+}
+
+func (m *mockStaticDeployer) GC(_ string, project string, versions []server.StaticVersion, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
+	m.gcCalls = append(m.gcCalls, mockStaticGCCall{project, versions, keep, olderThanDays, dryRun})
+	var removed []string
+	for _, v := range versions {
+		removed = append(removed, fmt.Sprintf("v%d.tar.gz", v.DepID))
+	}
+	return server.GCResult{Project: project, Removed: removed}, nil
 }
 
 // --- Mock CaddySyncer ---
@@ -1711,7 +1729,7 @@ func TestGCDryRunSkipsPrune(t *testing.T) {
 	}
 }
 
-func TestGCAllSkipsStaticAndDisabled(t *testing.T) {
+func TestGCAllSkipsDisabledAndRoutesCorrectly(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.CreateProject(store.Project{
 		Name: "container-app", Image: "ghcr.io/x/c", Repo: "x/c", Branch: "main", Port: 80,
@@ -1728,11 +1746,19 @@ func TestGCAllSkipsStaticAndDisabled(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
 	}
+	// Container GC should only run for container-app (disabled-app is disabled).
 	if len(mocks.container.gcCalls) != 1 {
-		t.Fatalf("expected 1 GC call (only container-app), got %d", len(mocks.container.gcCalls))
+		t.Fatalf("expected 1 container GC call, got %d", len(mocks.container.gcCalls))
 	}
 	if mocks.container.gcCalls[0].Project != "container-app" {
 		t.Errorf("wrong project GC'd: %s", mocks.container.gcCalls[0].Project)
+	}
+	// Static GC should run for static-site.
+	if len(mocks.static.gcCalls) != 1 {
+		t.Fatalf("expected 1 static GC call, got %d", len(mocks.static.gcCalls))
+	}
+	if mocks.static.gcCalls[0].Project != "static-site" {
+		t.Errorf("wrong static project GC'd: %s", mocks.static.gcCalls[0].Project)
 	}
 }
 
@@ -1788,6 +1814,47 @@ func TestGCAllNoOrphansSkipsSweep(t *testing.T) {
 	// No orphans → SweepOrphans should not be called.
 	if len(mocks.container.sweepCalls) != 0 {
 		t.Errorf("expected 0 sweep calls when no orphans, got %d", len(mocks.container.sweepCalls))
+	}
+}
+
+func TestGCAllIncludesStaticProjects(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	// Container project.
+	st.CreateProject(store.Project{
+		Name: "web", Image: "ghcr.io/x/web", Repo: "x/w", Branch: "main", Port: 80,
+	})
+
+	// Static project with deployments.
+	st.CreateProject(store.Project{
+		Name: "site", Repo: "x/s", Branch: "main", Static: "static",
+	})
+	st.RecordDeployment("site", "static", "success")
+	st.RecordDeployment("site", "static", "success")
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"all": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Container GC should run for "web".
+	if len(mocks.container.gcCalls) != 1 {
+		t.Fatalf("expected 1 container GC call, got %d", len(mocks.container.gcCalls))
+	}
+
+	// Static GC should run for "site".
+	if len(mocks.static.gcCalls) != 1 {
+		t.Fatalf("expected 1 static GC call, got %d", len(mocks.static.gcCalls))
+	}
+	call := mocks.static.gcCalls[0]
+	if call.Project != "site" {
+		t.Errorf("static GC project: got %q, want site", call.Project)
+	}
+	if len(call.Versions) != 2 {
+		t.Errorf("static GC versions: got %d, want 2", len(call.Versions))
+	}
+	if call.Keep != 3 {
+		t.Errorf("static GC keep: got %d, want 3 (default)", call.Keep)
 	}
 }
 

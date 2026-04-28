@@ -450,6 +450,9 @@ func (s *Store) PreviousDeployment(project string) (*Deployment, error) {
 }
 
 func (s *Store) ListDeployments(project string, limit int) ([]Deployment, error) {
+	if limit <= 0 {
+		limit = -1 // SQLite: -1 means no limit.
+	}
 	rows, err := s.db.Query(
 		`SELECT d.id, d.project_id, p.name, d.image, d.status, d.deployed_at
 		 FROM deployments d

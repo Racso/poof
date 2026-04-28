@@ -55,12 +55,19 @@ type ContainerDeployConfig struct {
 	RegistryToken string
 }
 
+// StaticVersion provides deployment date info for static GC.
+type StaticVersion struct {
+	DepID      int64
+	DeployedAt time.Time
+}
+
 // StaticDeployer abstracts static site deployment operations.
 type StaticDeployer interface {
 	Deploy(dataDir, project string, depID int64, tarball io.Reader) error
 	Rollback(dataDir, project string, depID int64) error
 	IsDeployed(dataDir, project string) bool
 	Remove(dataDir, project string)
+	GC(dataDir, project string, versions []StaticVersion, keep, olderThanDays int, dryRun bool) (GCResult, error)
 }
 
 // CaddySyncer abstracts Caddy configuration reload.
