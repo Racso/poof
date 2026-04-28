@@ -51,7 +51,7 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           IMAGE=POOF_IMAGE_BASE:${{ github.sha }}
-          docker build -t $IMAGE POOF_BUILD_ARGS
+          docker build -t $IMAGE --label co.racso.poof.managed=true POOF_BUILD_ARGS
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
