@@ -116,6 +116,24 @@ func TestDeleteProject(t *testing.T) {
 	}
 }
 
+func TestProjectHasUniqueID(t *testing.T) {
+	st := newTestStore(t)
+	st.CreateProject(sampleProject("alpha"))
+	st.CreateProject(sampleProject("beta"))
+
+	a, _ := st.GetProject("alpha")
+	b, _ := st.GetProject("beta")
+	if a.ID == 0 {
+		t.Error("alpha ID should be non-zero")
+	}
+	if b.ID == 0 {
+		t.Error("beta ID should be non-zero")
+	}
+	if a.ID == b.ID {
+		t.Errorf("projects should have different IDs: both %d", a.ID)
+	}
+}
+
 func TestDuplicateProjectName(t *testing.T) {
 	st := newTestStore(t)
 	p := sampleProject("demo")
@@ -159,6 +177,15 @@ func TestRecordAndRetrieveDeployment(t *testing.T) {
 	}
 	if last.Status != "success" {
 		t.Errorf("status: got %q, want success", last.Status)
+	}
+
+	// Deployment should reference the project by ID.
+	proj, _ := st.GetProject("demo")
+	if last.ProjectID != proj.ID {
+		t.Errorf("project_id: got %d, want %d", last.ProjectID, proj.ID)
+	}
+	if last.Project != "demo" {
+		t.Errorf("project name: got %q, want %q", last.Project, "demo")
 	}
 }
 
@@ -253,7 +280,7 @@ func TestListDeployments(t *testing.T) {
 	}
 }
 
-func TestDeploymentsCascadeOnDelete(t *testing.T) {
+func TestDeploymentsPreservedOnProjectDelete(t *testing.T) {
 	st := newTestStore(t)
 	if err := st.CreateProject(sampleProject("demo")); err != nil {
 		t.Fatalf("create project: %v", err)
@@ -264,13 +291,27 @@ func TestDeploymentsCascadeOnDelete(t *testing.T) {
 		t.Fatalf("delete project: %v", err)
 	}
 
-	// Deployments should be gone too (CASCADE).
+	// ListDeployments returns 0 because the project row is gone (JOIN finds
+	// nothing), but the underlying deployment records are preserved.
 	deps, err := st.ListDeployments("demo", 10)
 	if err != nil {
 		t.Fatalf("list deployments after delete: %v", err)
 	}
 	if len(deps) != 0 {
-		t.Errorf("expected 0 deployments after project delete, got %d", len(deps))
+		t.Errorf("expected 0 from ListDeployments (project gone), got %d", len(deps))
+	}
+
+	// Recreate a project with the same name — it gets a new ID, so old
+	// deployments must NOT reattach.
+	if err := st.CreateProject(sampleProject("demo")); err != nil {
+		t.Fatalf("recreate project: %v", err)
+	}
+	deps, err = st.ListDeployments("demo", 10)
+	if err != nil {
+		t.Fatalf("list after recreate: %v", err)
+	}
+	if len(deps) != 0 {
+		t.Errorf("expected 0 deployments for recreated project (different ID), got %d", len(deps))
 	}
 }
 

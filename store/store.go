@@ -13,6 +13,7 @@ type Store struct {
 }
 
 type Project struct {
+	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
 	Domain    string    `json:"domain"`
 	Image     string    `json:"image"`
@@ -50,6 +51,7 @@ type Redirect struct {
 
 type Deployment struct {
 	ID         int64     `json:"id"`
+	ProjectID  int64     `json:"project_id"`
 	Project    string    `json:"project"`
 	Image      string    `json:"image"`
 	Status     string    `json:"status"`
@@ -89,25 +91,28 @@ func (s *Store) Close() error {
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS projects (
-			name        TEXT PRIMARY KEY,
-			domain      TEXT NOT NULL,
-			image       TEXT NOT NULL,
-			repo        TEXT NOT NULL,
-			branch      TEXT NOT NULL,
-			port        INTEGER NOT NULL,
-			token       TEXT NOT NULL,
-			subpath     TEXT NOT NULL,
-			folder      TEXT NOT NULL DEFAULT '',
-			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT UNIQUE NOT NULL,
+			domain     TEXT NOT NULL,
+			image      TEXT NOT NULL,
+			repo       TEXT NOT NULL,
+			branch     TEXT NOT NULL,
+			port       INTEGER NOT NULL,
+			token      TEXT NOT NULL,
+			subpath    TEXT NOT NULL,
+			folder     TEXT NOT NULL DEFAULT '',
+			static     TEXT NOT NULL DEFAULT '',
+			build      INTEGER NOT NULL DEFAULT 0,
+			ci         INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
 		CREATE TABLE IF NOT EXISTS deployments (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			project     TEXT NOT NULL,
+			project_id  INTEGER NOT NULL,
 			image       TEXT NOT NULL,
 			status      TEXT NOT NULL DEFAULT 'success',
-			deployed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+			deployed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
 		CREATE TABLE IF NOT EXISTS env_vars (
@@ -157,22 +162,117 @@ func (s *Store) migrate() error {
 			older_than_days INTEGER,
 			disabled        INTEGER NOT NULL DEFAULT 0
 		);
-
-		PRAGMA foreign_keys = ON;
 	`)
 	if err != nil {
 		return err
 	}
-	// Add folder column to existing databases that predate this field.
+
+	// Incremental column migrations for pre-existing databases.
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN folder TEXT NOT NULL DEFAULT ''`)
-	// Migrate per-project tokens to repo_tokens (idempotent).
 	s.db.Exec(`INSERT OR IGNORE INTO repo_tokens (repo, token)
 		SELECT repo, token FROM projects WHERE token != '' GROUP BY repo`)
-	// Add static and ci columns for static site support and CI opt-out.
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN static TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN build INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
-	return nil
+
+	// Structural migration: add project IDs, rewrite deployments table.
+	if err := s.migrateProjectIDs(); err != nil {
+		return fmt.Errorf("project-id migration: %w", err)
+	}
+
+	_, err = s.db.Exec(`PRAGMA foreign_keys = ON`)
+	return err
+}
+
+// migrateProjectIDs converts the legacy schema (projects keyed by name,
+// deployments referencing project by name with ON DELETE CASCADE) to the new
+// schema (projects with autoincrement id, deployments referencing project_id,
+// no cascade). This is a one-time, idempotent migration.
+func (s *Store) migrateProjectIDs() error {
+	// Detect old schema: deployments table has a TEXT 'project' column.
+	var hasOldCol int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('deployments')
+		WHERE name = 'project'
+	`).Scan(&hasOldCol); err != nil {
+		return fmt.Errorf("check schema: %w", err)
+	}
+	if hasOldCol == 0 {
+		return nil // Fresh DB or already migrated.
+	}
+
+	// FK checks must be off to DROP and recreate referenced tables.
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable fk: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// --- Recreate projects with autoincrement id ---
+	if _, err := tx.Exec(`CREATE TABLE projects_new (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		name       TEXT UNIQUE NOT NULL,
+		domain     TEXT NOT NULL,
+		image      TEXT NOT NULL,
+		repo       TEXT NOT NULL,
+		branch     TEXT NOT NULL,
+		port       INTEGER NOT NULL,
+		token      TEXT NOT NULL,
+		subpath    TEXT NOT NULL,
+		folder     TEXT NOT NULL DEFAULT '',
+		static     TEXT NOT NULL DEFAULT '',
+		build      INTEGER NOT NULL DEFAULT 0,
+		ci         INTEGER NOT NULL DEFAULT 1,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("create projects_new: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, created_at)
+		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, created_at
+		FROM projects
+	`); err != nil {
+		return fmt.Errorf("copy projects: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE projects`); err != nil {
+		return fmt.Errorf("drop projects: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE projects_new RENAME TO projects`); err != nil {
+		return fmt.Errorf("rename projects: %w", err)
+	}
+
+	// --- Recreate deployments with project_id (no FK, no cascade) ---
+	if _, err := tx.Exec(`CREATE TABLE deployments_new (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		project_id  INTEGER NOT NULL,
+		image       TEXT NOT NULL,
+		status      TEXT NOT NULL DEFAULT 'success',
+		deployed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("create deployments_new: %w", err)
+	}
+	// Resolve project name → id. Orphan deployments (project already deleted
+	// under the old CASCADE regime) are silently dropped.
+	if _, err := tx.Exec(`
+		INSERT INTO deployments_new (id, project_id, image, status, deployed_at)
+		SELECT d.id, p.id, d.image, d.status, d.deployed_at
+		FROM deployments d
+		JOIN projects p ON d.project = p.name
+	`); err != nil {
+		return fmt.Errorf("copy deployments: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE deployments`); err != nil {
+		return fmt.Errorf("drop deployments: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE deployments_new RENAME TO deployments`); err != nil {
+		return fmt.Errorf("rename deployments: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // --- Projects ---
@@ -192,9 +292,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt)
+	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -206,7 +306,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -217,7 +317,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -288,9 +388,15 @@ func (s *Store) DeleteProject(name string) error {
 // --- Deployments ---
 
 func (s *Store) RecordDeployment(project, image, status string) (int64, error) {
+	var projectID int64
+	if err := s.db.QueryRow(
+		`SELECT id FROM projects WHERE name = ?`, project,
+	).Scan(&projectID); err != nil {
+		return 0, fmt.Errorf("record deployment: project %q: %w", project, err)
+	}
 	res, err := s.db.Exec(
-		`INSERT INTO deployments (project, image, status) VALUES (?, ?, ?)`,
-		project, image, status,
+		`INSERT INTO deployments (project_id, image, status) VALUES (?, ?, ?)`,
+		projectID, image, status,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("record deployment: %w", err)
@@ -307,9 +413,12 @@ func (s *Store) UpdateDeploymentStatus(id int64, status string) error {
 func (s *Store) LastDeployment(project string) (*Deployment, error) {
 	d := &Deployment{}
 	err := s.db.QueryRow(
-		`SELECT id, project, image, status, deployed_at
-		 FROM deployments WHERE project = ? ORDER BY id DESC LIMIT 1`, project,
-	).Scan(&d.ID, &d.Project, &d.Image, &d.Status, &d.DeployedAt)
+		`SELECT d.id, d.project_id, p.name, d.image, d.status, d.deployed_at
+		 FROM deployments d
+		 JOIN projects p ON d.project_id = p.id
+		 WHERE p.name = ?
+		 ORDER BY d.id DESC LIMIT 1`, project,
+	).Scan(&d.ID, &d.ProjectID, &d.Project, &d.Image, &d.Status, &d.DeployedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -320,15 +429,17 @@ func (s *Store) LastDeployment(project string) (*Deployment, error) {
 }
 
 // PreviousDeployment returns the second-to-last successful deployment (for rollback).
-// Uses ORDER BY id DESC (not deployed_at) because SQLite timestamps have second
+// Uses ORDER BY d.id DESC (not deployed_at) because SQLite timestamps have second
 // resolution and multiple deployments in the same second would be non-deterministic.
 func (s *Store) PreviousDeployment(project string) (*Deployment, error) {
 	d := &Deployment{}
 	err := s.db.QueryRow(
-		`SELECT id, project, image, status, deployed_at
-		 FROM deployments WHERE project = ? AND status = 'success'
-		 ORDER BY id DESC LIMIT 1 OFFSET 1`, project,
-	).Scan(&d.ID, &d.Project, &d.Image, &d.Status, &d.DeployedAt)
+		`SELECT d.id, d.project_id, p.name, d.image, d.status, d.deployed_at
+		 FROM deployments d
+		 JOIN projects p ON d.project_id = p.id
+		 WHERE p.name = ? AND d.status = 'success'
+		 ORDER BY d.id DESC LIMIT 1 OFFSET 1`, project,
+	).Scan(&d.ID, &d.ProjectID, &d.Project, &d.Image, &d.Status, &d.DeployedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -340,9 +451,11 @@ func (s *Store) PreviousDeployment(project string) (*Deployment, error) {
 
 func (s *Store) ListDeployments(project string, limit int) ([]Deployment, error) {
 	rows, err := s.db.Query(
-		`SELECT id, project, image, status, deployed_at
-		 FROM deployments WHERE project = ?
-		 ORDER BY deployed_at DESC LIMIT ?`, project, limit,
+		`SELECT d.id, d.project_id, p.name, d.image, d.status, d.deployed_at
+		 FROM deployments d
+		 JOIN projects p ON d.project_id = p.id
+		 WHERE p.name = ?
+		 ORDER BY d.deployed_at DESC LIMIT ?`, project, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list deployments: %w", err)
@@ -352,7 +465,7 @@ func (s *Store) ListDeployments(project string, limit int) ([]Deployment, error)
 	var deployments []Deployment
 	for rows.Next() {
 		var d Deployment
-		if err := rows.Scan(&d.ID, &d.Project, &d.Image, &d.Status, &d.DeployedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Project, &d.Image, &d.Status, &d.DeployedAt); err != nil {
 			return nil, err
 		}
 		deployments = append(deployments, d)
