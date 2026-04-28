@@ -315,6 +315,65 @@ func TestDeploymentsPreservedOnProjectDelete(t *testing.T) {
 	}
 }
 
+func TestListOrphanDeploymentImages(t *testing.T) {
+	st := newTestStore(t)
+
+	// Active container project — its images should NOT appear as orphans.
+	st.CreateProject(sampleProject("active"))
+	st.RecordDeployment("active", "ghcr.io/racso/active:v1", "success")
+	st.RecordDeployment("active", "ghcr.io/racso/active:v2", "success")
+
+	// Project that will be deleted — its images SHOULD appear as orphans.
+	st.CreateProject(sampleProject("deleted"))
+	st.RecordDeployment("deleted", "ghcr.io/racso/deleted:v1", "success")
+	st.RecordDeployment("deleted", "ghcr.io/racso/deleted:v2", "success")
+	st.DeleteProject("deleted")
+
+	// Project converted to static — its Docker images SHOULD appear.
+	p := sampleProject("converted")
+	p.Static = "static"
+	st.CreateProject(p)
+	st.RecordDeployment("converted", "ghcr.io/racso/converted:v1", "success")
+	// Also record a "static" deployment (should be excluded from results).
+	st.RecordDeployment("converted", "static", "success")
+
+	orphans, err := st.ListOrphanDeploymentImages()
+	if err != nil {
+		t.Fatalf("list orphans: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, img := range orphans {
+		got[img] = true
+	}
+
+	// Deleted project images.
+	if !got["ghcr.io/racso/deleted:v1"] {
+		t.Error("expected deleted:v1 in orphans")
+	}
+	if !got["ghcr.io/racso/deleted:v2"] {
+		t.Error("expected deleted:v2 in orphans")
+	}
+
+	// Static-converted project images.
+	if !got["ghcr.io/racso/converted:v1"] {
+		t.Error("expected converted:v1 in orphans")
+	}
+
+	// Active project images must NOT appear.
+	if got["ghcr.io/racso/active:v1"] {
+		t.Error("active:v1 should not be in orphans")
+	}
+	if got["ghcr.io/racso/active:v2"] {
+		t.Error("active:v2 should not be in orphans")
+	}
+
+	// Literal "static" must NOT appear.
+	if got["static"] {
+		t.Error("literal 'static' should not be in orphans")
+	}
+}
+
 // --- Env Vars ---
 
 func TestSetAndGetEnvVars(t *testing.T) {

@@ -65,6 +65,7 @@ type mockContainerManager struct {
 	running       map[string]bool
 	logs          map[string]string
 	gcCalls       []mockGCCall
+	sweepCalls    [][]string // each call's refs argument
 	pruneCalls    int
 	diskUsages    []int64 // values returned in order; once exhausted, returns last
 	diskCalls     int
@@ -98,6 +99,15 @@ func (m *mockContainerManager) IsRunning(name string) bool {
 func (m *mockContainerManager) GC(name, image string, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
 	m.gcCalls = append(m.gcCalls, mockGCCall{name, image, keep, olderThanDays, dryRun})
 	return server.GCResult{Project: name, Removed: []string{name + ":old"}}, nil
+}
+
+func (m *mockContainerManager) SweepOrphans(refs []string, dryRun bool) (server.GCResult, error) {
+	m.sweepCalls = append(m.sweepCalls, refs)
+	var removed []string
+	for _, r := range refs {
+		removed = append(removed, r)
+	}
+	return server.GCResult{Project: "(orphans)", Removed: removed}, nil
 }
 
 func (m *mockContainerManager) PruneDangling() error {
@@ -1723,6 +1733,61 @@ func TestGCAllSkipsStaticAndDisabled(t *testing.T) {
 	}
 	if mocks.container.gcCalls[0].Project != "container-app" {
 		t.Errorf("wrong project GC'd: %s", mocks.container.gcCalls[0].Project)
+	}
+}
+
+func TestGCAllSweepsOrphans(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	// Active container project (not an orphan).
+	st.CreateProject(store.Project{
+		Name: "active", Image: "ghcr.io/x/active", Repo: "x/a", Branch: "main", Port: 80,
+	})
+	st.RecordDeployment("active", "ghcr.io/x/active:v1", "success")
+
+	// Project that will be deleted — its deployment images become orphans.
+	st.CreateProject(store.Project{
+		Name: "gone", Image: "ghcr.io/x/gone", Repo: "x/g", Branch: "main", Port: 80,
+	})
+	st.RecordDeployment("gone", "ghcr.io/x/gone:v1", "success")
+	st.DeleteProject("gone")
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"all": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Per-project GC should have run for "active" only.
+	if len(mocks.container.gcCalls) != 1 {
+		t.Fatalf("expected 1 per-project GC call, got %d", len(mocks.container.gcCalls))
+	}
+
+	// Orphan sweep should have been called with the deleted project's image.
+	if len(mocks.container.sweepCalls) != 1 {
+		t.Fatalf("expected 1 sweep call, got %d", len(mocks.container.sweepCalls))
+	}
+	refs := mocks.container.sweepCalls[0]
+	if len(refs) != 1 || refs[0] != "ghcr.io/x/gone:v1" {
+		t.Errorf("sweep refs: got %v, want [ghcr.io/x/gone:v1]", refs)
+	}
+}
+
+func TestGCAllNoOrphansSkipsSweep(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	// Only active projects, no orphans.
+	st.CreateProject(store.Project{
+		Name: "app", Image: "ghcr.io/x/app", Repo: "x/a", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"all": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// No orphans → SweepOrphans should not be called.
+	if len(mocks.container.sweepCalls) != 0 {
+		t.Errorf("expected 0 sweep calls when no orphans, got %d", len(mocks.container.sweepCalls))
 	}
 }
 

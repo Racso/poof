@@ -84,7 +84,11 @@ func (dockerAdapter) GC(name, image string, keep, olderThanDays int, dryRun bool
 	r, err := docker.GC(name, image, keep, olderThanDays, dryRun)
 	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
 }
-func (dockerAdapter) PruneDangling() error           { return docker.PruneDangling() }
+func (dockerAdapter) SweepOrphans(refs []string, dryRun bool) (server.GCResult, error) {
+	r, err := docker.SweepOrphans(refs, dryRun)
+	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
+}
+func (dockerAdapter) PruneDangling() error { return docker.PruneDangling() }
 func (dockerAdapter) ImagesDiskUsage() (int64, error) { return docker.ImagesDiskUsage() }
 
 // staticAdapter delegates server.StaticDeployer to the static package functions.

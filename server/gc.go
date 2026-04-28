@@ -104,6 +104,20 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 		results = append(results, res)
 	}
 
+	// Orphan sweep: clean up images from deleted or static-converted projects.
+	if req.All {
+		if orphanRefs, err := s.store.ListOrphanDeploymentImages(); err != nil {
+			log.Printf("gc orphan query: %v", err)
+		} else if len(orphanRefs) > 0 {
+			res, err := s.container.SweepOrphans(orphanRefs, req.DryRun)
+			if err != nil {
+				log.Printf("gc orphan sweep: %v", err)
+			} else {
+				results = append(results, res)
+			}
+		}
+	}
+
 	resp := map[string]interface{}{
 		"results": results,
 		"dry_run": req.DryRun,
@@ -310,6 +324,22 @@ func (s *Server) runAutoGC() {
 				p.Name, len(res.Removed), len(res.Kept), len(res.Failed))
 		}
 	}
+
+	// Orphan sweep.
+	if orphanRefs, err := s.store.ListOrphanDeploymentImages(); err != nil {
+		log.Printf("auto-gc orphan query: %v", err)
+	} else if len(orphanRefs) > 0 {
+		res, err := s.container.SweepOrphans(orphanRefs, false)
+		if err != nil {
+			log.Printf("auto-gc orphan sweep: %v", err)
+		} else {
+			anyRan = true
+			if len(res.Removed) > 0 {
+				log.Printf("auto-gc orphans: removed=%d", len(res.Removed))
+			}
+		}
+	}
+
 	if anyRan {
 		if err := s.container.PruneDangling(); err != nil {
 			log.Printf("auto-gc prune dangling: %v", err)

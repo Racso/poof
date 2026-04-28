@@ -263,3 +263,72 @@ func parseHumanSize(s string) (int64, error) {
 	}
 	return int64(num * mult), nil
 }
+
+// runningImageIDs returns the set of image IDs used by all running containers.
+func runningImageIDs() map[string]bool {
+	out, err := exec.Command(
+		"docker", "ps", "-q",
+	).Output()
+	if err != nil {
+		return nil
+	}
+
+	ids := make(map[string]bool)
+	for _, cid := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if cid == "" {
+			continue
+		}
+		imgOut, err := exec.Command(
+			"docker", "inspect", "-f", "{{.Image}}", cid,
+		).Output()
+		if err != nil {
+			continue
+		}
+		ids[strings.TrimSpace(string(imgOut))] = true
+	}
+	return ids
+}
+
+// imageID returns the image ID for a reference, or "" if not found locally.
+func imageID(ref string) string {
+	out, err := exec.Command(
+		"docker", "inspect", "-f", "{{.Id}}", ref,
+	).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// SweepOrphans removes image references that are present locally but not used
+// by any running container. Designed for cleaning up images from deleted or
+// static-converted projects. dryRun=true reports what would be removed.
+func SweepOrphans(refs []string, dryRun bool) (GCResult, error) {
+	res := GCResult{Project: "(orphans)"}
+	if len(refs) == 0 {
+		return res, nil
+	}
+
+	running := runningImageIDs()
+
+	for _, ref := range refs {
+		id := imageID(ref)
+		if id == "" {
+			continue // Not on disk.
+		}
+		if running[id] {
+			res.Kept = append(res.Kept, ref)
+			continue
+		}
+		if dryRun {
+			res.Removed = append(res.Removed, ref)
+			continue
+		}
+		if err := removeImage(ref); err != nil {
+			res.Failed = append(res.Failed, fmt.Sprintf("%s: %v", ref, err))
+		} else {
+			res.Removed = append(res.Removed, ref)
+		}
+	}
+	return res, nil
+}

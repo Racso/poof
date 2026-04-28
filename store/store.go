@@ -473,6 +473,33 @@ func (s *Store) ListDeployments(project string, limit int) ([]Deployment, error)
 	return deployments, rows.Err()
 }
 
+// ListOrphanDeploymentImages returns distinct Docker image refs from
+// deployments whose project has been deleted or converted to static.
+// These images are Poof-managed but no longer associated with an active
+// container project — safe candidates for cleanup.
+func (s *Store) ListOrphanDeploymentImages() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT d.image FROM deployments d
+		LEFT JOIN projects p ON d.project_id = p.id
+		WHERE d.image != 'static'
+		  AND (p.id IS NULL OR p.static != '')
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list orphan images: %w", err)
+	}
+	defer rows.Close()
+
+	var images []string
+	for rows.Next() {
+		var img string
+		if err := rows.Scan(&img); err != nil {
+			return nil, err
+		}
+		images = append(images, img)
+	}
+	return images, rows.Err()
+}
+
 // --- Env Vars ---
 
 func (s *Store) SetEnvVar(project, key, value string) error {

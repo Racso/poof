@@ -32,6 +32,7 @@ type ContainerManager interface {
 	IsRunning(projectName string) bool
 	Logs(projectName string, lines int) (string, error)
 	GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error)
+	SweepOrphans(refs []string, dryRun bool) (GCResult, error)
 	PruneDangling() error
 	ImagesDiskUsage() (int64, error)
 }
