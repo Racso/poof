@@ -48,6 +48,7 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("static:  %s\n", yesNo(isStatic))
 		fmt.Printf("spa:     %s\n", yesNo(p["static"] == "spa"))
 		fmt.Printf("build:   %s\n", yesNo(p["build"] == true))
+		fmt.Printf("ci:      %s\n", ciDescription(p))
 
 		hasCaddy, _ := result["has_caddy_snippet"].(bool)
 		if hasCaddy {
@@ -72,6 +73,22 @@ func yesNo(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// ciDescription renders a project's CI configuration as one of:
+//   - "no"        — CI disabled
+//   - "yes"       — managed (push-triggered) workflow
+//   - "callable"  — reusable workflow, intended to be invoked by an
+//                   outer user-owned workflow
+func ciDescription(p map[string]interface{}) string {
+	enabled, _ := p["ci"].(bool)
+	if !enabled {
+		return "no"
+	}
+	if mode, _ := p["ci_mode"].(string); mode == "callable" {
+		return "callable"
+	}
+	return "yes"
 }
 
 func init() {

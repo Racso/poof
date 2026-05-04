@@ -12,6 +12,17 @@ type Store struct {
 	db *sql.DB
 }
 
+// CI modes select the shape of the GitHub Actions workflow Poof! commits.
+//   - managed:  the workflow runs on its own (push-triggered); current default.
+//   - callable: the workflow is a reusable workflow (on: workflow_call),
+//     meant to be invoked from a user-owned outer workflow that adds
+//     surrounding steps (tests, lint, matrix builds, etc.).
+// CIMode is irrelevant when CI is false; persisted defaults to "managed".
+const (
+	CIModeManaged  = "managed"
+	CIModeCallable = "callable"
+)
+
 type Project struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
@@ -25,6 +36,7 @@ type Project struct {
 	Static    string    `json:"static"`
 	Build     bool      `json:"build"`
 	CI        bool      `json:"ci"`
+	CIMode    string    `json:"ci_mode"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -104,6 +116,7 @@ func (s *Store) migrate() error {
 			static     TEXT NOT NULL DEFAULT '',
 			build      INTEGER NOT NULL DEFAULT 0,
 			ci         INTEGER NOT NULL DEFAULT 1,
+			ci_mode    TEXT NOT NULL DEFAULT 'managed',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
@@ -174,6 +187,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN static TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN build INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci_mode TEXT NOT NULL DEFAULT 'managed'`)
 
 	// Structural migration: add project IDs, rewrite deployments table.
 	if err := s.migrateProjectIDs(); err != nil {
@@ -227,13 +241,14 @@ func (s *Store) migrateProjectIDs() error {
 		static     TEXT NOT NULL DEFAULT '',
 		build      INTEGER NOT NULL DEFAULT 0,
 		ci         INTEGER NOT NULL DEFAULT 1,
+		ci_mode    TEXT NOT NULL DEFAULT 'managed',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		return fmt.Errorf("create projects_new: %w", err)
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, created_at)
-		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, created_at
+		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, created_at)
+		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, created_at
 		FROM projects
 	`); err != nil {
 		return fmt.Errorf("copy projects: %w", err)
@@ -278,10 +293,13 @@ func (s *Store) migrateProjectIDs() error {
 // --- Projects ---
 
 func (s *Store) CreateProject(p Project) error {
+	if p.CIMode == "" {
+		p.CIMode = CIModeManaged
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci)
-		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode)
+		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -292,9 +310,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt)
+	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -306,7 +324,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -317,7 +335,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -373,9 +391,12 @@ func (s *Store) CountCIEnabledProjectsForRepo(repo, excludeName string) (int, er
 }
 
 func (s *Store) UpdateProject(p Project) error {
+	if p.CIMode == "" {
+		p.CIMode = CIModeManaged
+	}
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=?, ci_mode=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.Name,
 	)
 	return err
 }

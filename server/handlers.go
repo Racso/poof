@@ -138,6 +138,7 @@ type createProjectRequest struct {
 	Static  string `json:"static"`
 	Build   bool   `json:"build"`
 	CI      *bool  `json:"ci"`
+	CIMode  string `json:"ci_mode"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +178,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	ci := true
 	if req.CI != nil {
 		ci = *req.CI
+	}
+
+	// ciMode defaults to managed; validate when set.
+	ciMode := store.CIModeManaged
+	if req.CIMode != "" {
+		if req.CIMode != store.CIModeManaged && req.CIMode != store.CIModeCallable {
+			jsonError(w, fmt.Sprintf("ci_mode must be %q or %q", store.CIModeManaged, store.CIModeCallable), http.StatusBadRequest)
+			return
+		}
+		ciMode = req.CIMode
 	}
 
 	// Apply subpath default and validate
@@ -234,6 +245,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Static:  req.Static,
 		Build:   req.Build,
 		CI:      ci,
+		CIMode:  ciMode,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -249,12 +261,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.settingGitHubUser()
 			repoName = req.Repo
 		}
-		if err := client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static, req.Build); err != nil {
+		if err := client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static, p.CIMode, req.Build); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 		}
 	}
 
-	log.Printf("project created: %s (repo=%s branch=%s image=%s static=%s build=%v ci=%v)", p.Name, p.Repo, p.Branch, p.Image, p.Static, p.Build, p.CI)
+	log.Printf("project created: %s (repo=%s branch=%s image=%s static=%s build=%v ci=%v mode=%s)", p.Name, p.Repo, p.Branch, p.Image, p.Static, p.Build, p.CI, p.CIMode)
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, p)
 }
@@ -277,7 +289,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ciChanged := false
+	ciChanged, ciModeChanged := false, false
 	repoChanged, branchChanged, folderChanged, staticChanged, buildChanged := false, false, false, false, false
 
 	for key, val := range patch {
@@ -340,6 +352,15 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 				ciChanged = v != p.CI
 				p.CI = v
 			}
+		case "ci_mode":
+			if v, ok := val.(string); ok && v != "" {
+				if v != store.CIModeManaged && v != store.CIModeCallable {
+					jsonError(w, fmt.Sprintf("ci_mode must be %q or %q", store.CIModeManaged, store.CIModeCallable), http.StatusBadRequest)
+					return
+				}
+				ciModeChanged = v != p.CIMode
+				p.CIMode = v
+			}
 		}
 	}
 
@@ -363,7 +384,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged || staticChanged || buildChanged || ciChanged) {
+	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged || staticChanged || buildChanged || ciChanged || ciModeChanged) {
 		client := s.ghFactory(s.settingGitHubToken())
 		owner, repoName, found := strings.Cut(p.Repo, "/")
 		if !found {
@@ -372,7 +393,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		repoToken, _ := s.store.GetRepoToken(p.Repo)
 		ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
-		if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.Build, ciSiblings == 0); err != nil {
+		if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
 			log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
 		}
 		if !p.CI && ciSiblings == 0 {
@@ -516,6 +537,7 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 		Static:  source.Static,
 		Build:   source.Build,
 		CI:      source.CI,
+		CIMode:  source.CIMode,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -541,7 +563,7 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 			owner = s.settingGitHubUser()
 			repoName = source.Repo
 		}
-		if err := client.SetRepoCI(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static, p.Build); err != nil {
+		if err := client.SetRepoCI(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", cloneName, err)
 		}
 	}
@@ -587,7 +609,7 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
-	if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.Build, ciSiblings == 0); err != nil {
+	if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
 		jsonError(w, fmt.Sprintf("GitHub CI refresh failed: %v", err), http.StatusInternalServerError)
 		return
 	}

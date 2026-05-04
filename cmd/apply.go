@@ -20,7 +20,7 @@ type projectSpec struct {
 	Port   int
 	Static string
 	Build  string // "yes"/"no" or empty
-	CI     string // "yes"/"no" or empty (server default)
+	CI     string // "yes"/"no"/"callable" or empty (server default)
 }
 
 type remoteProject struct {
@@ -33,6 +33,7 @@ type remoteProject struct {
 	Static  string `json:"static"`
 	Build   bool   `json:"build"`
 	CI      bool   `json:"ci"`
+	CIMode  string `json:"ci_mode"`
 	Running bool   `json:"running"`
 }
 
@@ -178,12 +179,15 @@ Example file (poof.ini):
 				payload["build"] = build
 			}
 			if spec.CI != "" {
-				ci, err := parseCIFlag(spec.CI)
+				ci, mode, err := parseCIModeFlag(spec.CI)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  error: %s has invalid ci value: %v\n", spec.Name, err)
 					continue
 				}
 				payload["ci"] = ci
+				if mode != "" {
+					payload["ci_mode"] = mode
+				}
 			}
 			var result map[string]interface{}
 			if err := apiPost("/projects", payload, &result); err != nil {
@@ -251,9 +255,15 @@ func buildPatch(spec projectSpec, cur remoteProject) map[string]interface{} {
 		}
 	}
 	if spec.CI != "" {
-		ci, err := parseCIFlag(spec.CI)
-		if err == nil && ci != cur.CI {
-			patch["ci"] = ci
+		ci, mode, err := parseCIModeFlag(spec.CI)
+		if err == nil {
+			if ci != cur.CI {
+				patch["ci"] = ci
+			}
+			// Also patch ci_mode when it differs (only meaningful when CI is on).
+			if ci && mode != "" && mode != cur.CIMode {
+				patch["ci_mode"] = mode
+			}
 		}
 	}
 	return patch

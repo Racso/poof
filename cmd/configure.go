@@ -82,11 +82,14 @@ The project token is never affected — GitHub Actions integrations remain valid
 			payload["build"] = false
 		}
 		if ciSet {
-			ci, err := parseCIFlag(ciVal)
+			ci, mode, err := parseCIModeFlag(ciVal)
 			if err != nil {
 				fatal("%v", err)
 			}
 			payload["ci"] = ci
+			if mode != "" {
+				payload["ci_mode"] = mode
+			}
 		}
 
 		if len(payload) == 0 {
@@ -132,5 +135,5 @@ func init() {
 	configureCmd.Flags().Bool("no-spa", false, "disable SPA mode (revert to plain static)")
 	configureCmd.Flags().Bool("build", false, "use Dockerfile to build static files")
 	configureCmd.Flags().Bool("no-build", false, "disable Dockerfile build for static files")
-	configureCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
+	configureCmd.Flags().String("ci", "", "CI workflow setup: yes (push-triggered), no, or callable (reusable workflow)")
 }

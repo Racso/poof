@@ -135,8 +135,14 @@ Static sites:
 			payload["build"] = true
 		}
 		if ciVal != "" {
-			ci, _ := parseCIFlag(ciVal)
+			ci, mode, err := parseCIModeFlag(ciVal)
+			if err != nil {
+				fatal("%v", err)
+			}
 			payload["ci"] = ci
+			if mode != "" {
+				payload["ci_mode"] = mode
+			}
 		}
 
 		var result map[string]interface{}
@@ -197,5 +203,5 @@ func init() {
 	addCmd.Flags().Bool("static", false, "deploy as a static site served by Caddy")
 	addCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
 	addCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
-	addCmd.Flags().String("ci", "", "enable/disable automatic CI workflow setup (yes/no)")
+	addCmd.Flags().String("ci", "", "CI workflow setup: yes (push-triggered), no, or callable (reusable workflow)")
 }
