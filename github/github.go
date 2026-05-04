@@ -288,7 +288,19 @@ type getFileResponse struct {
 // any file at this path is considered Poof's and will be overwritten
 // or removed without further checks.
 func workflowPath(owner, repo, projectName string) string {
-	return fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-auto-ci-%s.yml", owner, repo, projectName)
+	return fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, workflowFileNew(projectName))
+}
+
+// workflowFileNew is the canonical (post-v0.16.0) path to a project's
+// Poof-managed workflow file, relative to the repo root.
+func workflowFileNew(projectName string) string {
+	return fmt.Sprintf(".github/workflows/poof-auto-ci-%s.yml", projectName)
+}
+
+// workflowFileLegacy is the pre-v0.16.0 path. Only referenced by the
+// migration diagnostic; production code never writes here.
+func workflowFileLegacy(projectName string) string {
+	return fmt.Sprintf(".github/workflows/poof-%s.yml", projectName)
 }
 
 // imageBase strips any tag from image and returns the bare image reference.
@@ -433,6 +445,159 @@ func (c *Client) deleteWorkflow(owner, repo, projectName string) error {
 	return nil
 }
 
+// --- Workflow migration diagnostic ---
+
+// WorkflowDiagnostic describes the GitHub state of a single project's
+// Poof-managed workflow file, used by `poof migrate workflows`.
+//
+// All booleans report observed facts; classification (which actions are
+// safe, what summary state to display) is left to the caller so new
+// states can be added without server-side changes.
+type WorkflowDiagnostic struct {
+	Project          string              `json:"project"`
+	Repo             string              `json:"repo"` // "owner/repo"
+	CI               bool                `json:"ci"`
+	OldPath          string              `json:"old_path"`
+	NewPath          string              `json:"new_path"`
+	OldPathExists    bool                `json:"old_path_exists"`
+	OldPathHasMarker bool                `json:"old_path_has_marker"`
+	NewPathExists    bool                `json:"new_path_exists"`
+	References       []WorkflowReference `json:"references,omitempty"`
+	// Error is set when the diagnostic could not be completed (e.g. GitHub
+	// API failure). Other fields may be partially populated.
+	Error string `json:"error,omitempty"`
+}
+
+// WorkflowReference is a `uses:` (or similar) reference to a project's
+// legacy workflow path found in some other workflow file in the repo.
+type WorkflowReference struct {
+	Path string `json:"path"` // e.g. ".github/workflows/clip-api.yml"
+	Line int    `json:"line"` // 1-based
+	Hint string `json:"hint"` // trimmed line content
+}
+
+// WorkflowMigrationDiagnostic gathers the GitHub-side state needed to
+// decide whether a project's workflow file should be renamed from the
+// pre-v0.16.0 path to the canonical poof-auto-ci-<name>.yml.
+//
+// `ci` is the project's CI flag (passed in by the caller; we don't
+// re-derive it from GitHub). It's threaded through onto the result so
+// the CLI can decide what's expected vs unexpected at a glance.
+func (c *Client) WorkflowMigrationDiagnostic(owner, repo, projectName string, ci bool) (*WorkflowDiagnostic, error) {
+	d := &WorkflowDiagnostic{
+		Project: projectName,
+		Repo:    fmt.Sprintf("%s/%s", owner, repo),
+		CI:      ci,
+		OldPath: workflowFileLegacy(projectName),
+		NewPath: workflowFileNew(projectName),
+	}
+
+	// Old path
+	oldContent, found, err := c.getFileContent(owner, repo, d.OldPath)
+	if err != nil {
+		d.Error = fmt.Sprintf("checking %s: %v", d.OldPath, err)
+		return d, nil
+	}
+	d.OldPathExists = found
+	if found {
+		firstLine, _, _ := strings.Cut(oldContent, "\n")
+		d.OldPathHasMarker = strings.HasPrefix(firstLine, workflowMarkerBanner)
+	}
+
+	// New path
+	_, newFound, err := c.getFileContent(owner, repo, d.NewPath)
+	if err != nil {
+		d.Error = fmt.Sprintf("checking %s: %v", d.NewPath, err)
+		return d, nil
+	}
+	d.NewPathExists = newFound
+
+	// References — only relevant if the old file still exists. For an
+	// already-migrated project there's nothing to point at.
+	if d.OldPathExists {
+		refs, err := c.findWorkflowReferences(owner, repo, d.OldPath, d.NewPath)
+		if err != nil {
+			// Non-fatal: report what we have plus the error.
+			d.Error = fmt.Sprintf("scanning references: %v", err)
+		} else {
+			d.References = refs
+		}
+	}
+
+	return d, nil
+}
+
+// workflowMarkerBanner is the leading line Poof has historically written
+// at the top of each managed workflow file. As of v0.16.0 it carries no
+// behavioral meaning, but the migration diagnostic reads it as a signal
+// that an old-path file is very likely Poof's (and not user-authored).
+const workflowMarkerBanner = "# [poof-auto-ci]"
+
+type contentsListEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Type string `json:"type"`
+}
+
+// getFileContent fetches a single file's content, returning ("", false, nil)
+// when the file does not exist (404). Any other error is propagated.
+func (c *Client) getFileContent(owner, repo, repoPath string) (string, bool, error) {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, repoPath)
+	var f getFileResponse
+	found, err := c.getMaybe(apiPath, &f)
+	if err != nil || !found {
+		return "", found, err
+	}
+	content, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(f.Content, "\n", ""))
+	if err != nil {
+		return "", true, fmt.Errorf("decode content: %w", err)
+	}
+	return string(content), true, nil
+}
+
+// findWorkflowReferences grep-scans every other workflow file in
+// .github/workflows/ for a `./<oldPath>` reference. Used by the migration
+// diagnostic to surface user-owned outer workflows whose `uses:` target
+// would break after the rename.
+func (c *Client) findWorkflowReferences(owner, repo, oldPath, newPath string) ([]WorkflowReference, error) {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows", owner, repo)
+	var entries []contentsListEntry
+	found, err := c.getMaybe(apiPath, &entries)
+	if err != nil || !found {
+		return nil, err
+	}
+
+	needle := "./" + oldPath
+	var refs []WorkflowReference
+	for _, e := range entries {
+		if e.Type != "file" {
+			continue
+		}
+		// Skip the project's own old/new workflow files; we're hunting
+		// for references in user-owned workflows, not Poof's own.
+		if e.Path == oldPath || e.Path == newPath {
+			continue
+		}
+		if !strings.HasSuffix(e.Name, ".yml") && !strings.HasSuffix(e.Name, ".yaml") {
+			continue
+		}
+		content, _, err := c.getFileContent(owner, repo, e.Path)
+		if err != nil {
+			continue
+		}
+		for i, line := range strings.Split(content, "\n") {
+			if strings.Contains(line, needle) {
+				refs = append(refs, WorkflowReference{
+					Path: e.Path,
+					Line: i + 1,
+					Hint: strings.TrimSpace(line),
+				})
+			}
+		}
+	}
+	return refs, nil
+}
+
 // --- HTTP helpers ---
 
 func (c *Client) get(path string, out interface{}) error {
@@ -453,6 +618,39 @@ func (c *Client) get(path string, out interface{}) error {
 		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// getMaybe is like get, but distinguishes 404 from other errors. The
+// returned `found` flag is false on 404 (with a nil error); other 4xx/5xx
+// or transport failures still come back as errors. Useful for diagnostic
+// flows that want to ask "does this file exist?" without papering over
+// real failures.
+func (c *Client) getMaybe(path string, out interface{}) (found bool, err error) {
+	req, err := http.NewRequest("GET", apiBase+path, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return false, fmt.Errorf("decode response: %w", err)
+		}
+	}
+	return true, nil
 }
 
 func (c *Client) put(path string, payload interface{}) error {

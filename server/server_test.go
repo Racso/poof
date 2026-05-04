@@ -12,6 +12,7 @@ import (
 
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/defaults"
+	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/server"
 	"github.com/racso/poof/store"
 )
@@ -19,9 +20,16 @@ import (
 // --- Mock RepoManager ---
 
 type mockRepoManager struct {
-	setupCalls   []mockSetupCall
-	removeCalls  []mockRemoveCall
-	refreshCalls []mockRefreshCall
+	setupCalls       []mockSetupCall
+	removeCalls      []mockRemoveCall
+	refreshCalls     []mockRefreshCall
+	diagnosticCalls  []mockDiagnosticCall
+	diagnosticByName map[string]*gh.WorkflowDiagnostic
+}
+
+type mockDiagnosticCall struct {
+	Owner, Repo, ProjectName string
+	CI                       bool
 }
 
 type mockSetupCall struct {
@@ -55,6 +63,20 @@ func (m *mockRepoManager) RemoveRepoCI(owner, repo, projectName string, deleteSe
 func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error {
 	m.refreshCalls = append(m.refreshCalls, mockRefreshCall{owner, repo, projectName, ci, poofURL, repoToken, branch, image, folder, static, ciMode, build, deleteSecrets})
 	return nil
+}
+
+func (m *mockRepoManager) WorkflowMigrationDiagnostic(owner, repo, projectName string, ci bool) (*gh.WorkflowDiagnostic, error) {
+	m.diagnosticCalls = append(m.diagnosticCalls, mockDiagnosticCall{owner, repo, projectName, ci})
+	if d, ok := m.diagnosticByName[projectName]; ok {
+		return d, nil
+	}
+	return &gh.WorkflowDiagnostic{
+		Project: projectName,
+		Repo:    fmt.Sprintf("%s/%s", owner, repo),
+		CI:      ci,
+		OldPath: fmt.Sprintf(".github/workflows/poof-%s.yml", projectName),
+		NewPath: fmt.Sprintf(".github/workflows/poof-auto-ci-%s.yml", projectName),
+	}, nil
 }
 
 // --- Mock ContainerManager ---
@@ -828,6 +850,96 @@ func TestUpdateProjectRejectsBogusCIMode(t *testing.T) {
 	if len(mocks.repo.refreshCalls) != 0 {
 		t.Errorf("expected no RefreshProjectCI calls on validation failure, got %d",
 			len(mocks.repo.refreshCalls))
+	}
+}
+
+// --- Workflow migration diagnostic ---
+
+func TestMigrateWorkflows412WithoutGitHubPAT(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	// no github-token set
+	rr := do(t, srv, "GET", "/migrate/workflows", nil, globalToken)
+	if rr.Code != http.StatusPreconditionFailed {
+		t.Errorf("expected 412 without PAT, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestMigrateWorkflowsAggregatesPerProject(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	// Two projects so we can verify both ordering and that each is asked
+	// independently. Tier of CI/CIMode shouldn't matter for the diagnostic;
+	// only the project list and PAT do.
+	st.CreateProject(store.Project{
+		Name: "alpha", Domain: "alpha.rac.so", Image: "ghcr.io/racso/alpha",
+		Repo: "racso/alpha", Branch: "main", Port: 80, CI: true, CIMode: store.CIModeManaged,
+	})
+	st.CreateProject(store.Project{
+		Name: "beta", Domain: "beta.rac.so", Image: "ghcr.io/racso/beta",
+		Repo: "racso/beta", Branch: "main", Port: 80, CI: false, CIMode: store.CIModeManaged,
+	})
+
+	// Pre-load canned diagnostics so we can assert the handler threads them
+	// through unchanged.
+	mocks.repo.diagnosticByName = map[string]*gh.WorkflowDiagnostic{
+		"alpha": {
+			Project: "alpha", Repo: "racso/alpha", CI: true,
+			OldPath:       ".github/workflows/poof-alpha.yml",
+			NewPath:       ".github/workflows/poof-auto-ci-alpha.yml",
+			OldPathExists: true, OldPathHasMarker: true,
+		},
+		"beta": {
+			Project: "beta", Repo: "racso/beta", CI: false,
+			OldPath: ".github/workflows/poof-beta.yml",
+			NewPath: ".github/workflows/poof-auto-ci-beta.yml",
+		},
+	}
+
+	rr := do(t, srv, "GET", "/migrate/workflows", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("migrate: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Diagnostics []map[string]any `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Diagnostics) != 2 {
+		t.Fatalf("expected 2 diagnostics, got %d", len(resp.Diagnostics))
+	}
+
+	// Mock was consulted once per project, with the right ci flag forwarded.
+	if len(mocks.repo.diagnosticCalls) != 2 {
+		t.Fatalf("expected 2 diagnostic calls, got %d", len(mocks.repo.diagnosticCalls))
+	}
+	byName := map[string]mockDiagnosticCall{}
+	for _, c := range mocks.repo.diagnosticCalls {
+		byName[c.ProjectName] = c
+	}
+	if !byName["alpha"].CI || byName["beta"].CI {
+		t.Errorf("CI flags forwarded incorrectly: alpha.CI=%v beta.CI=%v",
+			byName["alpha"].CI, byName["beta"].CI)
+	}
+	if byName["alpha"].Owner != "racso" || byName["alpha"].Repo != "alpha" {
+		t.Errorf("alpha owner/repo: %s/%s", byName["alpha"].Owner, byName["alpha"].Repo)
+	}
+
+	// Diagnostic content threaded through.
+	for _, d := range resp.Diagnostics {
+		switch d["project"] {
+		case "alpha":
+			if d["old_path_exists"] != true || d["old_path_has_marker"] != true {
+				t.Errorf("alpha diagnostic: %+v", d)
+			}
+		case "beta":
+			if d["old_path_exists"] != false || d["new_path_exists"] != false {
+				t.Errorf("beta diagnostic: %+v", d)
+			}
+		}
 	}
 }
 

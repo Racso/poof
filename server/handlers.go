@@ -1253,6 +1253,51 @@ func (s *Server) deleteCaddySnippet(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
+// diagnoseWorkflowMigration walks every project and reports whether its
+// GitHub workflow file lives at the legacy path (poof-<name>.yml) or the
+// canonical v0.16.0+ path (poof-auto-ci-<name>.yml), plus any other
+// workflow files in the same repo that still `uses:` the legacy path.
+//
+// Read-only — never modifies anything on GitHub. The CLI consumes this
+// to render `poof migrate workflows` output. Skips projects with CI
+// disabled (no Poof workflow file expected) and projects in repos
+// outside the configured GitHub user when no PAT is set.
+func (s *Server) diagnoseWorkflowMigration(w http.ResponseWriter, r *http.Request) {
+	if s.settingGitHubToken() == "" {
+		jsonError(w, "no GitHub PAT configured on server", http.StatusPreconditionFailed)
+		return
+	}
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	client := s.ghFactory(s.settingGitHubToken())
+	diagnostics := make([]any, 0, len(projects))
+	for _, p := range projects {
+		owner, repoName, found := strings.Cut(p.Repo, "/")
+		if !found {
+			owner = s.settingGitHubUser()
+			repoName = p.Repo
+		}
+		d, err := client.WorkflowMigrationDiagnostic(owner, repoName, p.Name, p.CI)
+		if err != nil {
+			// Surface the project entry with an error string and keep going —
+			// one bad project shouldn't sink the whole report.
+			diagnostics = append(diagnostics, map[string]any{
+				"project": p.Name,
+				"repo":    p.Repo,
+				"ci":      p.CI,
+				"error":   err.Error(),
+			})
+			continue
+		}
+		diagnostics = append(diagnostics, d)
+	}
+	jsonOK(w, map[string]any{"diagnostics": diagnostics})
+}
+
 // syncCaddy regenerates the full Caddyfile from the current database state and
 // pushes it to the Caddy admin API for a zero-downtime reload.
 func (s *Server) syncCaddy() error {
