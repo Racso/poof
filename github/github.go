@@ -476,6 +476,46 @@ type WorkflowReference struct {
 	Hint string `json:"hint"` // trimmed line content
 }
 
+// DeleteLegacyWorkflow removes a project's pre-v0.16.0 workflow file
+// (.github/workflows/poof-<name>.yml). Idempotent: returns nil if the
+// file is already absent. Used by `poof migrate workflows --apply` to
+// clean up after the rename to the canonical path.
+func (c *Client) DeleteLegacyWorkflow(owner, repo, projectName string) error {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, workflowFileLegacy(projectName))
+	var existing getFileResponse
+	found, err := c.getMaybe(apiPath, &existing)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+
+	payload := map[string]string{
+		"message": "chore: remove legacy Poof! workflow path",
+		"sha":     existing.SHA,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest("DELETE", apiBase+apiPath, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
+	}
+	return nil
+}
+
 // WorkflowMigrationDiagnostic gathers the GitHub-side state needed to
 // decide whether a project's workflow file should be renamed from the
 // pre-v0.16.0 path to the canonical poof-auto-ci-<name>.yml.

@@ -1298,6 +1298,145 @@ func (s *Server) diagnoseWorkflowMigration(w http.ResponseWriter, r *http.Reques
 	jsonOK(w, map[string]any{"diagnostics": diagnostics})
 }
 
+// applyWorkflowMigration renames the GitHub workflow file from the
+// pre-v0.16.0 path (poof-<name>.yml) to the canonical
+// poof-auto-ci-<name>.yml for the requested set of projects.
+//
+// Filter (request body):
+//   - {} (empty)              → every project (caller must opt in via --all on the CLI)
+//   - {"project": "name"}     → just that project
+//   - {"repo": "Owner/repo"}  → every project in that repo
+//
+// For each in-scope project the handler regenerates the workflow at the
+// new path (reusing the SetRepoCI flow that already targets the new
+// path post-v0.16.0) and then deletes the file at the legacy path.
+// Idempotent: re-running on a project that's already at the new path
+// is a no-op.
+func (s *Server) applyWorkflowMigration(w http.ResponseWriter, r *http.Request) {
+	if s.settingGitHubToken() == "" {
+		jsonError(w, "no GitHub PAT configured on server", http.StatusPreconditionFailed)
+		return
+	}
+
+	var req struct {
+		Project string `json:"project"`
+		Repo    string `json:"repo"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	all, err := s.store.ListProjects()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Apply filter. If both project and repo are given, project wins
+	// (more specific).
+	var targets []store.Project
+	switch {
+	case req.Project != "":
+		for _, p := range all {
+			if p.Name == req.Project {
+				targets = append(targets, p)
+				break
+			}
+		}
+		if len(targets) == 0 {
+			jsonError(w, fmt.Sprintf("project %q not found", req.Project), http.StatusNotFound)
+			return
+		}
+	case req.Repo != "":
+		for _, p := range all {
+			if p.Repo == req.Repo {
+				targets = append(targets, p)
+			}
+		}
+		if len(targets) == 0 {
+			jsonError(w, fmt.Sprintf("no projects in repo %q", req.Repo), http.StatusNotFound)
+			return
+		}
+	default:
+		targets = all
+	}
+
+	client := s.ghFactory(s.settingGitHubToken())
+	results := make([]map[string]any, 0, len(targets))
+
+	for _, p := range targets {
+		owner, repoName, found := strings.Cut(p.Repo, "/")
+		if !found {
+			owner = s.settingGitHubUser()
+			repoName = p.Repo
+		}
+
+		entry := map[string]any{
+			"project":  p.Name,
+			"repo":     p.Repo,
+			"old_path": fmt.Sprintf(".github/workflows/poof-%s.yml", p.Name),
+			"new_path": fmt.Sprintf(".github/workflows/poof-auto-ci-%s.yml", p.Name),
+		}
+
+		if !p.CI {
+			entry["status"] = "skipped"
+			entry["reason"] = "ci_disabled"
+			results = append(results, entry)
+			continue
+		}
+
+		// Pre-flight: if the legacy path doesn't exist, there's nothing
+		// to migrate — skip without touching the new path either, since
+		// it's likely already migrated and a refresh would be busywork.
+		diag, derr := client.WorkflowMigrationDiagnostic(owner, repoName, p.Name, p.CI)
+		if derr != nil {
+			entry["status"] = "error"
+			entry["error"] = fmt.Sprintf("diagnostic: %v", derr)
+			results = append(results, entry)
+			continue
+		}
+		if !diag.OldPathExists {
+			entry["status"] = "skipped"
+			if diag.NewPathExists {
+				entry["reason"] = "already_migrated"
+			} else {
+				entry["reason"] = "no_legacy_workflow"
+			}
+			results = append(results, entry)
+			continue
+		}
+
+		// Step 1: write the workflow at the new path (post-v0.16.0
+		// SetRepoCI already targets the canonical path).
+		repoToken, _ := s.store.GetRepoToken(p.Repo)
+		if err := client.SetRepoCI(owner, repoName, p.Name, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build); err != nil {
+			entry["status"] = "error"
+			entry["error"] = fmt.Sprintf("write new path: %v", err)
+			results = append(results, entry)
+			continue
+		}
+
+		// Step 2: delete the legacy file. If this fails we end up in
+		// "partial" state, which the diagnostic detects and a re-run
+		// can clean up. Not fatal.
+		if err := client.DeleteLegacyWorkflow(owner, repoName, p.Name); err != nil {
+			entry["status"] = "partial"
+			entry["error"] = fmt.Sprintf("delete legacy: %v", err)
+			results = append(results, entry)
+			continue
+		}
+
+		entry["status"] = "renamed"
+		results = append(results, entry)
+		log.Printf("workflow migrated: %s (%s → %s)", p.Name, entry["old_path"], entry["new_path"])
+	}
+
+	jsonOK(w, map[string]any{"results": results})
+}
+
 // syncCaddy regenerates the full Caddyfile from the current database state and
 // pushes it to the Caddy admin API for a zero-downtime reload.
 func (s *Server) syncCaddy() error {

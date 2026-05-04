@@ -25,6 +25,7 @@ type RepoManager interface {
 	RemoveRepoCI(owner, repo, projectName string, deleteSecrets bool) error
 	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error
 	WorkflowMigrationDiagnostic(owner, repo, projectName string, ci bool) (*gh.WorkflowDiagnostic, error)
+	DeleteLegacyWorkflow(owner, repo, projectName string) error
 }
 
 // ContainerManager abstracts Docker container operations.
@@ -162,6 +163,7 @@ func (s *Server) handler() http.Handler {
 
 	// One-shot migrations (e.g. v0.16.0 workflow filename rename).
 	mux.HandleFunc("GET /migrate/workflows", s.auth(s.diagnoseWorkflowMigration))
+	mux.HandleFunc("POST /migrate/workflows", s.auth(s.applyWorkflowMigration))
 
 	return mux
 }

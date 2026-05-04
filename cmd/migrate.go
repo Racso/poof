@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -76,16 +77,53 @@ func classify(d workflowDiagnostic) string {
 }
 
 var migrateWorkflowsCmd = &cobra.Command{
-	Use:   "workflows",
+	Use:   "workflows [project]",
 	Short: "Diagnose (or rename, with --apply) Poof-managed workflow files",
 	Long: `Diagnose the GitHub state of every project's workflow file and report
 which ones still live at the legacy path .github/workflows/poof-<name>.yml
 versus the canonical v0.16.0+ path .github/workflows/poof-auto-ci-<name>.yml.
 
-By default this is read-only — the report tells you what would happen,
-nothing is changed on GitHub. (--apply is not yet implemented; coming in
-a follow-up release.)`,
+Diagnostic mode (default) is read-only and always safe.
+
+Apply mode (--apply) actually performs the rename. To prevent fat-
+fingered wide-blast operations, --apply REQUIRES an explicit scope:
+  --all              every project Poof manages
+  <project>          a single project (positional argument)
+  --repo Owner/foo   every project in the given repo
+
+Apply is idempotent: projects already at the new path are skipped.`,
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		apply, _ := cmd.Flags().GetBool("apply")
+		all, _ := cmd.Flags().GetBool("all")
+		repo, _ := cmd.Flags().GetString("repo")
+		var project string
+		if len(args) == 1 {
+			project = args[0]
+		}
+
+		if apply {
+			scopes := 0
+			if all {
+				scopes++
+			}
+			if repo != "" {
+				scopes++
+			}
+			if project != "" {
+				scopes++
+			}
+			if scopes != 1 {
+				fatal("--apply requires exactly one of: --all, <project>, or --repo <owner/repo>")
+			}
+			runApply(project, repo)
+			return
+		}
+
+		// Diagnostic mode (read-only). Scope flags are tolerated for symmetry
+		// but unused here — the server always returns all projects and the
+		// CLI filters in render. (Filter-on-server for diagnostic is a future
+		// optimization if reports get large.)
 		var resp migrateWorkflowsResponse
 		if err := apiGet("/migrate/workflows", &resp); err != nil {
 			fatal("%v", err)
@@ -152,6 +190,78 @@ a follow-up release.)`,
 func init() {
 	rootCmd.AddCommand(migrateCmd)
 	migrateCmd.AddCommand(migrateWorkflowsCmd)
+	migrateWorkflowsCmd.Flags().Bool("apply", false, "actually rename files (requires --all, <project>, or --repo)")
+	migrateWorkflowsCmd.Flags().Bool("all", false, "with --apply: target every project Poof manages")
+	migrateWorkflowsCmd.Flags().String("repo", "", "with --apply: target every project in this repo (owner/name)")
+}
+
+// --- apply ---
+
+type applyResult struct {
+	Project string `json:"project"`
+	Repo    string `json:"repo"`
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+	Status  string `json:"status"`            // "renamed" | "skipped" | "partial" | "error"
+	Reason  string `json:"reason,omitempty"`  // populated when Status == "skipped"
+	Error   string `json:"error,omitempty"`   // populated when Status == "error" or "partial"
+}
+
+type applyResponse struct {
+	Results []applyResult `json:"results"`
+}
+
+func runApply(project, repo string) {
+	body := map[string]string{}
+	if project != "" {
+		body["project"] = project
+	}
+	if repo != "" {
+		body["repo"] = repo
+	}
+
+	var resp applyResponse
+	if err := apiPost("/migrate/workflows", body, &resp); err != nil {
+		fatal("%v", err)
+	}
+
+	counts := map[string]int{}
+	for _, r := range resp.Results {
+		counts[r.Status]++
+
+		switch r.Status {
+		case "renamed":
+			fmt.Printf("✓ %s (%s)\n  %s → %s\n", r.Project, r.Repo, r.OldPath, r.NewPath)
+		case "skipped":
+			fmt.Printf("- %s (%s)  skipped (%s)\n", r.Project, r.Repo, r.Reason)
+		case "partial":
+			fmt.Printf("⚠ %s (%s)  partial — %s\n  new path written; legacy file still present\n", r.Project, r.Repo, r.Error)
+		case "error":
+			fmt.Printf("✗ %s (%s)  %s\n", r.Project, r.Repo, r.Error)
+		default:
+			fmt.Printf("? %s (%s)  unknown status %q\n", r.Project, r.Repo, r.Status)
+		}
+	}
+
+	fmt.Printf("\nDone. ")
+	parts := []string{}
+	if c := counts["renamed"]; c > 0 {
+		parts = append(parts, fmt.Sprintf("%d renamed", c))
+	}
+	if c := counts["skipped"]; c > 0 {
+		parts = append(parts, fmt.Sprintf("%d skipped", c))
+	}
+	if c := counts["partial"]; c > 0 {
+		parts = append(parts, fmt.Sprintf("%d partial", c))
+	}
+	if c := counts["error"]; c > 0 {
+		parts = append(parts, fmt.Sprintf("%d error", c))
+	}
+	if len(parts) == 0 {
+		fmt.Println("nothing to do.")
+	} else {
+		fmt.Println(strings.Join(parts, ", ") + ".")
+	}
 }
 
 // --- rendering helpers ---

@@ -20,11 +20,12 @@ import (
 // --- Mock RepoManager ---
 
 type mockRepoManager struct {
-	setupCalls       []mockSetupCall
-	removeCalls      []mockRemoveCall
-	refreshCalls     []mockRefreshCall
-	diagnosticCalls  []mockDiagnosticCall
-	diagnosticByName map[string]*gh.WorkflowDiagnostic
+	setupCalls        []mockSetupCall
+	removeCalls       []mockRemoveCall
+	refreshCalls      []mockRefreshCall
+	diagnosticCalls   []mockDiagnosticCall
+	deleteLegacyCalls []mockDeleteLegacyCall
+	diagnosticByName  map[string]*gh.WorkflowDiagnostic
 }
 
 type mockDiagnosticCall struct {
@@ -77,6 +78,15 @@ func (m *mockRepoManager) WorkflowMigrationDiagnostic(owner, repo, projectName s
 		OldPath: fmt.Sprintf(".github/workflows/poof-%s.yml", projectName),
 		NewPath: fmt.Sprintf(".github/workflows/poof-auto-ci-%s.yml", projectName),
 	}, nil
+}
+
+type mockDeleteLegacyCall struct {
+	Owner, Repo, ProjectName string
+}
+
+func (m *mockRepoManager) DeleteLegacyWorkflow(owner, repo, projectName string) error {
+	m.deleteLegacyCalls = append(m.deleteLegacyCalls, mockDeleteLegacyCall{owner, repo, projectName})
+	return nil
 }
 
 // --- Mock ContainerManager ---
@@ -940,6 +950,179 @@ func TestMigrateWorkflowsAggregatesPerProject(t *testing.T) {
 				t.Errorf("beta diagnostic: %+v", d)
 			}
 		}
+	}
+}
+
+// --- Apply migration ---
+
+func TestApplyMigration412WithoutGitHubPAT(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	rr := do(t, srv, "POST", "/migrate/workflows", map[string]string{"project": "alpha"}, globalToken)
+	if rr.Code != http.StatusPreconditionFailed {
+		t.Errorf("expected 412 without PAT, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestApplyMigrationRenamesSingleProject(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "alpha", Domain: "alpha.rac.so", Image: "ghcr.io/racso/alpha",
+		Repo: "racso/alpha", Branch: "main", Port: 80, CI: true, CIMode: store.CIModeManaged,
+	})
+	st.CreateProject(store.Project{
+		Name: "beta", Domain: "beta.rac.so", Image: "ghcr.io/racso/beta",
+		Repo: "racso/beta", Branch: "main", Port: 80, CI: true, CIMode: store.CIModeManaged,
+	})
+	st.SetRepoToken("racso/alpha", "tok-alpha")
+
+	mocks.repo.diagnosticByName = map[string]*gh.WorkflowDiagnostic{
+		"alpha": {Project: "alpha", OldPathExists: true},
+		"beta":  {Project: "beta", OldPathExists: true},
+	}
+
+	rr := do(t, srv, "POST", "/migrate/workflows", map[string]string{"project": "alpha"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("apply: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Results []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0]["project"] != "alpha" {
+		t.Fatalf("expected only alpha in results, got %+v", resp.Results)
+	}
+	if resp.Results[0]["status"] != "renamed" {
+		t.Errorf("status: got %v, want renamed", resp.Results[0]["status"])
+	}
+
+	if len(mocks.repo.setupCalls) != 1 || mocks.repo.setupCalls[0].ProjectName != "alpha" {
+		t.Errorf("expected SetRepoCI called once for alpha, got %+v", mocks.repo.setupCalls)
+	}
+	if len(mocks.repo.deleteLegacyCalls) != 1 || mocks.repo.deleteLegacyCalls[0].ProjectName != "alpha" {
+		t.Errorf("expected DeleteLegacyWorkflow called once for alpha, got %+v", mocks.repo.deleteLegacyCalls)
+	}
+}
+
+func TestApplyMigrationFiltersByRepo(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	// Two projects in the same repo, plus one in another.
+	st.CreateProject(store.Project{
+		Name: "frontend", Repo: "racso/dragon", Branch: "main", Port: 80,
+		CI: true, CIMode: store.CIModeManaged, Domain: "fe.rac.so", Image: "ghcr.io/racso/fe",
+	})
+	st.CreateProject(store.Project{
+		Name: "backend", Repo: "racso/dragon", Branch: "main", Port: 80,
+		CI: true, CIMode: store.CIModeManaged, Domain: "be.rac.so", Image: "ghcr.io/racso/be",
+	})
+	st.CreateProject(store.Project{
+		Name: "other", Repo: "racso/other", Branch: "main", Port: 80,
+		CI: true, CIMode: store.CIModeManaged, Domain: "o.rac.so", Image: "ghcr.io/racso/o",
+	})
+	mocks.repo.diagnosticByName = map[string]*gh.WorkflowDiagnostic{
+		"frontend": {Project: "frontend", OldPathExists: true},
+		"backend":  {Project: "backend", OldPathExists: true},
+		"other":    {Project: "other", OldPathExists: true},
+	}
+
+	rr := do(t, srv, "POST", "/migrate/workflows",
+		map[string]string{"repo": "racso/dragon"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("apply: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Results []map[string]any `json:"results"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if len(resp.Results) != 2 {
+		t.Fatalf("expected 2 results (frontend, backend), got %d", len(resp.Results))
+	}
+	for _, r := range resp.Results {
+		if r["repo"] != "racso/dragon" {
+			t.Errorf("unexpected repo in result: %v", r)
+		}
+	}
+	if len(mocks.repo.setupCalls) != 2 {
+		t.Errorf("expected 2 SetRepoCI calls, got %d", len(mocks.repo.setupCalls))
+	}
+}
+
+func TestApplyMigrationSkipsAlreadyMigrated(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "alpha", Repo: "racso/alpha", Branch: "main", Port: 80,
+		CI: true, CIMode: store.CIModeManaged, Domain: "a.rac.so", Image: "ghcr.io/racso/a",
+	})
+	mocks.repo.diagnosticByName = map[string]*gh.WorkflowDiagnostic{
+		"alpha": {Project: "alpha", OldPathExists: false, NewPathExists: true},
+	}
+
+	rr := do(t, srv, "POST", "/migrate/workflows",
+		map[string]string{"project": "alpha"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("apply: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Results []map[string]any `json:"results"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Results[0]["status"] != "skipped" || resp.Results[0]["reason"] != "already_migrated" {
+		t.Errorf("expected skipped/already_migrated, got %+v", resp.Results[0])
+	}
+	if len(mocks.repo.setupCalls) != 0 || len(mocks.repo.deleteLegacyCalls) != 0 {
+		t.Errorf("expected no GH writes for already-migrated project, got %d setup + %d delete",
+			len(mocks.repo.setupCalls), len(mocks.repo.deleteLegacyCalls))
+	}
+}
+
+func TestApplyMigrationSkipsCIDisabled(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "alpha", Repo: "racso/alpha", Branch: "main", Port: 80,
+		CI: false, CIMode: store.CIModeManaged, Domain: "a.rac.so", Image: "ghcr.io/racso/a",
+	})
+
+	rr := do(t, srv, "POST", "/migrate/workflows",
+		map[string]string{"project": "alpha"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("apply: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Results []map[string]any `json:"results"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Results[0]["status"] != "skipped" || resp.Results[0]["reason"] != "ci_disabled" {
+		t.Errorf("expected skipped/ci_disabled, got %+v", resp.Results[0])
+	}
+	if len(mocks.repo.diagnosticCalls) != 0 {
+		t.Errorf("expected no diagnostic call for CI-disabled project, got %d", len(mocks.repo.diagnosticCalls))
+	}
+}
+
+func TestApplyMigration404OnUnknownProject(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("github-token", "gh-pat-xxx")
+	rr := do(t, srv, "POST", "/migrate/workflows",
+		map[string]string{"project": "ghost"}, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d — %s", rr.Code, rr.Body.String())
 	}
 }
 
