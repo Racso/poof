@@ -17,7 +17,13 @@ import (
 const apiBase = "https://api.github.com"
 
 // Workflow templates are committed into each project repo at
-// .github/workflows/poof-<name>.yml. Placeholders replaced at commit time:
+// .github/workflows/poof-auto-ci-<name>.yml. The filename is the contract:
+// any file at that path is considered Poof-managed and will be overwritten
+// on refresh / removed on disable. The leading banner ("# [poof-auto-ci] …")
+// is informational only — readers are warned not to edit the file, but
+// nothing about it is verified by code.
+//
+// Placeholders replaced at commit time:
 //   POOF_TRIGGER_BLOCK → entire `on:` section, computed from ciMode
 //                        (managed = push trigger; callable = workflow_call)
 //   POOF_IMAGE_BASE    → Docker image base (without tag)
@@ -25,10 +31,6 @@ const apiBase = "https://api.github.com"
 //   POOF_PROJECT_NAME  → Poof! project name (may differ from GitHub repo name in monorepos)
 //   POOF_PKG_NAME      → GHCR package name for cleanup
 //   All projects in the same repo share a single POOF_TOKEN secret.
-// workflowMarker is the tag checked before reading or writing a workflow file.
-// Only files whose first line starts with this marker are considered Poof-managed;
-// commits and deletions refuse to touch anything else.
-const workflowMarker = "# [poof-auto-ci]"
 
 // CI mode strings. Kept aligned with store.CIMode* constants but redeclared
 // here to avoid an import cycle (server depends on both packages).
@@ -36,14 +38,6 @@ const (
 	CIModeManaged  = "managed"
 	CIModeCallable = "callable"
 )
-
-// isPoofManagedWorkflow reports whether the given workflow file content was
-// emitted by Poof! (i.e. starts with the auto-CI marker on its first line).
-// Empty or marker-less content is treated as user-owned.
-func isPoofManagedWorkflow(content string) bool {
-	firstLine, _, _ := strings.Cut(content, "\n")
-	return strings.HasPrefix(firstLine, workflowMarker)
-}
 
 // triggerBlock returns the YAML `on:` section for a workflow.
 //
@@ -289,6 +283,14 @@ type getFileResponse struct {
 	Content string `json:"content"`
 }
 
+// workflowPath returns the GitHub Contents API path for a project's
+// Poof-managed workflow file. The trailing filename is the contract:
+// any file at this path is considered Poof's and will be overwritten
+// or removed without further checks.
+func workflowPath(owner, repo, projectName string) string {
+	return fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-auto-ci-%s.yml", owner, repo, projectName)
+}
+
 // imageBase strips any tag from image and returns the bare image reference.
 func imageBase(image string) string {
 	return strings.SplitN(image, ":", 2)[0]
@@ -372,9 +374,11 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 	workflow = strings.ReplaceAll(workflow, "POOF_PROJECT_NAME", projectName)
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 
-	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-%s.yml", owner, repo, projectName)
+	path := workflowPath(owner, repo, projectName)
 
-	// Check if the file already exists (need SHA to update).
+	// Fetch the current SHA (required to update an existing file). If the
+	// file doesn't exist, sha stays empty and the PUT creates it. If it
+	// does exist and the content already matches, skip the commit.
 	var existing getFileResponse
 	sha := ""
 	if err := c.get(path, &existing); err == nil {
@@ -382,23 +386,8 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 		existingContent, decodeErr := base64.StdEncoding.DecodeString(
 			strings.ReplaceAll(existing.Content, "\n", ""),
 		)
-		if decodeErr == nil {
-			// Refuse to overwrite a user-owned file at this path. Without
-			// this guard, any operation that triggers commitWorkflow
-			// (refresh, configure, re-enable) silently clobbers
-			// hand-edited workflows. Symmetric with deleteWorkflow.
-			if !isPoofManagedWorkflow(string(existingContent)) {
-				return fmt.Errorf(
-					"refusing to overwrite non-Poof workflow at %s "+
-						"(missing %q marker on first line); "+
-						"remove or rename the file, or disable CI for this project",
-					path, workflowMarker,
-				)
-			}
-			// Skip commit if content is unchanged.
-			if string(existingContent) == workflow {
-				return nil
-			}
+		if decodeErr == nil && string(existingContent) == workflow {
+			return nil
 		}
 	}
 
@@ -411,23 +400,11 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 }
 
 func (c *Client) deleteWorkflow(owner, repo, projectName string) error {
-	path := fmt.Sprintf("/repos/%s/%s/contents/.github/workflows/poof-%s.yml", owner, repo, projectName)
+	path := workflowPath(owner, repo, projectName)
 
 	var existing getFileResponse
 	if err := c.get(path, &existing); err != nil {
 		return nil // file doesn't exist, nothing to delete
-	}
-
-	// Only delete files that start with the Poof auto-CI marker.
-	// This protects custom workflow files the user may have created.
-	content, err := base64.StdEncoding.DecodeString(
-		strings.ReplaceAll(existing.Content, "\n", ""),
-	)
-	if err != nil {
-		return fmt.Errorf("decode workflow content: %w", err)
-	}
-	if !isPoofManagedWorkflow(string(content)) {
-		return nil // not a Poof-managed file, leave it alone
 	}
 
 	payload := map[string]string{
