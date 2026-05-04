@@ -716,6 +716,121 @@ func TestUpdateProjectRefreshesCIOnBranchChange(t *testing.T) {
 	}
 }
 
+// --- CI mode (callable / managed) ---
+
+func TestCreateProjectDefaultsCIModeToManaged(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "web"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	p, _ := st.GetProject("web")
+	if p.CIMode != store.CIModeManaged {
+		t.Errorf("persisted ci_mode: got %q, want %q", p.CIMode, store.CIModeManaged)
+	}
+	if len(mocks.repo.setupCalls) != 1 {
+		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
+	}
+	if mocks.repo.setupCalls[0].CIMode != store.CIModeManaged {
+		t.Errorf("SetRepoCI ciMode: got %q, want %q",
+			mocks.repo.setupCalls[0].CIMode, store.CIModeManaged)
+	}
+}
+
+func TestCreateProjectAcceptsCallableCIMode(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "web", "ci_mode": "callable"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	p, _ := st.GetProject("web")
+	if p.CIMode != store.CIModeCallable {
+		t.Errorf("persisted ci_mode: got %q, want %q", p.CIMode, store.CIModeCallable)
+	}
+	if len(mocks.repo.setupCalls) != 1 {
+		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
+	}
+	if mocks.repo.setupCalls[0].CIMode != store.CIModeCallable {
+		t.Errorf("SetRepoCI ciMode: got %q, want %q",
+			mocks.repo.setupCalls[0].CIMode, store.CIModeCallable)
+	}
+}
+
+func TestCreateProjectRejectsBogusCIMode(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "web", "ci_mode": "secondary"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for bogus ci_mode, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.repo.setupCalls) != 0 {
+		t.Errorf("expected no SetRepoCI calls on validation failure, got %d", len(mocks.repo.setupCalls))
+	}
+}
+
+func TestUpdateProjectRefreshesOnCIModeChange(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
+		CIMode: store.CIModeManaged,
+	})
+	st.SetRepoToken("racso/web", "repo-tok")
+
+	rr := do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"ci_mode": "callable"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	p, _ := st.GetProject("web")
+	if p.CIMode != store.CIModeCallable {
+		t.Errorf("persisted ci_mode: got %q, want %q", p.CIMode, store.CIModeCallable)
+	}
+	if len(mocks.repo.refreshCalls) != 1 {
+		t.Fatalf("expected 1 RefreshProjectCI call (ci_mode change should trigger refresh), got %d",
+			len(mocks.repo.refreshCalls))
+	}
+	if mocks.repo.refreshCalls[0].CIMode != store.CIModeCallable {
+		t.Errorf("RefreshProjectCI ciMode: got %q, want %q",
+			mocks.repo.refreshCalls[0].CIMode, store.CIModeCallable)
+	}
+}
+
+func TestUpdateProjectRejectsBogusCIMode(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
+		CIMode: store.CIModeManaged,
+	})
+
+	rr := do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"ci_mode": "callable_v2"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for bogus ci_mode, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.repo.refreshCalls) != 0 {
+		t.Errorf("expected no RefreshProjectCI calls on validation failure, got %d",
+			len(mocks.repo.refreshCalls))
+	}
+}
+
 func TestUpdateProjectNoGitHubCallWhenNothingCIRelatedChanges(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.SetSetting("github-user", "racso")

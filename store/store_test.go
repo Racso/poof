@@ -134,6 +134,71 @@ func TestProjectHasUniqueID(t *testing.T) {
 	}
 }
 
+func TestCIModeDefaultsToManaged(t *testing.T) {
+	st := newTestStore(t)
+	// sampleProject leaves CIMode unset — store should default to "managed".
+	if err := st.CreateProject(sampleProject("demo")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := st.GetProject("demo")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.CIMode != store.CIModeManaged {
+		t.Errorf("ci_mode default: got %q, want %q", got.CIMode, store.CIModeManaged)
+	}
+}
+
+func TestCIModeRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	p := sampleProject("demo")
+	p.CIMode = store.CIModeCallable
+	if err := st.CreateProject(p); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, _ := st.GetProject("demo")
+	if got.CIMode != store.CIModeCallable {
+		t.Errorf("after create: got %q, want %q", got.CIMode, store.CIModeCallable)
+	}
+
+	// Switch back via UpdateProject.
+	got.CIMode = store.CIModeManaged
+	if err := st.UpdateProject(*got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got2, _ := st.GetProject("demo")
+	if got2.CIMode != store.CIModeManaged {
+		t.Errorf("after update: got %q, want %q", got2.CIMode, store.CIModeManaged)
+	}
+}
+
+func TestCIModeListReturnsPersistedValue(t *testing.T) {
+	st := newTestStore(t)
+	a := sampleProject("alpha")
+	a.CIMode = store.CIModeCallable
+	b := sampleProject("beta") // default
+	if err := st.CreateProject(a); err != nil {
+		t.Fatalf("create alpha: %v", err)
+	}
+	if err := st.CreateProject(b); err != nil {
+		t.Fatalf("create beta: %v", err)
+	}
+	list, err := st.ListProjects()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byName := map[string]store.Project{}
+	for _, p := range list {
+		byName[p.Name] = p
+	}
+	if byName["alpha"].CIMode != store.CIModeCallable {
+		t.Errorf("alpha: got %q, want %q", byName["alpha"].CIMode, store.CIModeCallable)
+	}
+	if byName["beta"].CIMode != store.CIModeManaged {
+		t.Errorf("beta: got %q, want %q", byName["beta"].CIMode, store.CIModeManaged)
+	}
+}
+
 func TestDuplicateProjectName(t *testing.T) {
 	st := newTestStore(t)
 	p := sampleProject("demo")
