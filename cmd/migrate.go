@@ -56,9 +56,17 @@ const (
 // classify returns a short state string for a single diagnostic. The CLI
 // renders the same state consistently regardless of which subcommand
 // surfaces it (today only `migrate workflows`, possibly more later).
+//
+// CI-disabled projects always classify as `disabled`, even if a legacy
+// file is still present on GitHub. The apply path won't touch disabled
+// projects (it skips them upfront) so labelling them "pending" would
+// misrepresent what the next action is.
 func classify(d workflowDiagnostic) string {
 	if d.Error != "" {
 		return stateError
+	}
+	if !d.CI {
+		return stateDisabled
 	}
 	switch {
 	case d.OldPathExists && d.NewPathExists:
@@ -67,10 +75,8 @@ func classify(d workflowDiagnostic) string {
 		return stateMigrated
 	case d.OldPathExists && d.OldPathHasMarker:
 		return statePending
-	case d.OldPathExists && !d.OldPathHasMarker:
+	case d.OldPathExists:
 		return statePendingNoMrk
-	case !d.CI:
-		return stateDisabled
 	default:
 		return stateNoWorkflow
 	}
@@ -174,8 +180,8 @@ Apply is idempotent: projects already at the new path are skipped.`,
 		fmt.Printf("\nSummary\n")
 		fmt.Printf("  %3d project(s) scanned\n", len(resp.Diagnostics))
 		printCount(counts, stateMigrated, "already migrated")
-		printCount(counts, statePending, "pending — safe to rename")
-		printCount(counts, statePendingNoMrk, "pending — no marker (manual review)")
+		printCount(counts, statePending, "pending — safe to rename (marker present)")
+		printCount(counts, statePendingNoMrk, "pending — safe to rename (no marker)")
 		printCount(counts, statePartial, "partial — both paths exist")
 		printCount(counts, stateDisabled, "disabled (CI off)")
 		printCount(counts, stateNoWorkflow, "no workflow at either path")
@@ -273,7 +279,7 @@ func stateLabel(s string) string {
 	case statePending:
 		return "pending — safe to rename"
 	case statePendingNoMrk:
-		return "pending — no marker (manual review)"
+		return "pending — safe to rename (no marker, but path is canonical)"
 	case statePartial:
 		return "partial — both paths exist"
 	case stateDisabled:
@@ -306,12 +312,18 @@ func markerNote(d workflowDiagnostic) string {
 
 func actionFor(state string, d workflowDiagnostic) string {
 	switch state {
-	case statePending:
+	case statePending, statePendingNoMrk:
 		return fmt.Sprintf("would rename to %s", d.NewPath)
-	case statePendingNoMrk:
-		return "skip unless --include-unmanaged is given (file lacks the marker; could be user-authored)"
 	case statePartial:
 		return "would delete the old path; the new path is authoritative"
+	case stateDisabled:
+		// CI is off, but a stale legacy workflow on GitHub will still
+		// fire on push (and fail) until it's removed manually. Surface
+		// that so the user knows there's something to clean up.
+		if d.OldPathExists {
+			return fmt.Sprintf("CI is disabled but %s still exists on GitHub — git rm it manually", d.OldPath)
+		}
+		return ""
 	default:
 		return ""
 	}
