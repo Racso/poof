@@ -138,10 +138,45 @@ CI modes: `managed` (default; standalone push-triggered workflow) or `callable` 
 
 Detailed design lives in `GC_ROLL.md`. Per-project policy (`keep`, `older_than_days`) plus a global default; both conditions AND together when both are set. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions.
 
+## Pending ideas (not yet implemented)
+
+Captured here so they aren't lost. Add new ones to this section as they come up.
+
+### `poof rollback --before <date>` — time-based rollback
+
+Roll back to the last successful deploy before a given date, walking history with pull fallback.
+
+```
+poof rollback <project> --before 2026-04-20
+poof rollback <project> --before today
+poof rollback <project> --before yesterday
+```
+
+Flow: query `deployments` for `status='success' AND deployed_at < ?` newest-first, then for each candidate (a) `docker inspect` locally, (b) `docker pull` from registry, (c) skip and try the next. If none available, report what was tried. Resilient to images disappearing from both local disk (GC'd) and the registry.
+
+Date parsing: ISO (`2026-04-20`), `today`, `yesterday`. Relative phrases ("3 days ago") are nice-to-have.
+
+### `poof rollback --list` — deployment history with availability
+
+```
+  #   Date                 Image         Status
+  42  2026-04-26 20:32     0df529...     local (current)
+  41  2026-04-26 15:27     20d886...     local
+  40  2026-04-25 00:25     8f6c7b...     local
+  39  2026-04-20 17:12     2ab4be...     remote
+  38  2026-04-19 15:56     6fca30...     gone
+```
+
+Status detection:
+- `local` — `docker inspect` succeeds.
+- `local (current)` — image is the running container's.
+- `remote` — `HEAD https://<registry>/v2/<owner>/<repo>/manifests/<tag>` returns 200 (auth via existing GitHub creds; `registryHost()` already exists in `docker.go`).
+- `gone` — neither local nor remote.
+
+Registry checks can be slow with many entries; consider limiting to the most recent ~20 and marking older as `unknown`.
+
 ## Existing docs in repo
 
 - `README.md` — public-facing user docs.
-- `CLAUDE.md` — this file (project overview for future Claude sessions).
-- `PLAN.md` — early design notes; some content overlaps with README.
-- `GC_ROLL.md` — design doc for GC + time-based rollback schema.
+- `CLAUDE.md` — this file; main source of truth for developers.
 - `landing/index.html` — marketing page deployed at `poof.rac.so`.
