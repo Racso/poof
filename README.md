@@ -199,54 +199,6 @@ poof clone myapp test --caddy-no    # create the clone without a snippet
 
 For the common "frontend has an `/api/*` proxy to a backend" case, re-cast the proxy after cloning with `poof spell proxy myapp-test/api myapp-test-engine` (see Spells below).
 
-## Spells
-
-Spells are named recipes built on top of plain Poof commands. The idea: keep the flag surface of `poof add` / `poof configure` small by moving small composite tweaks (snippets, fix-ups, conversions) into a discoverable subcommand instead of inventing a new flag for each.
-
-```sh
-poof spell                       # list available spells
-poof spell <name> --help         # what a spell does
-```
-
-### `poof spell proxy <source> <target>`
-
-Install a Caddy `reverse_proxy` on `<source>` pointing at `<target>`. Useful for fronting a backend through the frontend's own domain to sidestep CORS, or routing a domain to a container that isn't managed by Poof.
-
-**Source** — must reference an existing project:
-
-```
-<project>          whole domain proxies
-<project>/<path>   path on the project's domain proxies; rest falls through
-```
-
-**Target**:
-
-```
-<project>            another Poof project — container + port resolved automatically
-<container>:<port>   any container on poof-net (Poof-managed or not)
-```
-
-```sh
-# Frontend at dragonhub.rac.so proxies /api/* to the backend, no CORS
-poof spell proxy dragonhub/api dragonhub-engine
-
-# Route a domain to a non-Poof container (e.g. one started by Compose)
-poof spell proxy mysite indigo-app-racso:3000
-```
-
-By default, the source path is stripped before forwarding so the backend doesn't need to know it's mounted under `/api`. Pass `--keep-prefix` if your backend expects the prefix.
-
-**Spells refuse to overwrite an existing Caddy snippet.** If the source project already has one — from a previous cast or hand-written — the spell errors and tells you how to clear it:
-
-```
-$ poof spell proxy dragonhub/api dragonhub-engine
-Error: project "dragonhub" already has a Caddy snippet.
-  View it:   poof caddy get dragonhub
-  Clear it:  poof caddy delete dragonhub
-```
-
-This is deliberate: re-casting or accumulating multiple proxies on one project means deleting first. The trade-off is no silent data loss — the spell never edits content you might have authored or previously cast.
-
 ## CI modes
 
 The `--ci` flag controls how Poof! sets up GitHub Actions for a project:
@@ -392,6 +344,56 @@ mysite.com, www.mysite.com {
 ```
 
 The directory must be visible inside the Caddy container (mount it as a volume). An empty directory is fine.
+
+## Spells
+
+Spells are named recipes built on top of plain Poof commands. They exist to keep the flag surface of `poof add` / `poof configure` small: instead of growing a new flag for every minor variation, a small composite tweak gets a named spell.
+
+```sh
+poof spell                       # list available spells
+poof spell <name> --help         # what a spell does
+```
+
+Today there's one spell — `proxy` — and it produces a per-project Caddy snippet (the same kind you'd manage by hand with `poof caddy set`). Future spells will likely produce similar artefacts.
+
+### `poof spell proxy <source> <target>`
+
+Install a Caddy `reverse_proxy` on `<source>` pointing at `<target>`. Useful for fronting a backend through the frontend's own domain to sidestep CORS, or routing a domain to a container that isn't managed by Poof!.
+
+**Source** — must reference an existing project:
+
+```
+<project>          whole domain proxies
+<project>/<path>   path on the project's domain proxies; rest falls through
+```
+
+**Target**:
+
+```
+<project>            another Poof project — container + port resolved automatically
+<container>:<port>   any container on poof-net (Poof-managed or not)
+```
+
+```sh
+# Frontend at dragonhub.rac.so proxies /api/* to the backend, no CORS
+poof spell proxy dragonhub/api dragonhub-engine
+
+# Route a domain to a non-Poof container (e.g. one started by Compose)
+poof spell proxy mysite indigo-app-racso:3000
+```
+
+By default, the source path is stripped before forwarding so the backend doesn't need to know it's mounted under `/api`. Pass `--keep-prefix` if your backend expects the prefix.
+
+**Spells refuse to overwrite an existing Caddy snippet.** If the source project already has one — from a previous cast or hand-written — the spell errors and tells you how to clear it:
+
+```
+$ poof spell proxy dragonhub/api dragonhub-engine
+Error: project "dragonhub" already has a Caddy snippet.
+  View it:   poof caddy get dragonhub
+  Clear it:  poof caddy delete dragonhub
+```
+
+This is deliberate: re-casting or accumulating multiple proxies on one project means deleting first. The trade-off is no silent data loss — the spell never edits content you might have authored or previously cast.
 
 ## Garbage collection
 
