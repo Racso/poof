@@ -47,7 +47,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 Project lifecycle:
 - `poof add <name>` — register; auto-sets GitHub secrets + commits `.github/workflows/poof.yml` if a PAT is configured.
 - `poof configure <name>` — change any field except token; only passed flags mutate.
-- `poof clone <src> <suffix>` — create `<src>-<suffix>` deploying from branch `<suffix>`; optional `--env --all|--only|--except|--ask`.
+- `poof clone <src> <suffix>` — create `<src>-<suffix>` deploying from branch `<suffix>`; optional `--env --all|--only|--except|--ask`. Refuses if the source has a Caddy snippet unless `--caddy-yes` (copy verbatim — references to the source's container are NOT rewritten) or `--caddy-no` (skip) is passed.
 - `poof remove <name>` — stop container, delete project; `--data-keep|--data-delete` for managed volumes.
 - `poof refresh <name>` — re-sync GitHub secrets + workflow file (idempotent).
 - `poof apply [-f poof.ini] [--dry-run] [--prune]` — declarative INI sync.
@@ -70,7 +70,14 @@ Caddy / GC / install / update:
 - `poof update local|server|both [version]`.
 - `poof migrate workflows [--apply]` — one-shot migrations across breaking releases.
 
+Spells (`poof spell <name>`):
+- `poof spell proxy <source> <target>` — install a Caddy reverse_proxy on a source project. Source: `<project>` or `<project>/<path>`. Target: `<project>` (port resolved from DB) or `<container>:<port>`. Strip-prefix implicit when path is present; `--keep-prefix` opts out. Spell-owned snippets carry a `# [poof-spell]` marker and refuse to overwrite hand-written content.
+
 Global flags: `--profile <name>`, `--profile-env`.
+
+## Design principle: flags vs spells
+
+Core commands (`add`, `configure`, `clone`, ...) only grow flags when the behavior can't be decomposed into a follow-up command, or when decomposing it would be too expensive (e.g. forces an extra deploy). Everything else lives under `poof spell <name>` as a named recipe. This keeps the per-command flag surface small and the catalog of small composite actions discoverable in one place (`poof spell --help`).
 
 ## Project options reference
 
