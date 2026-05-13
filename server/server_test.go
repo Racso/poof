@@ -1175,6 +1175,81 @@ func TestCloneProjectCallsSetRepoCI(t *testing.T) {
 	}
 }
 
+func TestCloneRefusesWhenSourceHasCaddySnippetAndChoiceMissing(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "reverse_proxy poof-other:3000")
+
+	rr := do(t, srv, "POST", "/projects/web/clone",
+		map[string]interface{}{"suffix": "staging"}, globalToken)
+	if rr.Code != http.StatusPreconditionRequired {
+		t.Fatalf("expected 428, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if p, _ := st.GetProject("web-staging"); p != nil {
+		t.Fatalf("clone should not have been created")
+	}
+}
+
+func TestCloneCopiesCaddySnippetWhenYes(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	snippet := "reverse_proxy poof-other:3000"
+	st.SetCaddySnippet("web", snippet)
+
+	rr := do(t, srv, "POST", "/projects/web/clone",
+		map[string]interface{}{"suffix": "staging", "caddy": "yes"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("clone: %d — %s", rr.Code, rr.Body.String())
+	}
+	got, _ := st.GetCaddySnippet("web-staging")
+	if got != snippet {
+		t.Fatalf("snippet not copied: got %q want %q", got, snippet)
+	}
+}
+
+func TestCloneSkipsCaddySnippetWhenNo(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.SetCaddySnippet("web", "reverse_proxy poof-other:3000")
+
+	rr := do(t, srv, "POST", "/projects/web/clone",
+		map[string]interface{}{"suffix": "staging", "caddy": "no"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("clone: %d — %s", rr.Code, rr.Body.String())
+	}
+	got, _ := st.GetCaddySnippet("web-staging")
+	if got != "" {
+		t.Fatalf("snippet should be empty, got %q", got)
+	}
+}
+
+func TestCloneIgnoresCaddyFlagsWhenSourceHasNoSnippet(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/clone",
+		map[string]interface{}{"suffix": "staging", "caddy": "yes"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("clone: %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestRefreshProjectCallsRefreshProjectCI(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.SetSetting("github-user", "racso")

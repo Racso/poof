@@ -474,6 +474,11 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 type cloneRequest struct {
 	Suffix  string   `json:"suffix"`
 	EnvKeys []string `json:"env_keys,omitempty"`
+	// Caddy decides what to do with the source's Caddy snippet when one exists.
+	// "yes" copies it verbatim; "no" skips it. Empty means "undecided" and
+	// the request is refused when a snippet is present, forcing the operator
+	// to pick explicitly so they don't forget to fix container references.
+	Caddy string `json:"caddy,omitempty"`
 }
 
 func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
@@ -497,12 +502,36 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "suffix is required", http.StatusBadRequest)
 		return
 	}
+	switch req.Caddy {
+	case "", "yes", "no":
+	default:
+		jsonError(w, `caddy must be "yes", "no", or omitted`, http.StatusBadRequest)
+		return
+	}
 
 	cloneName := sourceName + "-" + req.Suffix
 
 	// Check duplicate.
 	if existing, _ := s.store.GetProject(cloneName); existing != nil {
 		jsonError(w, "project already exists: "+cloneName, http.StatusConflict)
+		return
+	}
+
+	// Refuse to clone if the source has a Caddy snippet and the caller
+	// hasn't made an explicit choice. Snippets typically reference the
+	// source's container name (e.g. poof-<source>) which won't match the
+	// clone — silently copying would produce a broken clone, silently
+	// skipping would lose routing logic.
+	sourceSnippet, err := s.store.GetCaddySnippet(sourceName)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sourceSnippet != "" && req.Caddy == "" {
+		jsonError(w,
+			"source has a Caddy snippet; pass --caddy-yes (copy verbatim) "+
+				"or --caddy-no (skip) to decide what the clone should do with it",
+			http.StatusPreconditionRequired)
 		return
 	}
 
@@ -555,6 +584,16 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Copy Caddy snippet verbatim if requested.
+	caddySnippetCopied := false
+	if sourceSnippet != "" && req.Caddy == "yes" {
+		if err := s.store.SetCaddySnippet(cloneName, sourceSnippet); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		caddySnippetCopied = true
+	}
+
 	// Set up GitHub.
 	if p.CI && s.settingGitHubToken() != "" {
 		client := s.ghFactory(s.settingGitHubToken())
@@ -573,6 +612,9 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 	result := map[string]interface{}{"project": p}
 	if copiedKeys != nil {
 		result["env_keys_copied"] = copiedKeys
+	}
+	if caddySnippetCopied {
+		result["caddy_snippet_copied"] = true
 	}
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, result)
