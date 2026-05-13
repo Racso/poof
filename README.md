@@ -238,6 +238,21 @@ Error: project "dragonhub" already has a Caddy snippet.
 
 This is deliberate: re-casting or accumulating multiple proxies on one project means deleting first. The trade-off is no silent data loss — the spell never edits content you might have authored or previously cast.
 
+## CI modes
+
+The `--ci` flag controls how Poof! sets up GitHub Actions for a project:
+
+- **`--ci yes`** (default) — Poof! commits a standalone push-triggered workflow at `.github/workflows/poof.yml`. Every push to the configured branch builds, pushes to GHCR, and triggers a deploy.
+- **`--ci no`** — Poof! does not touch the repo. You're on your own for triggering deploys (call `POST /projects/<name>/deploy` from anywhere).
+- **`--ci callable`** — Poof! commits a *reusable* workflow (`on: workflow_call`) instead. You write your own outer workflow that runs tests/lint/matrix builds and then calls this one. Useful when Poof's deploy step is one stage of a larger pipeline.
+
+```sh
+poof add myapp --ci callable        # reusable workflow
+poof configure myapp --ci no        # stop managing CI for this project
+```
+
+`POOF_URL` and `POOF_TOKEN` are set as repo secrets in `yes` and `callable` modes. Re-sync them with `poof refresh <name>` after rotating a token.
+
 ## Refreshing GitHub config
 
 Re-sync secrets and workflow files for a project:
