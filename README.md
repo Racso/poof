@@ -375,11 +375,11 @@ Install a Caddy `reverse_proxy` on `<source>` pointing at `<target>`. Useful for
 ```
 
 ```sh
-# Frontend at dragonhub.rac.so proxies /api/* to the backend, no CORS
-poof spell proxy dragonhub/api dragonhub-engine
+# Frontend at project-dragon.yourdomain.com proxies /api/* to the backend, no CORS
+poof spell proxy project-dragon/api backend-supernova
 
 # Route a domain to a non-Poof container (e.g. one started by Compose)
-poof spell proxy mysite indigo-app-racso:3000
+poof spell proxy my-site my-compose-app:3000
 ```
 
 By default, the source path is stripped before forwarding so the backend doesn't need to know it's mounted under `/api`. Pass `--keep-prefix` if your backend expects the prefix.
@@ -387,10 +387,10 @@ By default, the source path is stripped before forwarding so the backend doesn't
 **Spells refuse to overwrite an existing Caddy snippet.** If the source project already has one — from a previous cast or hand-written — the spell errors and tells you how to clear it:
 
 ```
-$ poof spell proxy dragonhub/api dragonhub-engine
-Error: project "dragonhub" already has a Caddy snippet.
-  View it:   poof caddy get dragonhub
-  Clear it:  poof caddy delete dragonhub
+$ poof spell proxy project-dragon/api backend-supernova
+Error: project "project-dragon" already has a Caddy snippet.
+  View it:   poof caddy get project-dragon
+  Clear it:  poof caddy delete project-dragon
 ```
 
 This is deliberate: re-casting or accumulating multiple proxies on one project means deleting first. The trade-off is no silent data loss — the spell never edits content you might have authored or previously cast.
