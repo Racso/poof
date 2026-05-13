@@ -227,9 +227,16 @@ poof spell proxy mysite indigo-app-racso:3000
 
 By default, the source path is stripped before forwarding so the backend doesn't need to know it's mounted under `/api`. Pass `--keep-prefix` if your backend expects the prefix.
 
-Re-casting the same `<source>/<path>` replaces that entry. Casting different paths on the same source accumulates. Whole-domain and path-scoped proxies cannot coexist on a single source.
+**Spells refuse to overwrite an existing Caddy snippet.** If the source project already has one — from a previous cast or hand-written — the spell errors and tells you how to clear it:
 
-Spell-owned snippets are tagged with a `# [poof-spell]` marker; the spell refuses to overwrite a hand-written snippet. Clear it first with `poof caddy delete <name>` if you want to switch to the spell.
+```
+$ poof spell proxy dragonhub/api dragonhub-engine
+Error: project "dragonhub" already has a Caddy snippet.
+  View it:   poof caddy get dragonhub
+  Clear it:  poof caddy delete dragonhub
+```
+
+This is deliberate: re-casting or accumulating multiple proxies on one project means deleting first. The trade-off is no silent data loss — the spell never edits content you might have authored or previously cast.
 
 ## Refreshing GitHub config
 

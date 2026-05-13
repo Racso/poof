@@ -40,10 +40,8 @@ func TestParseSpellSource(t *testing.T) {
 }
 
 func TestStripHashHeader(t *testing.T) {
-	raw := caddySnippetHashHeader + "deadbeef\n" + spellManagedMarker + "\nhello"
-	got := stripHashHeader(raw)
-	want := spellManagedMarker + "\nhello"
-	if got != want {
+	raw := caddySnippetHashHeader + "deadbeef\nhello"
+	if got, want := stripHashHeader(raw), "hello"; got != want {
 		t.Errorf("stripHashHeader: got %q want %q", got, want)
 	}
 	if stripHashHeader("plain body") != "plain body" {
@@ -51,83 +49,33 @@ func TestStripHashHeader(t *testing.T) {
 	}
 }
 
-func TestParseManagedSnippet_EmptyIsManaged(t *testing.T) {
-	entries, ok := parseManagedSnippet("")
-	if !ok {
-		t.Fatalf("empty snippet should be considered managed")
-	}
-	if len(entries) != 0 {
-		t.Errorf("empty snippet should produce no entries, got %d", len(entries))
-	}
+func TestRenderProxySnippet_PathScoped(t *testing.T) {
+	body := renderProxySnippet("dragonhub/api", "dragonhub-engine", "/api", "poof-dragonhub-engine:3000", true, false)
+	mustContain(t, body, spellHeaderPrefix+"poof spell proxy dragonhub/api dragonhub-engine")
+	mustContain(t, body, "handle /api/* {")
+	mustContain(t, body, "uri strip_prefix /api")
+	mustContain(t, body, "reverse_proxy poof-dragonhub-engine:3000")
 }
 
-func TestParseManagedSnippet_HandWrittenRejected(t *testing.T) {
-	_, ok := parseManagedSnippet("reverse_proxy something:80")
-	if ok {
-		t.Fatalf("hand-written snippet should not be considered managed")
+func TestRenderProxySnippet_KeepPrefix(t *testing.T) {
+	body := renderProxySnippet("dragonhub/api", "dragonhub-engine", "/api", "poof-dragonhub-engine:3000", false, true)
+	if strings.Contains(body, "strip_prefix") {
+		t.Errorf("rendered snippet should not strip prefix with --keep-prefix:\n%s", body)
 	}
+	mustContain(t, body, "--keep-prefix")
 }
 
-func TestRoundTripSingleEntry(t *testing.T) {
-	original := []proxyEntry{{Path: "/api", Target: "poof-engine:3000", StripPrefix: true}}
-	body := renderManagedSnippet(original)
-	if !strings.Contains(body, "uri strip_prefix /api") {
-		t.Errorf("rendered snippet missing strip_prefix:\n%s", body)
-	}
-	if !strings.Contains(body, "reverse_proxy poof-engine:3000") {
-		t.Errorf("rendered snippet missing reverse_proxy:\n%s", body)
-	}
-	parsed, ok := parseManagedSnippet(body)
-	if !ok || len(parsed) != 1 {
-		t.Fatalf("round-trip failed: ok=%v entries=%v", ok, parsed)
-	}
-	if parsed[0] != original[0] {
-		t.Errorf("round-trip mismatch: got %+v want %+v", parsed[0], original[0])
-	}
-}
-
-func TestRenderWholeDomain_NoStripPrefix(t *testing.T) {
-	body := renderManagedSnippet([]proxyEntry{{Path: "", Target: "indigo:3000"}})
+func TestRenderProxySnippet_WholeDomain(t *testing.T) {
+	body := renderProxySnippet("indigo-ws", "indigo-app-racso:3000", "", "indigo-app-racso:3000", false, false)
 	if strings.Contains(body, "handle") {
 		t.Errorf("whole-domain entry should not use handle block:\n%s", body)
 	}
-	if !strings.Contains(body, "reverse_proxy indigo:3000") {
-		t.Errorf("whole-domain entry should have a bare reverse_proxy:\n%s", body)
-	}
+	mustContain(t, body, "reverse_proxy indigo-app-racso:3000")
 }
 
-func TestUpsertReplacesSamePath(t *testing.T) {
-	existing := []proxyEntry{{Path: "/api", Target: "old:80", StripPrefix: true}}
-	updated, err := upsertProxyEntry(existing, proxyEntry{Path: "/api", Target: "new:80", StripPrefix: true})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(updated) != 1 || updated[0].Target != "new:80" {
-		t.Errorf("upsert should replace by path: %+v", updated)
-	}
-}
-
-func TestUpsertAccumulatesDifferentPaths(t *testing.T) {
-	existing := []proxyEntry{{Path: "/api", Target: "api:80", StripPrefix: true}}
-	updated, err := upsertProxyEntry(existing, proxyEntry{Path: "/ws", Target: "ws:80", StripPrefix: true})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(updated) != 2 {
-		t.Errorf("upsert should accumulate distinct paths, got %d entries", len(updated))
-	}
-}
-
-func TestUpsertRejectsWholeDomainOverPathScoped(t *testing.T) {
-	existing := []proxyEntry{{Path: "/api", Target: "api:80", StripPrefix: true}}
-	if _, err := upsertProxyEntry(existing, proxyEntry{Path: "", Target: "everything:80"}); err == nil {
-		t.Errorf("should have refused whole-domain over path-scoped")
-	}
-}
-
-func TestUpsertRejectsPathScopedOverWholeDomain(t *testing.T) {
-	existing := []proxyEntry{{Path: "", Target: "everything:80"}}
-	if _, err := upsertProxyEntry(existing, proxyEntry{Path: "/api", Target: "api:80", StripPrefix: true}); err == nil {
-		t.Errorf("should have refused path-scoped over whole-domain")
+func mustContain(t *testing.T, body, want string) {
+	t.Helper()
+	if !strings.Contains(body, want) {
+		t.Errorf("rendered snippet missing %q\n%s", want, body)
 	}
 }
