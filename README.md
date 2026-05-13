@@ -110,36 +110,45 @@ import = "~/.config/poof/work.toml"
 ## CLI
 
 ```
-poof add <name> [flags]            register project + automate GitHub setup
+poof add <name> [flags]              register project + automate GitHub setup
 poof apply [-f file] [--dry-run] [--prune]   declarative project sync
-poof clone <name> <suffix>         clone project as <name>-<suffix> on branch <suffix>
-poof config                        show client and server configuration
-poof config set <key> [value]      set a client or server configuration value
-poof configure <name> [flags]      update project configuration (token is preserved)
-poof deploy <name>                 trigger manual redeploy
-poof env copy <src> <dst> <mode>   copy env vars (--all, --only, --except, --ask)
-poof env get <name>                list env var keys (comma-separated, values never shown)
-poof env set <name> KEY=VALUE      set env vars
-poof env unset <name> KEY          remove env var
-poof install                       set up a Poof! server on this machine
-poof list                          list all projects and status
-poof logs <name> [--lines N]       container log lines
-poof redirect add <from> <to>      add a domain redirect (301)
-poof redirect delete <id>          delete a redirect by ID
-poof redirect list                 list all redirects
-poof refresh <name>                re-sync GitHub secrets and workflow
-poof remove <name>                 remove project, stop container
-poof rollback <name>               redeploy previous image
-poof server                        start the daemon
-poof spell proxy <source> <target> install a Caddy reverse_proxy on a project (see Spells)
-poof status <name>                 project details + last deployment
-poof update both [version]         update server first, then local CLI
-poof update local [version]        update the local CLI binary (latest or pinned)
-poof update server [version]       update the server (latest or pinned)
-poof version                       print client version
-poof volume add <name> <mount>     add a volume mount to a project
-poof volume list <name>            list volume mounts for a project
-poof volume remove <name> <id>     remove a volume mount from a project
+poof caddy get|set|delete <name>     manage a project's Caddy snippet
+poof caddy list                      list projects with custom Caddy snippets
+poof clone <name> <suffix>           clone project as <name>-<suffix> on branch <suffix>
+poof config                          show client and server configuration
+poof config set <key> [value]        set a client or server configuration value
+poof configure <name> [flags]        update project configuration (token is preserved)
+poof deploy <name>                   trigger manual redeploy
+poof env copy <src> <dst> <mode>     copy env vars (--all, --only, --except, --ask)
+poof env get <name>                  list env var keys (comma-separated, values never shown)
+poof env set <name> KEY=VALUE        set env vars
+poof env unset <name> KEY            remove env var
+poof gc [name] [--keep N] [--older-than D] [--all] [--dry-run]   run garbage collection
+poof gc set [name] [--keep N] [--older-than D] [--all]   set GC retention policy
+poof gc status                       show GC policies
+poof gc off [name] | --all           disable GC for a project or globally
+poof install                         set up a Poof! server on this machine
+poof list                            list all projects and status
+poof logs <name> [--lines N]         container log lines
+poof migrate workflows [--apply]     one-shot migrations across breaking releases
+poof redirect add <from> <to>        add a domain redirect (301)
+poof redirect delete <id>            delete a redirect by ID
+poof redirect list                   list all redirects
+poof refresh <name>                  re-sync GitHub secrets and workflow
+poof remove <name>                   remove project, stop container
+poof rollback <name>                 redeploy previous image
+poof server                          start the daemon
+poof server-logs                     show the Poof! server's own logs
+poof spell proxy <source> <target>   install a Caddy reverse_proxy on a project (see Spells)
+poof status <name>                   project details + last deployment
+poof troubleshoot                    diagnose server connectivity issues
+poof update both [version]           update server first, then local CLI
+poof update local [version]          update the local CLI binary (latest or pinned)
+poof update server [version]         update the server (latest or pinned)
+poof version                         print client version
+poof volume add <name> <mount>       add a volume mount to a project
+poof volume list <name>              list volume mounts for a project
+poof volume remove <name> <id>       remove a volume mount from a project
 ```
 
 Global flags (all client commands):
