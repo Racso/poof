@@ -374,6 +374,35 @@ oscarhumbertogomez.com, www.oscarhumbertogomez.com {
 
 These files are imported via Caddy's `import` glob directive and survive Poof! reloads. The directory must be accessible inside the Caddy container (mount it as a volume). If the directory is empty, Caddy handles it gracefully.
 
+## Garbage collection
+
+Every deploy pulls a fresh Docker image. Without cleanup, disk fills up fast (production saw 342 images / 41 GB before GC existed). Poof! garbage-collects images per a configurable policy.
+
+**Run on demand:**
+
+```sh
+poof gc myapp                       # apply myapp's policy now
+poof gc --all                       # GC every project + sweep orphans
+poof gc myapp --keep 5              # override: keep the 5 most recent
+poof gc myapp --older-than 14       # override: delete anything older than 14 days
+poof gc --all --dry-run             # show what would be deleted, don't delete
+```
+
+When both `--keep` and `--older-than` are set, an image must satisfy **both** conditions to be deleted — it must be outside the keep window AND older than N days. Prevents accidentally nuking recent images.
+
+**Set a policy** (runs automatically after every deploy):
+
+```sh
+poof gc set myapp --keep 5          # per-project
+poof gc set --all --keep 3          # global default
+poof gc set --all --older-than 30   # alternative: age-based default
+poof gc status                      # show all policies
+poof gc off myapp                   # disable for one project
+poof gc off --all                   # disable globally
+```
+
+Without an explicit policy, the built-in default is `--keep 3`. The currently running image is never deleted. `--all` also sweeps **orphan images** — images Poof! deployed previously but whose project has since been deleted, renamed, or converted to static.
+
 ## Declarative projects file
 
 Declare all projects in an INI file and apply it idempotently:
