@@ -277,6 +277,23 @@ Revert back to a container:
 poof configure mysite --no-static
 ```
 
+## Monorepos
+
+Use `--folder` to point at a subdirectory containing the Dockerfile. The generated GitHub Actions workflow scopes its trigger (and its build context) to that folder — changes to other folders don't redeploy this project.
+
+```sh
+poof add myapp-frontend --folder frontend/
+poof add myapp-backend  --folder backend/ --port 3000
+```
+
+Both projects share the same repo but redeploy independently when their respective folder changes. Combined with `--static` you get a typical fullstack monorepo:
+
+```sh
+poof add web --folder web/ --static --spa --build   # SPA frontend
+poof add api --folder api/ --port 3000              # backend container
+poof spell proxy web/api api                        # frontend /api/* → backend, no CORS
+```
+
 ## Subpath routing
 
 By default, projects are only reachable at their subdomain (`myapp.yourdomain.com`). Subpath routing additionally makes a project reachable at `yourdomain.com/myapp/*`, in one of two modes:
