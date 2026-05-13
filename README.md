@@ -248,6 +248,35 @@ poof refresh myapp
 
 Useful after template changes or server upgrades. Skips the workflow commit if the file is already up to date.
 
+## Static sites
+
+For projects that just serve files, skip the container entirely — Caddy serves the files directly from disk. Faster, no RAM, no runtime to crash.
+
+```sh
+poof add mysite --static                    # serve repo contents as-is
+poof add mysite --static --spa              # SPA: add try_files fallback to /index.html
+poof add mysite --static --spa --build      # build first via Dockerfile, then serve
+```
+
+**`--static`** turns off the container path. On each deploy, Poof! fetches the repo at the configured branch, extracts the files, and points Caddy at the new directory. Old versions are kept on disk for rollback (subject to the GC policy).
+
+**`--spa`** adds `try_files {path} /index.html` so client-side routes fall back to `index.html`. Required for React/Vue/Svelte SPAs.
+
+**`--build`** runs a Dockerfile in the repo to *produce* the static files (useful when the source needs a build step — Vite, Astro, etc.). The Dockerfile must output to `/poof`; everything in `/poof` is what gets served. Combine with `--static` (and optionally `--spa`).
+
+Convert an existing project to static:
+
+```sh
+poof configure mysite --static --spa
+poof deploy mysite           # stops the old container, serves files instead
+```
+
+Revert back to a container:
+
+```sh
+poof configure mysite --no-static
+```
+
 ## Subpath routing
 
 By default, projects are only reachable at their subdomain (`myapp.yourdomain.com`). Subpath routing additionally makes a project reachable at `yourdomain.com/myapp/*`, in one of two modes:
