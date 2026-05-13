@@ -363,25 +363,35 @@ poof redirect list
 poof redirect delete 1
 ```
 
-## Manual Caddy routes
+## Caddy
 
-Poof! regenerates its Caddyfile on every sync, but you can add routes for services not managed by Poof! (e.g. WordPress running via Compose) by dropping `.Caddyfile` files into the static config directory (default: `/etc/caddy/conf.d/`).
+Caddy fronts every project — it terminates TLS (auto-renewed via ACME), routes hostnames to the right container, and handles `poof redirect` rules. Poof! regenerates the active Caddy config after every project change. You can extend that config without editing it directly, in two ways: per-project snippets (preferred) and manual drop-in files (for services Poof! doesn't manage).
+
+### Per-project snippets (preferred)
+
+Attach a custom Caddy snippet to a project. The snippet is merged into the project's site block, so it runs alongside (or instead of) the route Poof! generates.
 
 ```sh
-# On the host, create the directory and mount it into Caddy:
-mkdir -p /etc/caddy/conf.d
+poof caddy get <name>      # download the current snippet to a local file for editing
+poof caddy set <name>      # push the edited file back to the server
+poof caddy delete <name>   # remove the snippet (Poof's default route returns)
+poof caddy list            # list projects that have a custom snippet
 ```
 
-Then add a file per service:
+Typical uses: a `/api/*` reverse_proxy to a sibling backend, a `try_files` directive for clean URLs on a static site, a `header` rule for CORS or caching. For the most common patterns, **prefer a Spell** (next section) — they generate the same snippets but you don't have to write the Caddy yourself.
+
+### Manual Caddyfiles (for non-Poof services)
+
+For services that Poof! doesn't manage at all (e.g. WordPress in a separate Compose stack), drop a `.Caddyfile` into the static config directory (default: `/etc/caddy/conf.d/`). Poof! imports these via Caddy's `import` glob, and they survive every reload.
 
 ```caddyfile
 # /etc/caddy/conf.d/wordpress.Caddyfile
-oscarhumbertogomez.com, www.oscarhumbertogomez.com {
+mysite.com, www.mysite.com {
     reverse_proxy wordpress:80
 }
 ```
 
-These files are imported via Caddy's `import` glob directive and survive Poof! reloads. The directory must be accessible inside the Caddy container (mount it as a volume). If the directory is empty, Caddy handles it gracefully.
+The directory must be visible inside the Caddy container (mount it as a volume). An empty directory is fine.
 
 ## Garbage collection
 
