@@ -131,6 +131,7 @@ poof refresh <name>                re-sync GitHub secrets and workflow
 poof remove <name>                 remove project, stop container
 poof rollback <name>               redeploy previous image
 poof server                        start the daemon
+poof spell proxy <source> <target> install a Caddy reverse_proxy on a project (see Spells)
 poof status <name>                 project details + last deployment
 poof update both [version]         update server first, then local CLI
 poof update local [version]        update the local CLI binary (latest or pinned)
@@ -177,6 +178,58 @@ poof env copy myapp myapp-test --except DATABASE_URL,REDIS_HOST
 ```
 
 Use `poof env get <name>` to see available keys (comma-separated, ready for `--only`/`--except`).
+
+### Caddy snippets on clones
+
+If the source project has a custom Caddy snippet, clone refuses to guess what to do with it — the snippet usually references the source's own container name (`poof-<source>`), which won't match the clone. You must choose explicitly:
+
+```sh
+poof clone myapp test --caddy-yes   # copy the snippet verbatim — you fix references afterwards
+poof clone myapp test --caddy-no    # create the clone without a snippet
+```
+
+For the common "frontend has an `/api/*` proxy to a backend" case, re-cast the proxy after cloning with `poof spell proxy myapp-test/api myapp-test-engine` (see Spells below).
+
+## Spells
+
+Spells are named recipes built on top of plain Poof commands. The idea: keep the flag surface of `poof add` / `poof configure` small by moving small composite tweaks (snippets, fix-ups, conversions) into a discoverable subcommand instead of inventing a new flag for each.
+
+```sh
+poof spell                       # list available spells
+poof spell <name> --help         # what a spell does
+```
+
+### `poof spell proxy <source> <target>`
+
+Install a Caddy `reverse_proxy` on `<source>` pointing at `<target>`. Useful for fronting a backend through the frontend's own domain to sidestep CORS, or routing a domain to a container that isn't managed by Poof.
+
+**Source** — must reference an existing project:
+
+```
+<project>          whole domain proxies
+<project>/<path>   path on the project's domain proxies; rest falls through
+```
+
+**Target**:
+
+```
+<project>            another Poof project — container + port resolved automatically
+<container>:<port>   any container on poof-net (Poof-managed or not)
+```
+
+```sh
+# Frontend at dragonhub.rac.so proxies /api/* to the backend, no CORS
+poof spell proxy dragonhub/api dragonhub-engine
+
+# Route a domain to a non-Poof container (e.g. one started by Compose)
+poof spell proxy mysite indigo-app-racso:3000
+```
+
+By default, the source path is stripped before forwarding so the backend doesn't need to know it's mounted under `/api`. Pass `--keep-prefix` if your backend expects the prefix.
+
+Re-casting the same `<source>/<path>` replaces that entry. Casting different paths on the same source accumulates. Whole-domain and path-scoped proxies cannot coexist on a single source.
+
+Spell-owned snippets are tagged with a `# [poof-spell]` marker; the spell refuses to overwrite a hand-written snippet. Clear it first with `poof caddy delete <name>` if you want to switch to the spell.
 
 ## Refreshing GitHub config
 
