@@ -395,6 +395,28 @@ Error: project "project-dragon" already has a Caddy snippet.
 
 This is deliberate: re-casting or accumulating multiple proxies on one project means deleting first. The trade-off is no silent data loss — the spell never edits content you might have authored or previously cast.
 
+### `poof spell clean-urls <project>`
+
+Install a `try_files` snippet so a request for `/about` serves `/about.html` if it exists — bare-name URLs for static sites generated as flat HTML directories.
+
+```sh
+poof spell clean-urls docs
+```
+
+Like `proxy`, refuses to overwrite an existing snippet; clear with `poof caddy delete <project>` first.
+
+### `poof spell to-static <project> [--spa] [--build]`
+
+Reconfigure a container-served project as `--static`. Equivalent to running `poof configure <project> --static [--spa] [--build]`. Refuses if the project is already static.
+
+```sh
+poof spell to-static my-site
+poof spell to-static my-spa --spa
+poof spell to-static my-app --spa --build
+```
+
+The spell **does not deploy** — static deploys need the repo files. After the spell prints success, run `poof deploy <project>` from inside the repo (or push a commit if CI is set up). The container keeps running until that next deploy.
+
 ## Garbage collection
 
 Every deploy pulls a fresh Docker image. Without cleanup, disk fills up fast (production saw 342 images / 41 GB before GC existed). Poof! garbage-collects images per a configurable policy.

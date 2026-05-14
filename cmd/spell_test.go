@@ -73,6 +73,12 @@ func TestRenderProxySnippet_WholeDomain(t *testing.T) {
 	mustContain(t, body, "reverse_proxy indigo-app-racso:3000")
 }
 
+func TestRenderCleanURLsSnippet(t *testing.T) {
+	body := renderCleanURLsSnippet("docs")
+	mustContain(t, body, spellHeaderPrefix+"poof spell clean-urls docs")
+	mustContain(t, body, "try_files {path}.html {path}")
+}
+
 func mustContain(t *testing.T, body, want string) {
 	t.Helper()
 	if !strings.Contains(body, want) {

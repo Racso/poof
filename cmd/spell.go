@@ -156,6 +156,118 @@ func resolveSpellTarget(t string) (string, error) {
 // renderProxySnippet emits a plain Caddy snippet for a single proxy entry.
 // The leading comment records the cast command for humans only; nothing
 // reads it back.
+// --- spell: clean-urls ---------------------------------------------------
+
+var spellCleanURLsCmd = &cobra.Command{
+	Use:   "clean-urls <project>",
+	Short: "Serve URLs without the .html extension (try_files fallback)",
+	Long: `Install a try_files Caddy snippet that strips the .html extension
+when serving static files. Equivalent snippet:
+
+    try_files {path}.html {path}
+
+So a request for /about returns /about.html if it exists, then /about
+itself. Useful for static sites generated as flat directories of HTML
+pages where you want bare-name URLs.
+
+The source project must exist AND must not have a Caddy snippet.
+If a snippet exists (from a previous cast or hand-written), the spell
+refuses — clear it first with 'poof caddy delete <project>'.`,
+	Args: cobra.ExactArgs(1),
+	Run:  runSpellCleanURLs,
+}
+
+func runSpellCleanURLs(cmd *cobra.Command, args []string) {
+	project := args[0]
+
+	var proj map[string]interface{}
+	if err := apiGet("/projects/"+project, &proj); err != nil {
+		fatal("project: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := apiGet("/projects/"+project+"/caddy", &result); err != nil {
+		fatal("%v", err)
+	}
+	if strings.TrimSpace(stripHashHeader(asString(result["content"]))) != "" {
+		fatal("project %q already has a Caddy snippet.\n"+
+			"  View it:   poof caddy get %s\n"+
+			"  Clear it:  poof caddy delete %s",
+			project, project, project)
+	}
+
+	body := renderCleanURLsSnippet(project)
+	payload := map[string]interface{}{"content": body, "force": true}
+	if err := apiPut("/projects/"+project+"/caddy", payload, nil); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Printf("✓ %s now serves clean URLs (try_files .html fallback)\n", project)
+}
+
+func renderCleanURLsSnippet(project string) string {
+	return fmt.Sprintf("%spoof spell clean-urls %s\ntry_files {path}.html {path}\n",
+		spellHeaderPrefix, project)
+}
+
+// --- spell: to-static ----------------------------------------------------
+
+var (
+	spellToStaticSPA   bool
+	spellToStaticBuild bool
+)
+
+var spellToStaticCmd = &cobra.Command{
+	Use:   "to-static <project>",
+	Short: "Convert a container-served project to static (Caddy serves files directly)",
+	Long: `Reconfigure <project> as a --static deploy. Equivalent to:
+
+    poof configure <project> --static [--spa] [--build]
+
+Refuses if the project is already static.
+
+After the spell runs, you still need to deploy:
+
+    poof deploy <project>   # from inside the repo to upload the files
+
+or push a commit if CI is wired up. The old container keeps running
+until the next deploy lands and is then stopped automatically.`,
+	Args: cobra.ExactArgs(1),
+	Run:  runSpellToStatic,
+}
+
+func runSpellToStatic(cmd *cobra.Command, args []string) {
+	project := args[0]
+
+	var proj map[string]interface{}
+	if err := apiGet("/projects/"+project, &proj); err != nil {
+		fatal("project: %v", err)
+	}
+	current, _ := proj["static"].(string)
+	if current == "static" || current == "spa" {
+		fatal("project %q is already static (mode: %s); nothing to do",
+			project, current)
+	}
+
+	mode := "static"
+	if spellToStaticSPA {
+		mode = "spa"
+	}
+	payload := map[string]interface{}{"static": mode}
+	if spellToStaticBuild {
+		payload["build"] = true
+	}
+	if err := apiPatch("/projects/"+project, payload, nil); err != nil {
+		fatal("configure failed: %v", err)
+	}
+
+	fmt.Printf("✓ %s reconfigured (mode: %s, build: %t)\n", project, mode, spellToStaticBuild)
+	fmt.Printf("  Next: deploy to actually swap the container out.\n")
+	fmt.Printf("    poof deploy %s   (from inside the repo)\n", project)
+	fmt.Printf("  Or push a commit if CI is wired up.\n")
+}
+
+// -------------------------------------------------------------------------
+
 func renderProxySnippet(sourceArg, targetArg, path, upstream string, stripPrefix, keepPrefix bool) string {
 	cmd := fmt.Sprintf("poof spell proxy %s %s", sourceArg, targetArg)
 	if keepPrefix {
@@ -196,7 +308,16 @@ func asString(v interface{}) string {
 
 func init() {
 	rootCmd.AddCommand(spellCmd)
+
 	spellCmd.AddCommand(spellProxyCmd)
 	spellProxyCmd.Flags().BoolVar(&spellProxyKeepPrefix, "keep-prefix", false,
 		"do not strip the source path before forwarding (off by default)")
+
+	spellCmd.AddCommand(spellCleanURLsCmd)
+
+	spellCmd.AddCommand(spellToStaticCmd)
+	spellToStaticCmd.Flags().BoolVar(&spellToStaticSPA, "spa", false,
+		"convert to SPA mode (try_files fallback to /index.html)")
+	spellToStaticCmd.Flags().BoolVar(&spellToStaticBuild, "build", false,
+		"use the repo's Dockerfile to build the static files")
 }
