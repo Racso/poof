@@ -449,4 +449,6 @@ poof apply --prune             # also remove projects absent from the file
 
 ## License
 
-MIT
+[Mozilla Public License 2.0](https://www.mozilla.org/MPL/2.0/) + [Commons Clause](https://commonsclause.com/).
+
+Free to use, modify, and self-host. The Commons Clause restricts re-selling Poof! itself (e.g. as a hosted product whose value derives substantially from Poof!) without a separate agreement. See the [LICENSE](LICENSE) file for the full text.

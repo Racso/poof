@@ -637,6 +637,7 @@
             transition: color 0.2s;
         }
         .footer-links a:hover { color: var(--white); }
+        .footer-license { display: inline-flex; align-items: center; gap: 0.4rem; }
 
         .footer-credit {
             font-size: 0.75rem;
@@ -1042,7 +1043,7 @@
 <nav>
     <a href="#" class="nav-logo">poof<span class="exclaim">!</span></a>
     <div class="nav-right">
-        <span class="nav-badge">open source</span>
+        <span class="nav-badge">free + source-available</span>
         <a href="#start" class="nav-link">Quick start</a>
         <a href="#features" class="nav-link">Reference</a>
         <a href="https://github.com/racso/poof#readme" class="nav-github" target="_blank" rel="noopener">
@@ -1379,7 +1380,11 @@
         <a href="#" class="footer-logo">poof<span class="exclaim">!</span></a>
         <div class="footer-links">
             <a href="https://github.com/racso/poof" target="_blank" rel="noopener">GitHub</a>
-            <a href="https://github.com/racso/poof/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+            <span class="footer-license">
+                <a href="https://www.mozilla.org/MPL/2.0/" target="_blank" rel="noopener">MPL-2.0</a>
+                <span aria-hidden="true">+</span>
+                <a href="https://commonsclause.com/" target="_blank" rel="noopener">Commons Clause</a>
+            </span>
         </div>
     </div>
     <div class="footer-credit">
