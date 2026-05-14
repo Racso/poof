@@ -142,15 +142,18 @@ func resolveSpellTarget(t string) (string, error) {
 	if strings.Contains(t, ":") {
 		return t, nil
 	}
-	var proj map[string]interface{}
-	if err := apiGet("/projects/"+t, &proj); err != nil {
+	var resp struct {
+		Project struct {
+			Port int `json:"port"`
+		} `json:"project"`
+	}
+	if err := apiGet("/projects/"+t, &resp); err != nil {
 		return "", fmt.Errorf("target project %q: %v", t, err)
 	}
-	port, ok := proj["port"].(float64)
-	if !ok || port <= 0 {
+	if resp.Project.Port <= 0 {
 		return "", fmt.Errorf("target project %q has no port set (use <container>:<port> instead)", t)
 	}
-	return fmt.Sprintf("poof-%s:%d", t, int(port)), nil
+	return fmt.Sprintf("poof-%s:%d", t, resp.Project.Port), nil
 }
 
 // renderProxySnippet emits a plain Caddy snippet for a single proxy entry.
@@ -238,11 +241,15 @@ until the next deploy lands and is then stopped automatically.`,
 func runSpellToStatic(cmd *cobra.Command, args []string) {
 	project := args[0]
 
-	var proj map[string]interface{}
-	if err := apiGet("/projects/"+project, &proj); err != nil {
+	var resp struct {
+		Project struct {
+			Static string `json:"static"`
+		} `json:"project"`
+	}
+	if err := apiGet("/projects/"+project, &resp); err != nil {
 		fatal("project: %v", err)
 	}
-	current, _ := proj["static"].(string)
+	current := resp.Project.Static
 	if current == "static" || current == "spa" {
 		fatal("project %q is already static (mode: %s); nothing to do",
 			project, current)
