@@ -1016,6 +1016,17 @@
             font-size: 0.8rem;
             color: var(--n4);
         }
+        .section-sub a,
+        .cli-footer a {
+            color: var(--main-accent);
+            text-decoration: none;
+            border-bottom: 1px solid var(--main-accent-lo);
+            transition: border-color 0.2s, color 0.2s;
+        }
+        .section-sub a:hover,
+        .cli-footer a:hover {
+            border-bottom-color: var(--main-accent);
+        }
         .cli-footer code {
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.75rem;
