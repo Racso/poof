@@ -3,6 +3,7 @@ package docker
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -176,12 +177,25 @@ func Deploy(cfg DeployConfig) error {
 	if err != nil {
 		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
 	}
+	if pullOut := strings.TrimSpace(string(out)); pullOut != "" {
+		log.Printf("deploy %s: pull output: %s", cfg.Name, pullOut)
+	}
 
 	containerName := containerFor(cfg.Name)
 
-	// Stop and remove any existing container — ignore errors (may not exist).
-	exec.Command("docker", "stop", containerName).Run()
-	exec.Command("docker", "rm", containerName).Run()
+	// Stop and remove any existing container.
+	if stopOut, stopErr := exec.Command("docker", "stop", containerName).CombinedOutput(); stopErr != nil {
+		msg := strings.TrimSpace(string(stopOut))
+		if !strings.Contains(msg, "No such container") {
+			log.Printf("deploy %s: stop %s: %s", cfg.Name, containerName, msg)
+		}
+	}
+	if rmOut, rmErr := exec.Command("docker", "rm", containerName).CombinedOutput(); rmErr != nil {
+		msg := strings.TrimSpace(string(rmOut))
+		if !strings.Contains(msg, "No such container") {
+			log.Printf("deploy %s: rm %s: %s", cfg.Name, containerName, msg)
+		}
+	}
 
 	args := []string{
 		"run", "-d",
@@ -203,6 +217,9 @@ func Deploy(cfg DeployConfig) error {
 	out, err = exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker run failed: %s", strings.TrimSpace(string(out)))
+	}
+	if containerID := strings.TrimSpace(string(out)); containerID != "" {
+		log.Printf("deploy %s: container started: %s", cfg.Name, containerID)
 	}
 	return nil
 }

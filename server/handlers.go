@@ -804,6 +804,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	if err != nil {
 		status = "failed"
 		s.store.UpdateDeploymentStatus(depID, status)
+		log.Printf("deploy failed: %s → %v", p.Name, err)
 		jsonError(w, fmt.Sprintf("deploy failed: %v", err), http.StatusInternalServerError)
 		return
 	}
