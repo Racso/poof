@@ -131,6 +131,12 @@ poof install                         set up a Poof! server on this machine
 poof list                            list all projects and status
 poof logs <name> [--lines N]         container log lines
 poof migrate workflows [--apply]     one-shot migrations across breaking releases
+poof net create <name> [--internal] create a Poof-managed Docker network
+poof net ls                          list Poof-managed networks
+poof net delete <name>               delete a network record (must be detached)
+poof net add <project> <network>     attach a network to a project
+poof net list <project>              list networks attached to a project
+poof net remove <project> <id>       detach a network from a project
 poof redirect add <from> <to>        add a domain redirect (301)
 poof redirect delete <id>            delete a redirect by ID
 poof redirect list                   list all redirects
@@ -304,6 +310,26 @@ poof deploy myapp   # redeploy to apply changes
 **Managed mounts** — only a container path is given. Poof! creates and owns the host directory at `/var/lib/poof/<project>/<container-path>`. When removing a managed volume, you will be asked whether to delete the host data (`--data-delete` / `--data-keep` to skip the prompt).
 
 **Explicit mounts** — `host/path:container/path` format. You control the host directory; Poof! never touches it.
+
+## Networks
+
+Every project's container is always on `poof-net` (so Caddy can route to it). Attaching an **extra** network lets several projects talk to each other privately — e.g. an API and its worker sharing a backend database that's never exposed publicly.
+
+```sh
+poof net create backend --internal   # private network, no external connectivity
+poof net ls
+poof net add api backend             # attach project 'api'
+poof net add worker backend          # attach project 'worker'
+poof deploy api && poof deploy worker # redeploy to apply
+```
+
+Poof! records each attachment as desired state and **re-applies it on every (re)deploy**, so membership survives redeploys — unlike a one-off `docker network connect`, which is lost the moment the container is recreated.
+
+**`--internal`** networks have no external connectivity (no egress, nothing published) — ideal for backend-only traffic between containers.
+
+Detach with `poof net remove <project> <id>` (the ID comes from `poof net list <project>`). Deleting a network with `poof net delete <name>` is refused while any project is still attached; it removes only Poof!'s record and leaves the underlying Docker network in place (it may hold non-Poof endpoints — remove it yourself with `docker network rm` if you want it gone).
+
+Networks are not supported for static projects (they have no container).
 
 ## Domain redirects
 
