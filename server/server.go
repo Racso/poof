@@ -38,6 +38,9 @@ type ContainerManager interface {
 	SweepOrphans(refs []string, dryRun bool) (GCResult, error)
 	PruneDangling() error
 	ImagesDiskUsage() (int64, error)
+	EnsureNetwork(name string, internal bool) error
+	CreateNetwork(name string, internal bool) error
+	NetworkExists(name string) bool
 }
 
 // GCResult mirrors docker.GCResult for the interface boundary.
@@ -54,6 +57,7 @@ type ContainerDeployConfig struct {
 	Image         string
 	EnvVars       map[string]string
 	Volumes       []string
+	Networks      []string
 	RegistryUser  string
 	RegistryToken string
 }
@@ -134,6 +138,15 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/volumes", s.auth(s.addVolume))
 	mux.HandleFunc("GET /projects/{name}/volumes/{id}", s.auth(s.getVolume))
 	mux.HandleFunc("DELETE /projects/{name}/volumes/{id}", s.auth(s.removeVolume))
+
+	// Networks (Poof-managed Docker networks + per-project attachments)
+	mux.HandleFunc("GET /networks", s.auth(s.listNetworks))
+	mux.HandleFunc("POST /networks", s.auth(s.createNetwork))
+	mux.HandleFunc("DELETE /networks/{name}", s.auth(s.deleteNetwork))
+	mux.HandleFunc("GET /projects/{name}/networks", s.auth(s.listProjectNetworks))
+	mux.HandleFunc("POST /projects/{name}/networks", s.auth(s.addProjectNetwork))
+	mux.HandleFunc("GET /projects/{name}/networks/{id}", s.auth(s.getProjectNetwork))
+	mux.HandleFunc("DELETE /projects/{name}/networks/{id}", s.auth(s.removeProjectNetwork))
 
 	// Caddy snippets (per-project custom Caddy directives)
 	mux.HandleFunc("GET /caddy/snippets", s.auth(s.listCaddySnippets))

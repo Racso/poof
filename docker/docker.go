@@ -16,9 +16,14 @@ type DeployConfig struct {
 	Image         string
 	EnvVars       map[string]string
 	Volumes       []string // host:container mount specs
+	Networks      []string // extra Docker networks to attach (besides poof-net)
 	RegistryUser  string   // optional: login before pull
 	RegistryToken string   // optional: login before pull
 }
+
+// managedNetworkLabel marks Docker networks created by Poof so `poof net ls`
+// can distinguish them from networks created out-of-band.
+const managedNetworkLabel = "poof.managed=true"
 
 // registryHost extracts the registry hostname from an image reference.
 // "ghcr.io/foo/bar:tag" → "ghcr.io"; "ubuntu:22.04" → "" (Docker Hub).
@@ -204,6 +209,16 @@ func Deploy(cfg DeployConfig) error {
 		"--restart", "always",
 	}
 
+	// Attach any additional project networks. Poof re-applies these on every
+	// (re)create, so the membership survives redeploys — unlike a one-off
+	// `docker network connect`.
+	for _, net := range cfg.Networks {
+		if net == "" || net == networkName {
+			continue
+		}
+		args = append(args, "--network", net)
+	}
+
 	for k, v := range cfg.EnvVars {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
@@ -268,6 +283,38 @@ func containerFor(projectName string) string {
 
 // NetworkName returns the Docker network name that Poof uses.
 func NetworkName() string { return networkName }
+
+// NetworkExists reports whether a Docker network with the given name exists.
+func NetworkExists(name string) bool {
+	err := exec.Command("docker", "network", "inspect", name).Run()
+	return err == nil
+}
+
+// CreateNetwork creates a Docker network labelled as Poof-managed. If internal
+// is true the network has no external connectivity (no egress, not published).
+// It is an error if the network already exists.
+func CreateNetwork(name string, internal bool) error {
+	args := []string{"network", "create", "--label", managedNetworkLabel}
+	if internal {
+		args = append(args, "--internal")
+	}
+	args = append(args, name)
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker network create failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// EnsureNetwork creates the network if it does not already exist. Idempotent —
+// safe to call on every deploy so a project's networks survive even if one was
+// removed out-of-band.
+func EnsureNetwork(name string, internal bool) error {
+	if NetworkExists(name) {
+		return nil
+	}
+	return CreateNetwork(name, internal)
+}
 
 // ContainerExists reports whether a container with the given name exists
 // (running or stopped).

@@ -35,7 +35,7 @@ type mockDiagnosticCall struct {
 
 type mockSetupCall struct {
 	Owner, Repo, ProjectName, PoofURL, PoofToken, Branch, Image, Folder, Static, CIMode string
-	Build                                                                                bool
+	Build                                                                               bool
 }
 
 type mockRemoveCall struct {
@@ -44,11 +44,11 @@ type mockRemoveCall struct {
 }
 
 type mockRefreshCall struct {
-	Owner, Repo, ProjectName string
-	CI                       bool
+	Owner, Repo, ProjectName                                  string
+	CI                                                        bool
 	PoofURL, RepoToken, Branch, Image, Folder, Static, CIMode string
-	Build                                                      bool
-	DeleteSecrets                                              bool
+	Build                                                     bool
+	DeleteSecrets                                             bool
 }
 
 func (m *mockRepoManager) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode string, build bool) error {
@@ -92,15 +92,17 @@ func (m *mockRepoManager) DeleteLegacyWorkflow(owner, repo, projectName string) 
 // --- Mock ContainerManager ---
 
 type mockContainerManager struct {
-	deployCalls   []server.ContainerDeployConfig
-	stopCalls     []string
-	running       map[string]bool
-	logs          map[string]string
-	gcCalls       []mockGCCall
-	sweepCalls    [][]string // each call's refs argument
-	pruneCalls    int
-	diskUsages    []int64 // values returned in order; once exhausted, returns last
-	diskCalls     int
+	deployCalls     []server.ContainerDeployConfig
+	stopCalls       []string
+	running         map[string]bool
+	logs            map[string]string
+	gcCalls         []mockGCCall
+	sweepCalls      [][]string // each call's refs argument
+	pruneCalls      int
+	diskUsages      []int64 // values returned in order; once exhausted, returns last
+	diskCalls       int
+	networksEnsured []string
+	networksCreated []string
 }
 
 type mockGCCall struct {
@@ -145,6 +147,25 @@ func (m *mockContainerManager) SweepOrphans(refs []string, dryRun bool) (server.
 func (m *mockContainerManager) PruneDangling() error {
 	m.pruneCalls++
 	return nil
+}
+
+func (m *mockContainerManager) EnsureNetwork(name string, internal bool) error {
+	m.networksEnsured = append(m.networksEnsured, name)
+	return nil
+}
+
+func (m *mockContainerManager) CreateNetwork(name string, internal bool) error {
+	m.networksCreated = append(m.networksCreated, name)
+	return nil
+}
+
+func (m *mockContainerManager) NetworkExists(name string) bool {
+	for _, n := range m.networksCreated {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockContainerManager) ImagesDiskUsage() (int64, error) {
@@ -1307,6 +1328,90 @@ func TestDeployCallsContainerDeploy(t *testing.T) {
 	}
 	if c.EnvVars["DB"] != "pg://localhost" {
 		t.Errorf("env DB: got %q", c.EnvVars["DB"])
+	}
+}
+
+// --- Networks ---
+
+func TestNetworkCreateAttachAndDeploy(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "api", Domain: "api.rac.so", Image: "ghcr.io/racso/api",
+		Repo: "racso/api", Branch: "main", Port: 80,
+	})
+
+	// Create an internal network.
+	rr := do(t, srv, "POST", "/networks",
+		map[string]interface{}{"name": "backend", "internal": true}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create network: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.networksEnsured) != 1 || mocks.container.networksEnsured[0] != "backend" {
+		t.Fatalf("expected backend network ensured, got %v", mocks.container.networksEnsured)
+	}
+
+	// Duplicate create is a conflict.
+	rr = do(t, srv, "POST", "/networks",
+		map[string]interface{}{"name": "backend"}, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("duplicate network: expected 409, got %d", rr.Code)
+	}
+
+	// Attaching a non-existent network is rejected.
+	rr = do(t, srv, "POST", "/projects/api/networks",
+		map[string]interface{}{"network": "ghost"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("attach ghost network: expected 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Attach the real network.
+	rr = do(t, srv, "POST", "/projects/api/networks",
+		map[string]interface{}{"network": "backend"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("attach network: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Deploy should carry the network through to the container config.
+	rr = do(t, srv, "POST", "/projects/api/deploy",
+		map[string]interface{}{"image": "ghcr.io/racso/api:v1"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.deployCalls) != 1 {
+		t.Fatalf("expected 1 deploy, got %d", len(mocks.container.deployCalls))
+	}
+	nets := mocks.container.deployCalls[0].Networks
+	if len(nets) != 1 || nets[0] != "backend" {
+		t.Fatalf("expected deploy with network backend, got %v", nets)
+	}
+
+	// Deleting a network still in use is refused.
+	rr = do(t, srv, "DELETE", "/networks/backend", nil, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("delete in-use network: expected 409, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Detach, then delete succeeds.
+	var attached []store.ProjectNetwork
+	rr = do(t, srv, "GET", "/projects/api/networks", nil, globalToken)
+	if err := json.Unmarshal(rr.Body.Bytes(), &attached); err != nil {
+		t.Fatalf("list project networks: %v", err)
+	}
+	if len(attached) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(attached))
+	}
+	rr = do(t, srv, "DELETE", fmt.Sprintf("/projects/api/networks/%d", attached[0].ID), nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("detach: %d — %s", rr.Code, rr.Body.String())
+	}
+	rr = do(t, srv, "DELETE", "/networks/backend", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete network: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if nets, _ := st.ListNetworks(); len(nets) != 0 {
+		t.Fatalf("expected no networks after delete, got %v", nets)
 	}
 }
 

@@ -17,6 +17,7 @@ type Store struct {
 //   - callable: the workflow is a reusable workflow (on: workflow_call),
 //     meant to be invoked from a user-owned outer workflow that adds
 //     surrounding steps (tests, lint, matrix builds, etc.).
+//
 // CIMode is irrelevant when CI is false; persisted defaults to "managed".
 const (
 	CIModeManaged  = "managed"
@@ -52,6 +53,23 @@ type Volume struct {
 	ContainerPath string    `json:"container_path"`
 	Managed       bool      `json:"managed"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+// Network is a Poof-managed Docker network definition. The name is the Docker
+// network name; Internal mirrors `docker network create --internal`.
+type Network struct {
+	Name      string    `json:"name"`
+	Internal  bool      `json:"internal"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ProjectNetwork attaches a project's container to an extra network (besides
+// the mandatory poof-net) on every (re)deploy.
+type ProjectNetwork struct {
+	ID        int64     `json:"id"`
+	Project   string    `json:"project"`
+	Network   string    `json:"network"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Redirect struct {
@@ -150,6 +168,21 @@ func (s *Store) migrate() error {
 			container_path TEXT NOT NULL,
 			managed        BOOLEAN NOT NULL DEFAULT 0,
 			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+		);
+
+		CREATE TABLE IF NOT EXISTS networks (
+			name       TEXT PRIMARY KEY,
+			internal   INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE IF NOT EXISTS project_networks (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			project    TEXT NOT NULL,
+			network    TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (project, network),
 			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
 		);
 
@@ -700,6 +733,133 @@ func (s *Store) DeleteVolume(id int64) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM volumes WHERE id = ?`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete volume: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// --- Networks ---
+
+func (s *Store) CreateNetwork(n Network) (*Network, error) {
+	_, err := s.db.Exec(
+		`INSERT INTO networks (name, internal) VALUES (?, ?)`,
+		n.Name, n.Internal,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create network: %w", err)
+	}
+	return s.GetNetwork(n.Name)
+}
+
+func (s *Store) GetNetwork(name string) (*Network, error) {
+	n := &Network{}
+	err := s.db.QueryRow(
+		`SELECT name, internal, created_at FROM networks WHERE name = ?`, name,
+	).Scan(&n.Name, &n.Internal, &n.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get network: %w", err)
+	}
+	return n, nil
+}
+
+func (s *Store) ListNetworks() ([]Network, error) {
+	rows, err := s.db.Query(
+		`SELECT name, internal, created_at FROM networks ORDER BY name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list networks: %w", err)
+	}
+	defer rows.Close()
+
+	var networks []Network
+	for rows.Next() {
+		var n Network
+		if err := rows.Scan(&n.Name, &n.Internal, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		networks = append(networks, n)
+	}
+	return networks, rows.Err()
+}
+
+func (s *Store) DeleteNetwork(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM networks WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("delete network: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// CountProjectsUsingNetwork returns how many project attachments reference the
+// given network — used to refuse deleting a network still in use.
+func (s *Store) CountProjectsUsingNetwork(network string) (int, error) {
+	var c int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM project_networks WHERE network = ?`, network,
+	).Scan(&c)
+	if err != nil {
+		return 0, fmt.Errorf("count network usage: %w", err)
+	}
+	return c, nil
+}
+
+// --- Project networks ---
+
+func (s *Store) CreateProjectNetwork(pn ProjectNetwork) (*ProjectNetwork, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO project_networks (project, network) VALUES (?, ?)`,
+		pn.Project, pn.Network,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create project network: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return s.GetProjectNetwork(id)
+}
+
+func (s *Store) GetProjectNetwork(id int64) (*ProjectNetwork, error) {
+	pn := &ProjectNetwork{}
+	err := s.db.QueryRow(
+		`SELECT id, project, network, created_at FROM project_networks WHERE id = ?`, id,
+	).Scan(&pn.ID, &pn.Project, &pn.Network, &pn.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get project network: %w", err)
+	}
+	return pn, nil
+}
+
+func (s *Store) ListProjectNetworks(project string) ([]ProjectNetwork, error) {
+	rows, err := s.db.Query(
+		`SELECT id, project, network, created_at FROM project_networks WHERE project = ? ORDER BY id`,
+		project,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list project networks: %w", err)
+	}
+	defer rows.Close()
+
+	var nets []ProjectNetwork
+	for rows.Next() {
+		var pn ProjectNetwork
+		if err := rows.Scan(&pn.ID, &pn.Project, &pn.Network, &pn.CreatedAt); err != nil {
+			return nil, err
+		}
+		nets = append(nets, pn)
+	}
+	return nets, rows.Err()
+}
+
+func (s *Store) DeleteProjectNetwork(id int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM project_networks WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete project network: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil

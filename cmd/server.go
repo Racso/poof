@@ -73,12 +73,20 @@ func (dockerAdapter) Deploy(cfg server.ContainerDeployConfig) error {
 		Image:         cfg.Image,
 		EnvVars:       cfg.EnvVars,
 		Volumes:       cfg.Volumes,
+		Networks:      cfg.Networks,
 		RegistryUser:  cfg.RegistryUser,
 		RegistryToken: cfg.RegistryToken,
 	})
 }
-func (dockerAdapter) Stop(name string) error              { return docker.Stop(name) }
-func (dockerAdapter) IsRunning(name string) bool           { return docker.IsRunning(name) }
+func (dockerAdapter) EnsureNetwork(name string, internal bool) error {
+	return docker.EnsureNetwork(name, internal)
+}
+func (dockerAdapter) CreateNetwork(name string, internal bool) error {
+	return docker.CreateNetwork(name, internal)
+}
+func (dockerAdapter) NetworkExists(name string) bool              { return docker.NetworkExists(name) }
+func (dockerAdapter) Stop(name string) error                      { return docker.Stop(name) }
+func (dockerAdapter) IsRunning(name string) bool                  { return docker.IsRunning(name) }
 func (dockerAdapter) Logs(name string, lines int) (string, error) { return docker.Logs(name, lines) }
 func (dockerAdapter) GC(name, image string, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
 	r, err := docker.GC(name, image, keep, olderThanDays, dryRun)
@@ -88,7 +96,7 @@ func (dockerAdapter) SweepOrphans(refs []string, dryRun bool) (server.GCResult, 
 	r, err := docker.SweepOrphans(refs, dryRun)
 	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
 }
-func (dockerAdapter) PruneDangling() error { return docker.PruneDangling() }
+func (dockerAdapter) PruneDangling() error            { return docker.PruneDangling() }
 func (dockerAdapter) ImagesDiskUsage() (int64, error) { return docker.ImagesDiskUsage() }
 
 // staticAdapter delegates server.StaticDeployer to the static package functions.
@@ -100,8 +108,10 @@ func (staticAdapter) Deploy(dataDir, project string, depID int64, tarball io.Rea
 func (staticAdapter) Rollback(dataDir, project string, depID int64) error {
 	return static.Rollback(dataDir, project, depID)
 }
-func (staticAdapter) IsDeployed(dataDir, project string) bool { return static.IsDeployed(dataDir, project) }
-func (staticAdapter) Remove(dataDir, project string)          { static.Remove(dataDir, project) }
+func (staticAdapter) IsDeployed(dataDir, project string) bool {
+	return static.IsDeployed(dataDir, project)
+}
+func (staticAdapter) Remove(dataDir, project string) { static.Remove(dataDir, project) }
 func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
 	sv := make([]static.VersionInfo, len(versions))
 	for i, v := range versions {
@@ -114,7 +124,9 @@ func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion
 // caddyAdapter delegates server.CaddySyncer to the caddy package.
 type caddyAdapter struct{}
 
-func (caddyAdapter) Reload(adminURL, caddyfile string) error { return caddy.Reload(adminURL, caddyfile) }
+func (caddyAdapter) Reload(adminURL, caddyfile string) error {
+	return caddy.Reload(adminURL, caddyfile)
+}
 
 // checkCaddySetup inspects the Docker environment and prints warnings if the
 // Caddy container is missing or lacks the shared static-files volume mount.

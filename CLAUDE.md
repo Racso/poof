@@ -38,6 +38,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 
 - **Project** — name, domain, image, repo, branch, port, subpath mode, folder (monorepo), static mode (`"" | static | spa`), build flag, CI flag, CI mode (`managed` | `callable`).
 - **Volume** — managed (`/var/lib/poof/<project>/<container-path>`) or explicit (`host:container`).
+- **Network** — Poof-managed Docker network (`name`, `internal`) plus a `project_networks` join table of per-project attachments. Re-applied on every (re)deploy.
 - **Redirect** — independent 301 from one domain to another.
 - **Deployment** — image tag, status, timestamp; powers rollback.
 - **GC policy** — per-project + global default (`keep`, `older_than_days`, `disabled`).
@@ -61,6 +62,7 @@ Config / env / volumes / redirects:
 - `poof config [set <key> [value]]` — local keys: `server`, `token`. Server keys: `domain`, `github-user`, `github-token`. With `--profile` / `--profile-env` for multi-server setups.
 - `poof env get|set|unset|copy` — copy supports `--all|--only|--except|--ask`.
 - `poof volume add|list|remove` — managed (`/app/data`) or explicit (`/host:/container`).
+- `poof net create|ls|delete|add|list|remove` — Poof-managed Docker networks for private inter-project traffic. `create <name> [--internal]` defines a network (DB-backed desired state); `add <project> <network>` attaches it. Poof re-attaches on every (re)deploy alongside the mandatory poof-net, so membership survives redeploys (unlike a one-off `docker network connect`). `delete` refuses while any project is still attached and leaves the underlying Docker network in place.
 - `poof redirect add|list|delete` — domain-level 301s independent of any project.
 
 Caddy / GC / install / update:

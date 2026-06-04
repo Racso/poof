@@ -119,9 +119,9 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	snippet, _ := s.store.GetCaddySnippet(name)
 
 	jsonOK(w, map[string]interface{}{
-		"project":          p,
-		"running":          running,
-		"deployment":       last,
+		"project":           p,
+		"running":           running,
+		"deployment":        last,
 		"has_caddy_snippet": snippet != "",
 	})
 }
@@ -788,6 +788,26 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		mounts[i] = v.HostPath + ":" + v.ContainerPath
 	}
 
+	projNets, err := s.store.ListProjectNetworks(p.Name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	nets := make([]string, 0, len(projNets))
+	for _, pn := range projNets {
+		// Ensure each attached network exists before (re)deploying, recreating
+		// it with the right internal flag if it was removed out-of-band.
+		internal := false
+		if def, derr := s.store.GetNetwork(pn.Network); derr == nil && def != nil {
+			internal = def.Internal
+		}
+		if err := s.container.EnsureNetwork(pn.Network, internal); err != nil {
+			jsonError(w, fmt.Sprintf("ensure network %q: %v", pn.Network, err), http.StatusInternalServerError)
+			return
+		}
+		nets = append(nets, pn.Network)
+	}
+
 	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
@@ -796,6 +816,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Image:         image,
 		EnvVars:       envVars,
 		Volumes:       mounts,
+		Networks:      nets,
 		RegistryUser:  s.settingGitHubUser(),
 		RegistryToken: s.settingGitHubToken(),
 	})
@@ -1152,6 +1173,192 @@ func parseMount(project, mount string) (hostPath, containerPath string, managed 
 	rel := strings.TrimPrefix(containerPath, "/")
 	hostPath = "/var/lib/poof/" + project + "/" + rel
 	return hostPath, containerPath, true
+}
+
+// --- Networks ---
+
+func (s *Server) listNetworks(w http.ResponseWriter, r *http.Request) {
+	nets, err := s.store.ListNetworks()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if nets == nil {
+		nets = []store.Network{}
+	}
+	jsonOK(w, nets)
+}
+
+type createNetworkRequest struct {
+	Name     string `json:"name"`
+	Internal bool   `json:"internal"`
+}
+
+func (s *Server) createNetwork(w http.ResponseWriter, r *http.Request) {
+	var req createNetworkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		jsonError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+
+	if existing, err := s.store.GetNetwork(req.Name); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if existing != nil {
+		jsonError(w, fmt.Sprintf("network %q already exists", req.Name), http.StatusConflict)
+		return
+	}
+
+	if err := s.container.EnsureNetwork(req.Name, req.Internal); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	net, err := s.store.CreateNetwork(store.Network{Name: req.Name, Internal: req.Internal})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("network created: %s internal=%v", net.Name, net.Internal)
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, net)
+}
+
+func (s *Server) deleteNetwork(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	count, err := s.store.CountProjectsUsingNetwork(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if count > 0 {
+		jsonError(w, fmt.Sprintf("network %q is attached to %d project(s); detach them first", name, count), http.StatusConflict)
+		return
+	}
+
+	found, err := s.store.DeleteNetwork(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		jsonError(w, "network not found", http.StatusNotFound)
+		return
+	}
+
+	// The Docker network is left in place; removing it is a separate, explicit
+	// op (it may hold non-Poof endpoints). We only drop the Poof record.
+	log.Printf("network record removed: %s", name)
+	jsonOK(w, map[string]interface{}{"status": "removed", "name": name})
+}
+
+func (s *Server) listProjectNetworks(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	nets, err := s.store.ListProjectNetworks(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if nets == nil {
+		nets = []store.ProjectNetwork{}
+	}
+	jsonOK(w, nets)
+}
+
+func (s *Server) getProjectNetwork(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	pn, err := s.store.GetProjectNetwork(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pn == nil {
+		jsonError(w, "network attachment not found", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, pn)
+}
+
+type addProjectNetworkRequest struct {
+	Network string `json:"network"`
+}
+
+func (s *Server) addProjectNetwork(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	if p.IsStatic() {
+		jsonError(w, "networks are not supported for static projects", http.StatusBadRequest)
+		return
+	}
+
+	var req addProjectNetworkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Network == "" {
+		jsonError(w, "network is required", http.StatusBadRequest)
+		return
+	}
+
+	def, err := s.store.GetNetwork(req.Network)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if def == nil {
+		jsonError(w, fmt.Sprintf("network %q does not exist; create it with 'poof net create %s'", req.Network, req.Network), http.StatusBadRequest)
+		return
+	}
+
+	pn, err := s.store.CreateProjectNetwork(store.ProjectNetwork{Project: name, Network: req.Network})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("network attached: project=%s network=%s id=%d", name, req.Network, pn.ID)
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, pn)
+}
+
+func (s *Server) removeProjectNetwork(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		jsonError(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	pn, err := s.store.GetProjectNetwork(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pn == nil {
+		jsonError(w, "network attachment not found", http.StatusNotFound)
+		return
+	}
+
+	found, err := s.store.DeleteProjectNetwork(id)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		jsonError(w, "network attachment not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("network detached: id=%d project=%s network=%s", id, pn.Project, pn.Network)
+	jsonOK(w, map[string]interface{}{"status": "removed", "network": pn.Network})
 }
 
 // --- Caddy Snippets ---
