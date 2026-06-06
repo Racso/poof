@@ -59,6 +59,7 @@ Static sites:
 		spaFlag, _ := cmd.Flags().GetBool("spa")
 		buildFlag, _ := cmd.Flags().GetBool("build")
 		ciVal, _ := cmd.Flags().GetString("ci")
+		netVal, _ := cmd.Flags().GetString("net")
 
 		// --spa and --build require --static.
 		if spaFlag && !staticFlag {
@@ -144,6 +145,9 @@ Static sites:
 				payload["ci_mode"] = mode
 			}
 		}
+		if netVal != "" {
+			payload["net"] = netVal
+		}
 
 		var result map[string]interface{}
 		if err := apiPost("/projects", payload, &result); err != nil {
@@ -204,4 +208,5 @@ func init() {
 	addCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
 	addCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
 	addCmd.Flags().String("ci", "", "CI workflow setup: yes (push-triggered), no, or callable (reusable workflow)")
+	addCmd.Flags().String("net", "", "network mode: full (default), ingress-only, egress-only, or sealed")
 }

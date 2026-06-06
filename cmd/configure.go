@@ -27,6 +27,7 @@ The project token is never affected — GitHub Actions integrations remain valid
 		folderSet := cmd.Flags().Changed("folder")
 		ciVal, _ := cmd.Flags().GetString("ci")
 		ciSet := cmd.Flags().Changed("ci")
+		netVal, _ := cmd.Flags().GetString("net")
 
 		staticOn := cmd.Flags().Changed("static")
 		staticOff := cmd.Flags().Changed("no-static")
@@ -91,6 +92,9 @@ The project token is never affected — GitHub Actions integrations remain valid
 				payload["ci_mode"] = mode
 			}
 		}
+		if netVal != "" {
+			payload["net"] = netVal
+		}
 
 		if len(payload) == 0 {
 			fatal("no fields to update — pass at least one flag")
@@ -136,4 +140,5 @@ func init() {
 	configureCmd.Flags().Bool("build", false, "use Dockerfile to build static files")
 	configureCmd.Flags().Bool("no-build", false, "disable Dockerfile build for static files")
 	configureCmd.Flags().String("ci", "", "CI workflow setup: yes (push-triggered), no, or callable (reusable workflow)")
+	configureCmd.Flags().String("net", "", "network mode: full, ingress-only, egress-only, or sealed")
 }

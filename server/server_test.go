@@ -416,6 +416,66 @@ func TestCreateProjectAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestNetModeDomainCoupling(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+
+	// full (default) → gets a domain.
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create web: %d — %s", rr.Code, rr.Body.String())
+	}
+	var web map[string]interface{}
+	decode(t, rr, &web)
+	if web["net_mode"] != "full" || web["domain"] != "web.rac.so" {
+		t.Fatalf("full project: net_mode=%v domain=%v", web["net_mode"], web["domain"])
+	}
+
+	// egress-only → no domain assigned.
+	rr = do(t, srv, "POST", "/projects", map[string]interface{}{"name": "worker", "net": "egress-only"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create worker: %d — %s", rr.Code, rr.Body.String())
+	}
+	var worker map[string]interface{}
+	decode(t, rr, &worker)
+	if worker["net_mode"] != "egress-only" || worker["domain"] != "" {
+		t.Fatalf("egress-only project: net_mode=%v domain=%v", worker["net_mode"], worker["domain"])
+	}
+
+	// egress-only + explicit domain → rejected.
+	rr = do(t, srv, "POST", "/projects", map[string]interface{}{"name": "bad", "net": "egress-only", "domain": "bad.rac.so"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("egress-only with domain: expected 400, got %d", rr.Code)
+	}
+
+	// invalid net mode → rejected.
+	rr = do(t, srv, "POST", "/projects", map[string]interface{}{"name": "bad2", "net": "bogus"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("bogus net: expected 400, got %d", rr.Code)
+	}
+
+	// configure web full → sealed clears the domain.
+	rr = do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"net": "sealed"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch web sealed: %d — %s", rr.Code, rr.Body.String())
+	}
+	p, _ := st.GetProject("web")
+	if p.NetMode != "sealed" || p.Domain != "" {
+		t.Fatalf("sealed web: net_mode=%q domain=%q", p.NetMode, p.Domain)
+	}
+
+	// configure worker egress-only → full re-assigns the default subdomain.
+	rr = do(t, srv, "PATCH", "/projects/worker", map[string]interface{}{"net": "full"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch worker full: %d — %s", rr.Code, rr.Body.String())
+	}
+	p, _ = st.GetProject("worker")
+	if p.NetMode != "full" || p.Domain != "worker.rac.so" {
+		t.Fatalf("full worker: net_mode=%q domain=%q", p.NetMode, p.Domain)
+	}
+}
+
 func TestCreateProjectOverridesDefaults(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 

@@ -139,6 +139,7 @@ type createProjectRequest struct {
 	Build   bool   `json:"build"`
 	CI      *bool  `json:"ci"`
 	CIMode  string `json:"ci_mode"`
+	Net     string `json:"net"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -155,9 +156,27 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	isStatic := req.Static == "static" || req.Static == "spa"
 
-	// Apply defaults
-	if req.Domain == "" {
-		req.Domain = req.Name + "." + s.settingDomain()
+	// Net mode (defaults to full). Static sites are always Caddy-served, so
+	// their net mode is irrelevant — treat them as ingress regardless.
+	netMode := store.NetFull
+	if req.Net != "" {
+		if !store.ValidNetMode(req.Net) {
+			jsonError(w, "net must be one of: full, ingress-only, egress-only, sealed", http.StatusBadRequest)
+			return
+		}
+		netMode = req.Net
+	}
+	ingress := isStatic || netMode == store.NetFull || netMode == store.NetIngressOnly
+
+	// Domain: ingress modes get one (default subdomain if unset); non-ingress
+	// modes (egress-only, sealed) must not carry a domain.
+	if ingress {
+		if req.Domain == "" {
+			req.Domain = req.Name + "." + s.settingDomain()
+		}
+	} else if req.Domain != "" {
+		jsonError(w, fmt.Sprintf("a domain cannot be set for a %q project (it has no ingress)", netMode), http.StatusBadRequest)
+		return
 	}
 	if !isStatic {
 		if req.Image == "" {
@@ -246,6 +265,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Build:   req.Build,
 		CI:      ci,
 		CIMode:  ciMode,
+		NetMode: netMode,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -361,7 +381,27 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 				ciModeChanged = v != p.CIMode
 				p.CIMode = v
 			}
+		case "net":
+			if v, ok := val.(string); ok && v != "" {
+				if !store.ValidNetMode(v) {
+					jsonError(w, "net must be one of: full, ingress-only, egress-only, sealed", http.StatusBadRequest)
+					return
+				}
+				p.NetMode = v
+			}
 		}
+	}
+
+	// Reconcile the domain with the (possibly new) net mode. Static sites are
+	// always ingress; otherwise the mode decides. Gaining ingress assigns the
+	// default subdomain if none is set; losing ingress clears the domain.
+	ingress := p.IsStatic() || p.HasIngress()
+	if ingress {
+		if p.Domain == "" {
+			p.Domain = p.Name + "." + s.settingDomain()
+		}
+	} else {
+		p.Domain = ""
 	}
 
 	// If switching from container to static, stop the container and clear

@@ -24,6 +24,30 @@ const (
 	CIModeCallable = "callable"
 )
 
+// Net modes control a project's automatic network membership. They encode two
+// independent axes — ingress (Caddy routes to the container) and egress (the
+// container can reach the internet):
+//
+//	full          ingress + egress   (default; trusted web app)
+//	ingress-only  ingress, no egress (untrusted web app: serves but can't call out)
+//	egress-only   egress, no ingress (worker: calls out, not web-reachable)
+//	sealed        neither            (internal service, wired by hand into meshes)
+const (
+	NetFull        = "full"
+	NetIngressOnly = "ingress-only"
+	NetEgressOnly  = "egress-only"
+	NetSealed      = "sealed"
+)
+
+// ValidNetMode reports whether s is a recognized net mode.
+func ValidNetMode(s string) bool {
+	switch s {
+	case NetFull, NetIngressOnly, NetEgressOnly, NetSealed:
+		return true
+	}
+	return false
+}
+
 type Project struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
@@ -38,12 +62,25 @@ type Project struct {
 	Build     bool      `json:"build"`
 	CI        bool      `json:"ci"`
 	CIMode    string    `json:"ci_mode"`
+	NetMode   string    `json:"net_mode"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // IsStatic returns true if the project is a static site or SPA.
 func (p Project) IsStatic() bool {
 	return p.Static == "static" || p.Static == "spa"
+}
+
+// HasIngress reports whether Caddy should route public traffic to this project
+// (i.e. it has a domain and its own edge network with Caddy attached).
+func (p Project) HasIngress() bool {
+	return p.NetMode == NetFull || p.NetMode == NetIngressOnly
+}
+
+// HasEgress reports whether the container may initiate outbound connections to
+// the internet (i.e. its own network is non-internal).
+func (p Project) HasEgress() bool {
+	return p.NetMode == NetFull || p.NetMode == NetEgressOnly
 }
 
 type Volume struct {
@@ -135,6 +172,7 @@ func (s *Store) migrate() error {
 			build      INTEGER NOT NULL DEFAULT 0,
 			ci         INTEGER NOT NULL DEFAULT 1,
 			ci_mode    TEXT NOT NULL DEFAULT 'managed',
+			net_mode   TEXT NOT NULL DEFAULT 'full',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
@@ -221,6 +259,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN build INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci_mode TEXT NOT NULL DEFAULT 'managed'`)
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN net_mode TEXT NOT NULL DEFAULT 'full'`)
 
 	// Structural migration: add project IDs, rewrite deployments table.
 	if err := s.migrateProjectIDs(); err != nil {
@@ -275,13 +314,14 @@ func (s *Store) migrateProjectIDs() error {
 		build      INTEGER NOT NULL DEFAULT 0,
 		ci         INTEGER NOT NULL DEFAULT 1,
 		ci_mode    TEXT NOT NULL DEFAULT 'managed',
+		net_mode   TEXT NOT NULL DEFAULT 'full',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		return fmt.Errorf("create projects_new: %w", err)
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, created_at)
-		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, created_at
+		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, net_mode, created_at)
+		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, net_mode, created_at
 		FROM projects
 	`); err != nil {
 		return fmt.Errorf("copy projects: %w", err)
@@ -329,10 +369,13 @@ func (s *Store) CreateProject(p Project) error {
 	if p.CIMode == "" {
 		p.CIMode = CIModeManaged
 	}
+	if p.NetMode == "" {
+		p.NetMode = NetFull
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode)
-		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, net_mode)
+		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.NetMode,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -343,9 +386,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, net_mode, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.CreatedAt)
+	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.NetMode, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -357,7 +400,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, net_mode, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -368,7 +411,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.NetMode, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -427,9 +470,12 @@ func (s *Store) UpdateProject(p Project) error {
 	if p.CIMode == "" {
 		p.CIMode = CIModeManaged
 	}
+	if p.NetMode == "" {
+		p.NetMode = NetFull
+	}
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=?, ci_mode=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=?, ci_mode=?, net_mode=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.NetMode, p.Name,
 	)
 	return err
 }
