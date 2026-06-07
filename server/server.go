@@ -41,6 +41,10 @@ type ContainerManager interface {
 	EnsureNetwork(name string, internal bool) error
 	CreateNetwork(name string, internal bool) error
 	NetworkExists(name string) bool
+	ConnectNetwork(network, container string) error
+	DisconnectNetwork(network, container string) error
+	ContainerNetworks(container string) ([]string, error)
+	ContainerExists(name string) bool
 }
 
 // GCResult mirrors docker.GCResult for the interface boundary.
@@ -138,6 +142,9 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/volumes", s.auth(s.addVolume))
 	mux.HandleFunc("GET /projects/{name}/volumes/{id}", s.auth(s.getVolume))
 	mux.HandleFunc("DELETE /projects/{name}/volumes/{id}", s.auth(s.removeVolume))
+
+	// Network architecture migration sweep (reconcile per-app nets fleet-wide)
+	mux.HandleFunc("POST /migrate/networks", s.auth(s.migrateNetworks))
 
 	// Networks (Poof-managed Docker networks + per-project attachments)
 	mux.HandleFunc("GET /networks", s.auth(s.listNetworks))

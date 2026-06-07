@@ -281,6 +281,58 @@ func containerFor(projectName string) string {
 	return "poof-" + projectName
 }
 
+// ContainerName returns the Docker container name Poof uses for a project.
+func ContainerName(projectName string) string { return containerFor(projectName) }
+
+// ConnectNetwork attaches a container to a network. Idempotent: a container
+// already on the network is treated as success.
+func ConnectNetwork(network, container string) error {
+	out, err := exec.Command("docker", "network", "connect", network, container).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "already exists in network") || strings.Contains(msg, "already connected") {
+			return nil
+		}
+		return fmt.Errorf("docker network connect %s %s: %s", network, container, msg)
+	}
+	return nil
+}
+
+// DisconnectNetwork detaches a container from a network. Idempotent: a
+// container not on the network (or absent) is treated as success.
+func DisconnectNetwork(network, container string) error {
+	out, err := exec.Command("docker", "network", "disconnect", network, container).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "is not connected") || strings.Contains(msg, "No such container") || strings.Contains(msg, "No such network") {
+			return nil
+		}
+		return fmt.Errorf("docker network disconnect %s %s: %s", network, container, msg)
+	}
+	return nil
+}
+
+// ContainerNetworks returns the names of the networks a container is attached
+// to. A non-existent container yields an empty list (not an error).
+func ContainerNetworks(container string) ([]string, error) {
+	out, err := exec.Command(
+		"docker", "inspect", "--format",
+		`{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}`,
+		container,
+	).Output()
+	if err != nil {
+		// Container doesn't exist → no memberships.
+		return nil, nil
+	}
+	var nets []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			nets = append(nets, s)
+		}
+	}
+	return nets, nil
+}
+
 // NetworkName returns the Docker network name that Poof uses.
 func NetworkName() string { return networkName }
 

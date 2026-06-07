@@ -873,6 +873,13 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	s.store.UpdateDeploymentStatus(depID, status)
 	log.Printf("deployed %s → %s", p.Name, image)
 
+	// Reconcile the project's per-app network membership (idempotent, additive).
+	if actions, rerr := s.reconcileProjectNetworks(p, false); rerr != nil {
+		log.Printf("warning: network reconcile for %s failed: %v", p.Name, rerr)
+	} else if len(actions) > 0 {
+		log.Printf("network reconcile %s: %s", p.Name, strings.Join(actions, "; "))
+	}
+
 	if err := s.syncCaddy(); err != nil {
 		log.Printf("warning: caddy sync after deploy failed: %v", err)
 	}

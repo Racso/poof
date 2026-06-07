@@ -103,6 +103,8 @@ type mockContainerManager struct {
 	diskCalls       int
 	networksEnsured []string
 	networksCreated []string
+	nets            map[string]bool     // networks that "exist"
+	containerNets   map[string][]string // container -> attached networks
 }
 
 type mockGCCall struct {
@@ -151,21 +153,71 @@ func (m *mockContainerManager) PruneDangling() error {
 
 func (m *mockContainerManager) EnsureNetwork(name string, internal bool) error {
 	m.networksEnsured = append(m.networksEnsured, name)
+	if m.nets == nil {
+		m.nets = map[string]bool{}
+	}
+	m.nets[name] = true
 	return nil
 }
 
 func (m *mockContainerManager) CreateNetwork(name string, internal bool) error {
 	m.networksCreated = append(m.networksCreated, name)
+	if m.nets == nil {
+		m.nets = map[string]bool{}
+	}
+	m.nets[name] = true
 	return nil
 }
 
 func (m *mockContainerManager) NetworkExists(name string) bool {
+	if m.nets[name] {
+		return true
+	}
 	for _, n := range m.networksCreated {
 		if n == name {
 			return true
 		}
 	}
 	return false
+}
+
+func (m *mockContainerManager) ConnectNetwork(network, container string) error {
+	if m.containerNets == nil {
+		m.containerNets = map[string][]string{}
+	}
+	for _, n := range m.containerNets[container] {
+		if n == network {
+			return nil
+		}
+	}
+	m.containerNets[container] = append(m.containerNets[container], network)
+	return nil
+}
+
+func (m *mockContainerManager) DisconnectNetwork(network, container string) error {
+	if m.containerNets == nil {
+		return nil
+	}
+	var kept []string
+	for _, n := range m.containerNets[container] {
+		if n != network {
+			kept = append(kept, n)
+		}
+	}
+	m.containerNets[container] = kept
+	return nil
+}
+
+func (m *mockContainerManager) ContainerNetworks(container string) ([]string, error) {
+	return m.containerNets[container], nil
+}
+
+func (m *mockContainerManager) ContainerExists(name string) bool {
+	if m.running[name] {
+		return true
+	}
+	_, ok := m.containerNets[name]
+	return ok
 }
 
 func (m *mockContainerManager) ImagesDiskUsage() (int64, error) {
@@ -285,9 +337,10 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 	t.Cleanup(func() { st.Close() })
 
 	cfg := &config.ServerConfig{
-		APIPort:   9000,
-		PublicURL: "https://poof.rac.so",
-		Token:     "global-test-token",
+		APIPort:       9000,
+		PublicURL:     "https://poof.rac.so",
+		Token:         "global-test-token",
+		CaddyAdminURL: "http://caddy-proxy:2019",
 	}
 
 	mocks := &testMocks{
@@ -414,6 +467,81 @@ func TestCreateProjectAppliesDefaults(t *testing.T) {
 	if p["port"] != float64(defaults.Port) {
 		t.Errorf("port: got %v, want %d", p["port"], defaults.Port)
 	}
+}
+
+func TestReconcileNetworksSweep(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+
+	// A full web app and an egress-only worker, both "running" on the legacy
+	// poof-net (pre-migration state). Caddy is on poof-net too.
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r", Branch: "main", Port: 80, NetMode: "full"})
+	st.CreateProject(store.Project{Name: "worker", Image: "i", Repo: "r", Branch: "main", Port: 80, NetMode: "egress-only"})
+	mocks.container.containerNets = map[string][]string{
+		"poof-web":    {"poof-net"},
+		"poof-worker": {"poof-net"},
+		"caddy-proxy": {"poof-net"},
+	}
+
+	// Dry-run: reports actions, mutates nothing.
+	rr := do(t, srv, "POST", "/migrate/networks?dry-run=true", map[string]interface{}{}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dry-run: %d — %s", rr.Code, rr.Body.String())
+	}
+	if mocks.container.NetworkExists("poof-app-web") {
+		t.Fatal("dry-run should not have created poof-app-web")
+	}
+
+	// Apply.
+	rr = do(t, srv, "POST", "/migrate/networks", map[string]interface{}{}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("apply: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Both per-app nets created; containers attached.
+	if !mocks.container.NetworkExists("poof-app-web") || !mocks.container.NetworkExists("poof-app-worker") {
+		t.Fatal("per-app nets not created")
+	}
+	if !contains(mocks.container.containerNets["poof-web"], "poof-app-web") {
+		t.Fatalf("web not attached to its net: %v", mocks.container.containerNets["poof-web"])
+	}
+	if !contains(mocks.container.containerNets["poof-worker"], "poof-app-worker") {
+		t.Fatalf("worker not attached to its net: %v", mocks.container.containerNets["poof-worker"])
+	}
+	// Caddy attached to the ingress (full) app, NOT to the egress-only worker.
+	if !contains(mocks.container.containerNets["caddy-proxy"], "poof-app-web") {
+		t.Fatal("caddy not attached to web's net")
+	}
+	if contains(mocks.container.containerNets["caddy-proxy"], "poof-app-worker") {
+		t.Fatal("caddy must not be attached to egress-only worker's net")
+	}
+	// poof-net left in place (transitional).
+	if !contains(mocks.container.containerNets["poof-web"], "poof-net") {
+		t.Fatal("poof-net should remain attached during transition")
+	}
+
+	// Idempotent: a second apply yields no actions.
+	rr = do(t, srv, "POST", "/migrate/networks", map[string]interface{}{}, globalToken)
+	var resp struct {
+		Projects []struct {
+			Actions []string `json:"actions"`
+		} `json:"projects"`
+	}
+	decode(t, rr, &resp)
+	for _, p := range resp.Projects {
+		if len(p.Actions) != 0 {
+			t.Fatalf("second sweep should be a no-op, got actions: %v", p.Actions)
+		}
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNetModeDomainCoupling(t *testing.T) {

@@ -19,16 +19,16 @@ safe (already-migrated projects are reported as such and skipped).`,
 // --- workflows subcommand ---
 
 type workflowDiagnostic struct {
-	Project          string                  `json:"project"`
-	Repo             string                  `json:"repo"`
-	CI               bool                    `json:"ci"`
-	OldPath          string                  `json:"old_path"`
-	NewPath          string                  `json:"new_path"`
-	OldPathExists    bool                    `json:"old_path_exists"`
-	OldPathHasMarker bool                    `json:"old_path_has_marker"`
-	NewPathExists    bool                    `json:"new_path_exists"`
-	References       []workflowReference     `json:"references,omitempty"`
-	Error            string                  `json:"error,omitempty"`
+	Project          string              `json:"project"`
+	Repo             string              `json:"repo"`
+	CI               bool                `json:"ci"`
+	OldPath          string              `json:"old_path"`
+	NewPath          string              `json:"new_path"`
+	OldPathExists    bool                `json:"old_path_exists"`
+	OldPathHasMarker bool                `json:"old_path_has_marker"`
+	NewPathExists    bool                `json:"new_path_exists"`
+	References       []workflowReference `json:"references,omitempty"`
+	Error            string              `json:"error,omitempty"`
 }
 
 type workflowReference struct {
@@ -193,12 +193,81 @@ Apply is idempotent: projects already at the new path are skipped.`,
 	},
 }
 
+var migrateNetworksCmd = &cobra.Command{
+	Use:   "networks",
+	Short: "Provision per-app networks for every project",
+	Long: `Reconcile the per-app network architecture across all projects.
+
+For each project, Poof! ensures its own network (poof-app-<name>) exists with
+the correct egress flag, attaches the container, and attaches Caddy when the
+project has ingress. The sweep is additive and idempotent — it runs on live
+containers without recreating them, so nothing goes down. The legacy shared
+poof-net is left in place; remove it once everything is reachable on the new
+nets.
+
+Use --dry-run to preview the changes without applying them.`,
+	Args: cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+		path := "/migrate/networks"
+		if dryRun {
+			path += "?dry-run=true"
+		}
+
+		var resp struct {
+			DryRun   bool `json:"dry_run"`
+			Projects []struct {
+				Project string   `json:"project"`
+				Actions []string `json:"actions"`
+				Error   string   `json:"error,omitempty"`
+			} `json:"projects"`
+		}
+		if err := apiPost(path, map[string]interface{}{}, &resp); err != nil {
+			fatal("%v", err)
+		}
+
+		if dryRun {
+			fmt.Println("Dry run — no changes applied.")
+		}
+		changed := 0
+		for _, p := range resp.Projects {
+			if p.Error != "" {
+				fmt.Printf("✗ %s: %s\n", p.Project, p.Error)
+				continue
+			}
+			if len(p.Actions) == 0 {
+				continue
+			}
+			changed++
+			fmt.Printf("%s %s:\n", verbFor(dryRun), p.Project)
+			for _, a := range p.Actions {
+				fmt.Printf("    %s\n", a)
+			}
+		}
+		if changed == 0 {
+			fmt.Println("✓ all projects already reconciled — nothing to do")
+		} else if !dryRun {
+			fmt.Printf("\n✓ reconciled %d project(s)\n", changed)
+		}
+	},
+}
+
+func verbFor(dryRun bool) string {
+	if dryRun {
+		return "would update"
+	}
+	return "updated"
+}
+
 func init() {
 	rootCmd.AddCommand(migrateCmd)
 	migrateCmd.AddCommand(migrateWorkflowsCmd)
+	migrateCmd.AddCommand(migrateNetworksCmd)
 	migrateWorkflowsCmd.Flags().Bool("apply", false, "actually rename files (requires --all, <project>, or --repo)")
 	migrateWorkflowsCmd.Flags().Bool("all", false, "with --apply: target every project Poof manages")
 	migrateWorkflowsCmd.Flags().String("repo", "", "with --apply: target every project in this repo (owner/name)")
+	migrateNetworksCmd.Flags().Bool("dry-run", false, "preview changes without applying them")
 }
 
 // --- apply ---
@@ -208,9 +277,9 @@ type applyResult struct {
 	Repo    string `json:"repo"`
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path"`
-	Status  string `json:"status"`            // "renamed" | "skipped" | "partial" | "error"
-	Reason  string `json:"reason,omitempty"`  // populated when Status == "skipped"
-	Error   string `json:"error,omitempty"`   // populated when Status == "error" or "partial"
+	Status  string `json:"status"`           // "renamed" | "skipped" | "partial" | "error"
+	Reason  string `json:"reason,omitempty"` // populated when Status == "skipped"
+	Error   string `json:"error,omitempty"`  // populated when Status == "error" or "partial"
 }
 
 type applyResponse struct {

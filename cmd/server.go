@@ -84,7 +84,17 @@ func (dockerAdapter) EnsureNetwork(name string, internal bool) error {
 func (dockerAdapter) CreateNetwork(name string, internal bool) error {
 	return docker.CreateNetwork(name, internal)
 }
-func (dockerAdapter) NetworkExists(name string) bool              { return docker.NetworkExists(name) }
+func (dockerAdapter) NetworkExists(name string) bool { return docker.NetworkExists(name) }
+func (dockerAdapter) ConnectNetwork(network, container string) error {
+	return docker.ConnectNetwork(network, container)
+}
+func (dockerAdapter) DisconnectNetwork(network, container string) error {
+	return docker.DisconnectNetwork(network, container)
+}
+func (dockerAdapter) ContainerNetworks(container string) ([]string, error) {
+	return docker.ContainerNetworks(container)
+}
+func (dockerAdapter) ContainerExists(name string) bool            { return docker.ContainerExists(name) }
 func (dockerAdapter) Stop(name string) error                      { return docker.Stop(name) }
 func (dockerAdapter) IsRunning(name string) bool                  { return docker.IsRunning(name) }
 func (dockerAdapter) Logs(name string, lines int) (string, error) { return docker.Logs(name, lines) }
