@@ -22,9 +22,9 @@ import (
 // so that handlers can be tested without hitting the GitHub API.
 type RepoManager interface {
 	SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode string, build bool) error
-	RemoveRepoCI(owner, repo, projectName string, deleteSecrets bool) error
+	RemoveRepoCI(owner, repo, projectName, branch string, deleteSecrets bool) error
 	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error
-	WorkflowMigrationDiagnostic(owner, repo, projectName string, ci bool) (*gh.WorkflowDiagnostic, error)
+	WorkflowMigrationDiagnostic(owner, repo, projectName, branch string, ci bool) (*gh.WorkflowDiagnostic, error)
 	DeleteLegacyWorkflow(owner, repo, projectName string) error
 }
 

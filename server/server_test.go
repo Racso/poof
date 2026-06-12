@@ -29,8 +29,8 @@ type mockRepoManager struct {
 }
 
 type mockDiagnosticCall struct {
-	Owner, Repo, ProjectName string
-	CI                       bool
+	Owner, Repo, ProjectName, Branch string
+	CI                               bool
 }
 
 type mockSetupCall struct {
@@ -39,8 +39,8 @@ type mockSetupCall struct {
 }
 
 type mockRemoveCall struct {
-	Owner, Repo, ProjectName string
-	DeleteSecrets            bool
+	Owner, Repo, ProjectName, Branch string
+	DeleteSecrets                    bool
 }
 
 type mockRefreshCall struct {
@@ -56,8 +56,8 @@ func (m *mockRepoManager) SetRepoCI(owner, repo, projectName, poofURL, poofToken
 	return nil
 }
 
-func (m *mockRepoManager) RemoveRepoCI(owner, repo, projectName string, deleteSecrets bool) error {
-	m.removeCalls = append(m.removeCalls, mockRemoveCall{owner, repo, projectName, deleteSecrets})
+func (m *mockRepoManager) RemoveRepoCI(owner, repo, projectName, branch string, deleteSecrets bool) error {
+	m.removeCalls = append(m.removeCalls, mockRemoveCall{owner, repo, projectName, branch, deleteSecrets})
 	return nil
 }
 
@@ -66,8 +66,8 @@ func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci b
 	return nil
 }
 
-func (m *mockRepoManager) WorkflowMigrationDiagnostic(owner, repo, projectName string, ci bool) (*gh.WorkflowDiagnostic, error) {
-	m.diagnosticCalls = append(m.diagnosticCalls, mockDiagnosticCall{owner, repo, projectName, ci})
+func (m *mockRepoManager) WorkflowMigrationDiagnostic(owner, repo, projectName, branch string, ci bool) (*gh.WorkflowDiagnostic, error) {
+	m.diagnosticCalls = append(m.diagnosticCalls, mockDiagnosticCall{owner, repo, projectName, branch, ci})
 	if d, ok := m.diagnosticByName[projectName]; ok {
 		return d, nil
 	}

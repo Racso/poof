@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/racso/poof/defaults"
@@ -184,7 +185,7 @@ func (c *Client) RefreshProjectCI(owner, repo, projectName string, ci bool, poof
 	if ci {
 		return c.SetRepoCI(owner, repo, projectName, poofURL, repoToken, branch, image, folder, static, ciMode, build)
 	}
-	return c.RemoveRepoCI(owner, repo, projectName, deleteSecrets)
+	return c.RemoveRepoCI(owner, repo, projectName, branch, deleteSecrets)
 }
 
 // SetRepoCI sets the POOF_URL and POOF_TOKEN repo secrets and commits the
@@ -203,11 +204,11 @@ func (c *Client) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch,
 	return nil
 }
 
-// RemoveRepoCI deletes the Poof-managed workflow file (only if it has the
-// auto-CI marker). If deleteSecrets is true (no other CI-enabled projects
-// share this repo), also removes the shared POOF_TOKEN and POOF_URL secrets.
-func (c *Client) RemoveRepoCI(owner, repo, projectName string, deleteSecrets bool) error {
-	_ = c.deleteWorkflow(owner, repo, projectName)
+// RemoveRepoCI deletes the Poof-managed workflow file from the project's
+// branch. If deleteSecrets is true (no other CI-enabled projects share this
+// repo), also removes the shared POOF_TOKEN and POOF_URL secrets.
+func (c *Client) RemoveRepoCI(owner, repo, projectName, branch string, deleteSecrets bool) error {
+	_ = c.deleteWorkflow(owner, repo, projectName, branch)
 	if deleteSecrets {
 		c.deleteRepoSecrets(owner, repo)
 	}
@@ -276,6 +277,28 @@ type fileContent struct {
 	Message string `json:"message"`
 	Content string `json:"content"` // base64
 	SHA     string `json:"sha,omitempty"`
+	Branch  string `json:"branch,omitempty"`
+}
+
+// refQuery returns a `?ref=<branch>` query string for Contents API GETs,
+// or "" when branch is empty (GitHub then uses the default branch).
+func refQuery(branch string) string {
+	if branch == "" {
+		return ""
+	}
+	return "?ref=" + url.QueryEscape(branch)
+}
+
+// branchExists reports whether the branch exists in the repo. Errors are
+// treated as "exists" so callers don't mask the original API failure with
+// a wrong "branch not found" hint.
+func (c *Client) branchExists(owner, repo, branch string) bool {
+	path := fmt.Sprintf("/repos/%s/%s/branches/%s", owner, repo, url.PathEscape(branch))
+	found, err := c.getMaybe(path, nil)
+	if err != nil {
+		return true
+	}
+	return found
 }
 
 type getFileResponse struct {
@@ -388,12 +411,13 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 
 	path := workflowPath(owner, repo, projectName)
 
-	// Fetch the current SHA (required to update an existing file). If the
-	// file doesn't exist, sha stays empty and the PUT creates it. If it
-	// does exist and the content already matches, skip the commit.
+	// Fetch the current SHA from the project's branch (required to update
+	// an existing file). If the file doesn't exist, sha stays empty and the
+	// PUT creates it. If it does exist and the content already matches,
+	// skip the commit.
 	var existing getFileResponse
 	sha := ""
-	if err := c.get(path, &existing); err == nil {
+	if err := c.get(path+refQuery(branch), &existing); err == nil {
 		sha = existing.SHA
 		existingContent, decodeErr := base64.StdEncoding.DecodeString(
 			strings.ReplaceAll(existing.Content, "\n", ""),
@@ -407,21 +431,31 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 		Message: "chore: update Poof! deploy workflow",
 		Content: encoded,
 		SHA:     sha,
+		Branch:  branch,
 	}
-	return c.put(path, payload)
+	if err := c.put(path, payload); err != nil {
+		if branch != "" && !c.branchExists(owner, repo, branch) {
+			return fmt.Errorf("branch %q does not exist in %s/%s yet — push the branch first, then run 'poof refresh %s'", branch, owner, repo, projectName)
+		}
+		return err
+	}
+	return nil
 }
 
-func (c *Client) deleteWorkflow(owner, repo, projectName string) error {
+func (c *Client) deleteWorkflow(owner, repo, projectName, branch string) error {
 	path := workflowPath(owner, repo, projectName)
 
 	var existing getFileResponse
-	if err := c.get(path, &existing); err != nil {
-		return nil // file doesn't exist, nothing to delete
+	if err := c.get(path+refQuery(branch), &existing); err != nil {
+		return nil // file (or branch) doesn't exist, nothing to delete
 	}
 
 	payload := map[string]string{
 		"message": "chore: remove Poof! deploy workflow",
 		"sha":     existing.SHA,
+	}
+	if branch != "" {
+		payload["branch"] = branch
 	}
 
 	body, _ := json.Marshal(payload)
@@ -523,7 +557,12 @@ func (c *Client) DeleteLegacyWorkflow(owner, repo, projectName string) error {
 // `ci` is the project's CI flag (passed in by the caller; we don't
 // re-derive it from GitHub). It's threaded through onto the result so
 // the CLI can decide what's expected vs unexpected at a glance.
-func (c *Client) WorkflowMigrationDiagnostic(owner, repo, projectName string, ci bool) (*WorkflowDiagnostic, error) {
+//
+// `branch` is the project's deploy branch: the canonical (new-path) file
+// lives there, so its existence check reads that ref. Legacy-path checks
+// and reference scans always read the default branch, which is where
+// pre-fix Poof committed everything.
+func (c *Client) WorkflowMigrationDiagnostic(owner, repo, projectName, branch string, ci bool) (*WorkflowDiagnostic, error) {
 	d := &WorkflowDiagnostic{
 		Project: projectName,
 		Repo:    fmt.Sprintf("%s/%s", owner, repo),
@@ -533,7 +572,7 @@ func (c *Client) WorkflowMigrationDiagnostic(owner, repo, projectName string, ci
 	}
 
 	// Old path
-	oldContent, found, err := c.getFileContent(owner, repo, d.OldPath)
+	oldContent, found, err := c.getFileContent(owner, repo, d.OldPath, "")
 	if err != nil {
 		d.Error = fmt.Sprintf("checking %s: %v", d.OldPath, err)
 		return d, nil
@@ -544,8 +583,8 @@ func (c *Client) WorkflowMigrationDiagnostic(owner, repo, projectName string, ci
 		d.OldPathHasMarker = strings.HasPrefix(firstLine, workflowMarkerBanner)
 	}
 
-	// New path
-	_, newFound, err := c.getFileContent(owner, repo, d.NewPath)
+	// New path (lives on the project's deploy branch)
+	_, newFound, err := c.getFileContent(owner, repo, d.NewPath, branch)
 	if err != nil {
 		d.Error = fmt.Sprintf("checking %s: %v", d.NewPath, err)
 		return d, nil
@@ -579,10 +618,11 @@ type contentsListEntry struct {
 	Type string `json:"type"`
 }
 
-// getFileContent fetches a single file's content, returning ("", false, nil)
-// when the file does not exist (404). Any other error is propagated.
-func (c *Client) getFileContent(owner, repo, repoPath string) (string, bool, error) {
-	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, repoPath)
+// getFileContent fetches a single file's content from the given ref
+// (default branch when ref is ""), returning ("", false, nil) when the
+// file does not exist (404). Any other error is propagated.
+func (c *Client) getFileContent(owner, repo, repoPath, ref string) (string, bool, error) {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s%s", owner, repo, repoPath, refQuery(ref))
 	var f getFileResponse
 	found, err := c.getMaybe(apiPath, &f)
 	if err != nil || !found {
@@ -621,7 +661,7 @@ func (c *Client) findWorkflowReferences(owner, repo, oldPath, newPath string) ([
 		if !strings.HasSuffix(e.Name, ".yml") && !strings.HasSuffix(e.Name, ".yaml") {
 			continue
 		}
-		content, _, err := c.getFileContent(owner, repo, e.Path)
+		content, _, err := c.getFileContent(owner, repo, e.Path, "")
 		if err != nil {
 			continue
 		}

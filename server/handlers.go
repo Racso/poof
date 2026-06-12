@@ -440,7 +440,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		// Only delete the POOF_TOKEN secret if this is the last project for this repo.
 		siblings, _ := s.store.CountProjectsForRepo(p.Repo)
 		lastForRepo := siblings <= 1
-		if err := client.RemoveRepoCI(owner, repoName, name, lastForRepo); err != nil {
+		if err := client.RemoveRepoCI(owner, repoName, name, p.Branch, lastForRepo); err != nil {
 			log.Printf("warning: GitHub cleanup for %s: %v", name, err)
 		}
 		if lastForRepo {
@@ -1531,7 +1531,7 @@ func (s *Server) diagnoseWorkflowMigration(w http.ResponseWriter, r *http.Reques
 			owner = s.settingGitHubUser()
 			repoName = p.Repo
 		}
-		d, err := client.WorkflowMigrationDiagnostic(owner, repoName, p.Name, p.CI)
+		d, err := client.WorkflowMigrationDiagnostic(owner, repoName, p.Name, p.Branch, p.CI)
 		if err != nil {
 			// Surface the project entry with an error string and keep going —
 			// one bad project shouldn't sink the whole report.
@@ -1641,7 +1641,7 @@ func (s *Server) applyWorkflowMigration(w http.ResponseWriter, r *http.Request) 
 		// Pre-flight: if the legacy path doesn't exist, there's nothing
 		// to migrate — skip without touching the new path either, since
 		// it's likely already migrated and a refresh would be busywork.
-		diag, derr := client.WorkflowMigrationDiagnostic(owner, repoName, p.Name, p.CI)
+		diag, derr := client.WorkflowMigrationDiagnostic(owner, repoName, p.Name, p.Branch, p.CI)
 		if derr != nil {
 			entry["status"] = "error"
 			entry["error"] = fmt.Sprintf("diagnostic: %v", derr)
