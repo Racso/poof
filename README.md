@@ -209,7 +209,7 @@ For the common "frontend has an `/api/*` proxy to a backend" case, re-cast the p
 
 The `--ci` flag controls how Poof! sets up GitHub Actions for a project:
 
-- **`--ci yes`** (default) — Poof! commits a standalone push-triggered workflow at `.github/workflows/poof.yml`. Every push to the configured branch builds, pushes to GHCR, and triggers a deploy.
+- **`--ci yes`** (default) — Poof! commits a standalone push-triggered workflow at `.github/workflows/poof.yml`, on the project's configured branch. Every push to that branch builds, pushes to GHCR, and triggers a deploy. The branch must already exist on GitHub; if it doesn't yet, push it and run `poof refresh <name>`.
 - **`--ci no`** — Poof! does not touch the repo. You're on your own for triggering deploys (call `POST /projects/<name>/deploy` from anywhere).
 - **`--ci callable`** — Poof! commits a *reusable* workflow (`on: workflow_call`) instead. You write your own outer workflow that runs tests/lint/matrix builds and then calls this one. Useful when Poof's deploy step is one stage of a larger pipeline.
 

@@ -142,7 +142,7 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 
 When a GitHub PAT is configured, `poof add` / `poof refresh`:
 1. Sets repo secrets `POOF_URL` and `POOF_TOKEN`.
-2. Commits `.github/workflows/poof.yml` (template in `defaults/`).
+2. Commits `.github/workflows/poof.yml` (template in `defaults/`) **to the project's configured branch** — push triggers only fire for workflow files present on the pushed branch, so committing to the default branch would leave non-default-branch projects (e.g. clones) without CI. If the branch doesn't exist on GitHub yet, the commit fails with a hint to push the branch and run `poof refresh`.
 3. The workflow builds + pushes to GHCR on `push` to the configured branch (and only on changes to `--folder` if set), then `POST`s to the server's deploy endpoint.
 
 CI modes: `managed` (default; standalone push-triggered workflow) or `callable` (`on: workflow_call` reusable workflow invoked from a user-owned outer workflow that wraps tests/lint/matrix builds).
