@@ -82,7 +82,7 @@ jobs:
     if: vars.POOF_DISABLE != '1'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build and push image
         run: |
@@ -122,7 +122,7 @@ jobs:
     if: vars.POOF_DISABLE != '1'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build static site
         run: |
@@ -154,7 +154,7 @@ jobs:
     if: vars.POOF_DISABLE != '1'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Deploy to Poof!
         run: |
