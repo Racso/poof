@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/racso/poof/config"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +22,7 @@ var troubleshootCmd = &cobra.Command{
    cat <path>     — confirm the server URL and token look right
 
 2. The server may be mid-restart
-   If you recently ran ` + "`poof update server`" + `, it is likely just restarting.
+   If you recently ran `+"`poof update server`"+`, it is likely just restarting.
    Wait a few seconds, then confirm with:
    poof version
 
@@ -52,7 +51,6 @@ var troubleshootCmd = &cobra.Command{
 func serverHost() string {
 	raw := cfg.Server
 	if raw == "" {
-		raw = config.ClientConfigPath()
 		return "<host>"
 	}
 	u, err := url.Parse(raw)

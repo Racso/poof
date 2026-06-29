@@ -205,15 +205,6 @@ func toSet(ss []string) map[string]bool {
 	return m
 }
 
-func validateKeys(requested, available []string, source string) {
-	avail := toSet(available)
-	for _, k := range requested {
-		if !avail[k] {
-			fatal("key %q does not exist in project %q", k, source)
-		}
-	}
-}
-
 func init() {
 	rootCmd.AddCommand(envCmd)
 	envCmd.AddCommand(envGetCmd)

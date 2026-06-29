@@ -19,16 +19,16 @@ safe (already-migrated projects are reported as such and skipped).`,
 // --- workflows subcommand ---
 
 type workflowDiagnostic struct {
-	Project          string                  `json:"project"`
-	Repo             string                  `json:"repo"`
-	CI               bool                    `json:"ci"`
-	OldPath          string                  `json:"old_path"`
-	NewPath          string                  `json:"new_path"`
-	OldPathExists    bool                    `json:"old_path_exists"`
-	OldPathHasMarker bool                    `json:"old_path_has_marker"`
-	NewPathExists    bool                    `json:"new_path_exists"`
-	References       []workflowReference     `json:"references,omitempty"`
-	Error            string                  `json:"error,omitempty"`
+	Project          string              `json:"project"`
+	Repo             string              `json:"repo"`
+	CI               bool                `json:"ci"`
+	OldPath          string              `json:"old_path"`
+	NewPath          string              `json:"new_path"`
+	OldPathExists    bool                `json:"old_path_exists"`
+	OldPathHasMarker bool                `json:"old_path_has_marker"`
+	NewPathExists    bool                `json:"new_path_exists"`
+	References       []workflowReference `json:"references,omitempty"`
+	Error            string              `json:"error,omitempty"`
 }
 
 type workflowReference struct {
@@ -208,9 +208,9 @@ type applyResult struct {
 	Repo    string `json:"repo"`
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path"`
-	Status  string `json:"status"`            // "renamed" | "skipped" | "partial" | "error"
-	Reason  string `json:"reason,omitempty"`  // populated when Status == "skipped"
-	Error   string `json:"error,omitempty"`   // populated when Status == "error" or "partial"
+	Status  string `json:"status"`           // "renamed" | "skipped" | "partial" | "error"
+	Reason  string `json:"reason,omitempty"` // populated when Status == "skipped"
+	Error   string `json:"error,omitempty"`  // populated when Status == "error" or "partial"
 }
 
 type applyResponse struct {

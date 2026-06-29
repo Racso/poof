@@ -247,8 +247,8 @@ func TestSelectForRemoval_EquivalentToOR_WhenAppliedSequentially(t *testing.T) {
 		mkImage("v5", 1, now),
 	}
 
-	delA, _ := selectForRemoval(images, "", 3, 0, now)        // outside keep
-	delB, _ := selectForRemoval(images, "", 0, 14, now)       // older than 14d
+	delA, _ := selectForRemoval(images, "", 3, 0, now)  // outside keep
+	delB, _ := selectForRemoval(images, "", 0, 14, now) // older than 14d
 	union := map[string]bool{}
 	for _, img := range delA {
 		union[img.Reference] = true

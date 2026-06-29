@@ -335,7 +335,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 					jsonError(w, "static must be \"static\", \"spa\", or \"container\"", http.StatusBadRequest)
 					return
 				}
-				staticChanged = v != p.Static && !(v == "container" && p.Static == "")
+				staticChanged = v != p.Static && (v != "container" || p.Static != "")
 				if v == "container" {
 					p.Static = ""
 				} else {

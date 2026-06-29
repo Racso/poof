@@ -184,7 +184,6 @@ func runInstall(cmd *cobra.Command, args []string) {
 			fmt.Fprintf(os.Stderr, "  %s\n", strings.TrimSpace(string(out)))
 			os.Exit(1)
 		}
-		caddyContainer = "caddy-proxy"
 		printOK("Caddy is running")
 	}
 

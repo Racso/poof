@@ -93,7 +93,7 @@ func apiGet(path string, out interface{}) error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help.", serverURL(), troubleshootHint())
+		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help", serverURL(), troubleshootHint())
 	}
 	defer resp.Body.Close()
 
@@ -148,7 +148,7 @@ func apiRequest(method, path string, payload interface{}, out interface{}) error
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help.", serverURL(), troubleshootHint())
+		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help", serverURL(), troubleshootHint())
 	}
 	defer resp.Body.Close()
 

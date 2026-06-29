@@ -137,10 +137,7 @@ func (m *mockContainerManager) GC(name, image string, keep, olderThanDays int, d
 
 func (m *mockContainerManager) SweepOrphans(refs []string, dryRun bool) (server.GCResult, error) {
 	m.sweepCalls = append(m.sweepCalls, refs)
-	var removed []string
-	for _, r := range refs {
-		removed = append(removed, r)
-	}
+	removed := append([]string(nil), refs...)
 	return server.GCResult{Project: "(orphans)", Removed: removed}, nil
 }
 

@@ -11,8 +11,8 @@ import (
 
 // LocalImage represents one tagged image found locally.
 type LocalImage struct {
-	Reference string    // e.g. "ghcr.io/foo/bar:abc123"
-	ID        string    // image ID (sha256:...)
+	Reference string // e.g. "ghcr.io/foo/bar:abc123"
+	ID        string // image ID (sha256:...)
 	Created   time.Time
 }
 

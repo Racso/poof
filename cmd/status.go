@@ -79,7 +79,7 @@ func yesNo(v bool) string {
 //   - "no"        — CI disabled
 //   - "yes"       — managed (push-triggered) workflow
 //   - "callable"  — reusable workflow, intended to be invoked by an
-//                   outer user-owned workflow
+//     outer user-owned workflow
 func ciDescription(p map[string]interface{}) string {
 	enabled, _ := p["ci"].(bool)
 	if !enabled {

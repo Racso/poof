@@ -400,4 +400,3 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %s", v, units[u])
 }
-

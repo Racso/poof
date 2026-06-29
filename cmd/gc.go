@@ -8,14 +8,14 @@ import (
 )
 
 var (
-	gcKeep       int
-	gcOlderThan  int
-	gcDryRun     bool
-	gcAll        bool
-	gcSetKeep    int
-	gcSetOlder   int
-	gcSetAll     bool
-	gcOffAll     bool
+	gcKeep      int
+	gcOlderThan int
+	gcDryRun    bool
+	gcAll       bool
+	gcSetKeep   int
+	gcSetOlder  int
+	gcSetAll    bool
+	gcOffAll    bool
 )
 
 var gcCmd = &cobra.Command{
