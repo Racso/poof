@@ -103,7 +103,7 @@ func Reload(adminURL, caddyfile string) error {
 	if err != nil {
 		return fmt.Errorf("caddy reload: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("caddy reload: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

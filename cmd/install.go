@@ -224,7 +224,7 @@ func runInstall(cmd *cobra.Command, args []string) {
 		printFail(fmt.Sprintf("Cannot create temp dir: %v", err))
 		os.Exit(1)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Copy the running binary into the build context.
 	if err := copyFile(exe, filepath.Join(tmpDir, "poof")); err != nil {
@@ -476,7 +476,7 @@ func generateToken() string {
 		out, _ := exec.Command("od", "-An", "-tx1", "-N32", "/dev/urandom").Output()
 		return strings.ReplaceAll(strings.TrimSpace(string(out)), " ", "")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, 32)
 	io.ReadFull(f, buf)
 	return fmt.Sprintf("%x", buf)
@@ -501,13 +501,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	if _, err := io.Copy(out, in); err != nil {
 		return err

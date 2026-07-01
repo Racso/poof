@@ -471,7 +471,7 @@ func (c *Client) deleteWorkflow(owner, repo, projectName, branch string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
@@ -542,7 +542,7 @@ func (c *Client) DeleteLegacyWorkflow(owner, repo, projectName string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
@@ -692,7 +692,7 @@ func (c *Client) get(path string, out interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
@@ -717,7 +717,7 @@ func (c *Client) getMaybe(path string, out interface{}) (found bool, err error) 
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		return false, nil
 	}
@@ -750,7 +750,7 @@ func (c *Client) put(path string, payload interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))
@@ -770,7 +770,7 @@ func (c *Client) delete(path string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("GitHub API %s: %s", resp.Status, string(b))

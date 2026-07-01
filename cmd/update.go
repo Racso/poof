@@ -104,11 +104,11 @@ func doUpdateLocal(version string) {
 	}
 
 	if err := os.Chmod(tmp, 0755); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		fatal("could not set permissions: %v", err)
 	}
 	if err := os.Rename(tmp, exe); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		if os.IsPermission(err) {
 			fatal("permission denied writing to %s — try running with sudo", exe)
 		}

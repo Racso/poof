@@ -274,7 +274,7 @@ func parseProjectsFile(path string) (map[string]projectSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	specs := map[string]projectSpec{}
 	currentName := ""

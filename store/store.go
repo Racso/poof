@@ -257,7 +257,7 @@ func (s *Store) migrateProjectIDs() error {
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// --- Recreate projects with autoincrement id ---
 	if _, err := tx.Exec(`CREATE TABLE projects_new (
@@ -363,7 +363,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var projects []Project
 	for rows.Next() {
@@ -517,7 +517,7 @@ func (s *Store) ListDeployments(project string, limit int) ([]Deployment, error)
 	if err != nil {
 		return nil, fmt.Errorf("list deployments: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var deployments []Deployment
 	for rows.Next() {
@@ -544,7 +544,7 @@ func (s *Store) ListOrphanDeploymentImages() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list orphan images: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var images []string
 	for rows.Next() {
@@ -578,7 +578,7 @@ func (s *Store) GetEnvVars(project string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get env vars: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	vars := map[string]string{}
 	for rows.Next() {
@@ -658,7 +658,7 @@ func (s *Store) ListRedirects() ([]Redirect, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list redirects: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var redirects []Redirect
 	for rows.Next() {
@@ -716,7 +716,7 @@ func (s *Store) ListVolumes(project string) ([]Volume, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list volumes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var volumes []Volume
 	for rows.Next() {
@@ -772,7 +772,7 @@ func (s *Store) ListNetworks() ([]Network, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list networks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var networks []Network
 	for rows.Next() {
@@ -843,7 +843,7 @@ func (s *Store) ListProjectNetworks(project string) ([]ProjectNetwork, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list project networks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var nets []ProjectNetwork
 	for rows.Next() {
@@ -890,7 +890,7 @@ func (s *Store) GetAllSettings() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	settings := make(map[string]string)
 	for rows.Next() {
 		var k, v string
@@ -939,7 +939,7 @@ func (s *Store) GetAllCaddySnippets() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list caddy snippets: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	snippets := make(map[string]string)
 	for rows.Next() {
 		var p, c string
@@ -1021,7 +1021,7 @@ func (s *Store) ListGCPolicies() ([]GCPolicy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list gc policies: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var policies []GCPolicy
 	for rows.Next() {

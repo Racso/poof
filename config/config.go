@@ -234,6 +234,6 @@ func WriteClientSetting(path, key, value string) error {
 	if err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return toml.NewEncoder(f).Encode(raw)
 }

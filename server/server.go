@@ -226,7 +226,7 @@ func tailFile(path string, n int) (string, error) {
 		}
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []string
 	scanner := bufio.NewScanner(f)
@@ -265,7 +265,7 @@ func (s *Server) Run() error {
 	if err != nil {
 		return fmt.Errorf("open log file %s: %w", s.logPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	log.SetOutput(io.MultiWriter(os.Stdout, f))
 	log.SetFlags(log.Ldate | log.Ltime | log.LUTC)
 

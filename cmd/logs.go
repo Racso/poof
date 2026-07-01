@@ -27,7 +27,7 @@ var logsCmd = &cobra.Command{
 		if err != nil {
 			fatal("could not reach poof server: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(resp.Body)

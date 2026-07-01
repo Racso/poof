@@ -85,7 +85,7 @@ var caddySetCmd = &cobra.Command{
 		}
 
 		// Cleanup local file on success.
-		os.Remove(path)
+		_ = os.Remove(path)
 
 		fmt.Printf("✓ caddy snippet updated for %q\n", name)
 	},
@@ -103,7 +103,7 @@ var caddyDeleteCmd = &cobra.Command{
 		}
 
 		// Also clean up any local file.
-		os.Remove(snippetPath(name))
+		_ = os.Remove(snippetPath(name))
 
 		fmt.Printf("✓ caddy snippet removed for %q\n", name)
 	},

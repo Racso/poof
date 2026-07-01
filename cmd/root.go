@@ -95,7 +95,7 @@ func apiGet(path string, out interface{}) error {
 	if err != nil {
 		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help", serverURL(), troubleshootHint())
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
@@ -150,7 +150,7 @@ func apiRequest(method, path string, payload interface{}, out interface{}) error
 	if err != nil {
 		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help", serverURL(), troubleshootHint())
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {

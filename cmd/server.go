@@ -48,7 +48,7 @@ var serverCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: open database: %v\n", err)
 			os.Exit(1)
 		}
-		defer st.Close()
+		defer func() { _ = st.Close() }()
 
 		checkCaddySetup(scfg)
 

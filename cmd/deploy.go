@@ -109,13 +109,13 @@ func deployStatic(name, folder string) {
 			if err != nil {
 				return err
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			_, err = io.Copy(tw, f)
 			return err
 		})
 
-		tw.Close()
-		gw.Close()
+		_ = tw.Close()
+		_ = gw.Close()
 		pw.CloseWithError(err)
 	}()
 
@@ -132,7 +132,7 @@ func deployStatic(name, folder string) {
 	if err != nil {
 		fatal("upload failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {

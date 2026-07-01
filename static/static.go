@@ -27,18 +27,18 @@ func Deploy(dataDir, project string, depID int64, tarball io.Reader) error {
 		return fmt.Errorf("create tarball file: %w", err)
 	}
 	if _, err := io.Copy(tf, tarball); err != nil {
-		tf.Close()
-		os.Remove(tarPath)
+		_ = tf.Close()
+		_ = os.Remove(tarPath)
 		return fmt.Errorf("save tarball: %w", err)
 	}
-	tf.Close()
+	_ = tf.Close()
 
 	// Re-open saved tarball for extraction.
 	tf, err = os.Open(tarPath)
 	if err != nil {
 		return fmt.Errorf("open tarball for extraction: %w", err)
 	}
-	defer tf.Close()
+	defer func() { _ = tf.Close() }()
 
 	// Extract into a temp directory first.
 	tmp, err := os.MkdirTemp(versionsDir, ".tmp-")
@@ -47,26 +47,26 @@ func Deploy(dataDir, project string, depID int64, tarball io.Reader) error {
 	}
 
 	if err := extractTarGz(tf, tmp); err != nil {
-		os.RemoveAll(tmp)
+		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("extract archive: %w", err)
 	}
 
 	// Rename to final version directory.
 	versionDir := filepath.Join(versionsDir, fmt.Sprintf("v%d", depID))
 	if err := os.Rename(tmp, versionDir); err != nil {
-		os.RemoveAll(tmp)
+		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("rename to version dir: %w", err)
 	}
 
 	// Atomically swap the "current" symlink.
 	currentLink := filepath.Join(base, "current")
 	newLink := currentLink + ".new"
-	os.Remove(newLink)
+	_ = os.Remove(newLink)
 	if err := os.Symlink(versionDir, newLink); err != nil {
 		return fmt.Errorf("create new symlink: %w", err)
 	}
 	if err := os.Rename(newLink, currentLink); err != nil {
-		os.Remove(newLink)
+		_ = os.Remove(newLink)
 		return fmt.Errorf("swap symlink: %w", err)
 	}
 
@@ -83,12 +83,12 @@ func Rollback(dataDir, project string, depID int64) error {
 
 	currentLink := filepath.Join(base, "current")
 	newLink := currentLink + ".new"
-	os.Remove(newLink)
+	_ = os.Remove(newLink)
 	if err := os.Symlink(versionDir, newLink); err != nil {
 		return fmt.Errorf("create new symlink: %w", err)
 	}
 	if err := os.Rename(newLink, currentLink); err != nil {
-		os.Remove(newLink)
+		_ = os.Remove(newLink)
 		return fmt.Errorf("swap symlink: %w", err)
 	}
 	return nil
@@ -102,7 +102,7 @@ func IsDeployed(dataDir, project string) bool {
 
 // Remove deletes the entire project's static directory.
 func Remove(dataDir, project string) {
-	os.RemoveAll(projectDir(dataDir, project))
+	_ = os.RemoveAll(projectDir(dataDir, project))
 }
 
 func projectDir(dataDir, project string) string {
@@ -114,7 +114,7 @@ func extractTarGz(r io.Reader, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -147,10 +147,10 @@ func extractTarGz(r io.Reader, dest string) error {
 				return err
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return err
 			}
-			f.Close()
+			_ = f.Close()
 		}
 	}
 	return nil
