@@ -51,6 +51,12 @@ var deployCmd = &cobra.Command{
 			fatal("%v", err)
 		}
 
+		if result["status"] == "staged" {
+			fmt.Printf("✓ staged %q (paused — container replaced but not started)\n", name)
+			fmt.Printf("  run `poof resume %s` to start it\n", name)
+			return
+		}
+
 		fmt.Printf("✓ deployed %q\n", name)
 		if d, ok := result["domain"].(string); ok {
 			fmt.Printf("  https://%s\n", d)

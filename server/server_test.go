@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/racso/poof/config"
@@ -94,6 +95,10 @@ func (m *mockRepoManager) DeleteLegacyWorkflow(owner, repo, projectName string) 
 type mockContainerManager struct {
 	deployCalls     []server.ContainerDeployConfig
 	stopCalls       []string
+	suspendCalls    []string
+	startCalls      []string
+	startErr        error
+	snapshotCalls   []string
 	running         map[string]bool
 	logs            map[string]string
 	gcCalls         []mockGCCall
@@ -121,6 +126,24 @@ func (m *mockContainerManager) Deploy(cfg server.ContainerDeployConfig) error {
 func (m *mockContainerManager) Stop(name string) error {
 	m.stopCalls = append(m.stopCalls, name)
 	return nil
+}
+
+func (m *mockContainerManager) Suspend(name string) error {
+	m.suspendCalls = append(m.suspendCalls, name)
+	return nil
+}
+
+func (m *mockContainerManager) Start(name string) error {
+	m.startCalls = append(m.startCalls, name)
+	return m.startErr
+}
+
+func (m *mockContainerManager) Snapshot(name, dataDir string) (server.SnapshotResult, error) {
+	m.snapshotCalls = append(m.snapshotCalls, name)
+	return server.SnapshotResult{
+		ImageRef: "poof-snapshot/" + name + ":20260720-000000",
+		Dir:      dataDir + "/snapshots/" + name + "-20260720-000000",
+	}, nil
 }
 
 func (m *mockContainerManager) IsRunning(name string) bool {
@@ -247,11 +270,13 @@ func (m *mockStaticDeployer) GC(_ string, project string, versions []server.Stat
 // --- Mock CaddySyncer ---
 
 type mockCaddySyncer struct {
-	reloadCalls int
+	reloadCalls   int
+	lastCaddyfile string
 }
 
-func (m *mockCaddySyncer) Reload(_, _ string) error {
+func (m *mockCaddySyncer) Reload(_, caddyfile string) error {
 	m.reloadCalls++
+	m.lastCaddyfile = caddyfile
 	return nil
 }
 
@@ -2567,4 +2592,283 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// --- Pause & Resume ---
+
+func TestPauseAndResumeProject(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	mocks.container.running = map[string]bool{"web": true}
+
+	rr := do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("pause: %d — %s", rr.Code, rr.Body.String())
+	}
+	var res map[string]string
+	decode(t, rr, &res)
+	if res["status"] != "paused" {
+		t.Errorf("expected status paused, got %q", res["status"])
+	}
+	p, _ := st.GetProject("web")
+	if !p.Paused {
+		t.Error("expected project to be persisted as paused")
+	}
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "503") {
+		t.Errorf("expected a 503 route after pause, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+	if strings.Contains(mocks.caddy.lastCaddyfile, "reverse_proxy poof-web") {
+		t.Errorf("paused project must not be reverse-proxied, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+
+	rr = do(t, srv, "POST", "/projects/web/resume", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("resume: %d — %s", rr.Code, rr.Body.String())
+	}
+	decode(t, rr, &res)
+	if res["status"] != "resumed" {
+		t.Errorf("expected status resumed, got %q", res["status"])
+	}
+	p, _ = st.GetProject("web")
+	if p.Paused {
+		t.Error("expected project to be unpaused after resume")
+	}
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "reverse_proxy poof-web:80") {
+		t.Errorf("expected original routing restored after resume, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+}
+
+func TestPauseIsIdempotent(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	rr := do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second pause: %d — %s", rr.Code, rr.Body.String())
+	}
+	var res map[string]string
+	decode(t, rr, &res)
+	if res["status"] != "already paused" {
+		t.Errorf("expected status 'already paused', got %q", res["status"])
+	}
+}
+
+func TestPauseUnknownProject404(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	rr := do(t, srv, "POST", "/projects/nope/pause", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestPausedProjectRoutedEvenWhenContainerStopped(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	// Container not running — the paused 503 block must still be emitted.
+	rr := do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("pause: %d — %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "web.rac.so") {
+		t.Errorf("expected paused project's domain in Caddyfile, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+}
+
+func TestPauseSuspendsContainer(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	mocks.container.running = map[string]bool{"web": true}
+
+	rr := do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("pause: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.suspendCalls) != 1 || mocks.container.suspendCalls[0] != "web" {
+		t.Errorf("expected container suspended, got %v", mocks.container.suspendCalls)
+	}
+}
+
+func TestPauseStaticProjectSkipsSuspend(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site",
+		Branch: "main", Static: "spa",
+	})
+	mocks.static.deployed = map[string]bool{"site": true}
+
+	rr := do(t, srv, "POST", "/projects/site/pause", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("pause: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.suspendCalls) != 0 {
+		t.Errorf("static pause must not touch containers, got %v", mocks.container.suspendCalls)
+	}
+}
+
+func TestDeployWhilePausedStagesWithoutStarting(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+
+	rr := do(t, srv, "POST", "/projects/web/deploy", map[string]string{"image": "img:fix"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+	var res map[string]interface{}
+	decode(t, rr, &res)
+	if res["status"] != "staged" {
+		t.Errorf("expected status staged, got %v", res["status"])
+	}
+	if len(mocks.container.deployCalls) != 1 || !mocks.container.deployCalls[0].CreateOnly {
+		t.Errorf("expected a create-only deploy, got %+v", mocks.container.deployCalls)
+	}
+	last, _ := st.LastDeployment("web")
+	if last == nil || last.Status != "staged" {
+		t.Fatalf("expected staged deployment row, got %+v", last)
+	}
+	p, _ := st.GetProject("web")
+	if !p.Paused {
+		t.Error("deploy must not unpause the project")
+	}
+}
+
+func TestResumeStartsContainerAndResolvesStaged(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	do(t, srv, "POST", "/projects/web/deploy", map[string]string{"image": "img:fix"}, globalToken)
+
+	rr := do(t, srv, "POST", "/projects/web/resume", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("resume: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.startCalls) != 1 || mocks.container.startCalls[0] != "web" {
+		t.Errorf("expected container started, got %v", mocks.container.startCalls)
+	}
+	last, _ := st.LastDeployment("web")
+	if last == nil || last.Status != "success" {
+		t.Fatalf("expected staged row resolved to success, got %+v", last)
+	}
+}
+
+func TestResumeStartFailureUnpausesAndMarksStagedFailed(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+	do(t, srv, "POST", "/projects/web/deploy", map[string]string{"image": "img:broken"}, globalToken)
+
+	mocks.container.startErr = fmt.Errorf("entrypoint not found")
+	rr := do(t, srv, "POST", "/projects/web/resume", nil, globalToken)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on start failure, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Same as pushing a broken image: unpaused, backend down, loudly.
+	p, _ := st.GetProject("web")
+	if p.Paused {
+		t.Error("start failure must not keep the project paused")
+	}
+	last, _ := st.LastDeployment("web")
+	if last == nil || last.Status != "failed" {
+		t.Fatalf("expected staged row resolved to failed, got %+v", last)
+	}
+}
+
+func TestResumeWithoutStagedDeploymentLeavesRowsAlone(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	st.RecordDeployment("web", "img:v1", "success")
+	do(t, srv, "POST", "/projects/web/pause", nil, globalToken)
+
+	// A restart failure of an already-proven deployment is a runtime event,
+	// not a deployment outcome — the success row must not be rewritten.
+	mocks.container.startErr = fmt.Errorf("boom")
+	rr := do(t, srv, "POST", "/projects/web/resume", nil, globalToken)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on start failure, got %d — %s", rr.Code, rr.Body.String())
+	}
+	last, _ := st.LastDeployment("web")
+	if last == nil || last.Status != "success" {
+		t.Fatalf("expected success row untouched, got %+v", last)
+	}
+}
+
+// --- Snapshot ---
+
+func TestSnapshotProject(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/snapshot", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("snapshot: %d — %s", rr.Code, rr.Body.String())
+	}
+	var res map[string]string
+	decode(t, rr, &res)
+	if res["status"] != "snapshotted" || !strings.HasPrefix(res["image"], "poof-snapshot/web:") {
+		t.Errorf("unexpected snapshot response: %v", res)
+	}
+	if len(mocks.container.snapshotCalls) != 1 || mocks.container.snapshotCalls[0] != "web" {
+		t.Errorf("expected one snapshot call, got %v", mocks.container.snapshotCalls)
+	}
+}
+
+func TestSnapshotRefusesStaticProject(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site",
+		Branch: "main", Static: "static",
+	})
+
+	rr := do(t, srv, "POST", "/projects/site/snapshot", nil, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for static project, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSnapshotUnknownProject404(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	rr := do(t, srv, "POST", "/projects/nope/snapshot", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
 }

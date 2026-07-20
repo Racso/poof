@@ -33,6 +33,9 @@ var listCmd = &cobra.Command{
 			if running {
 				status = "running"
 			}
+			if p["paused"] == true {
+				status = "paused"
+			}
 			repoCol := repo
 			if folder != "" {
 				repoCol += " (/" + folder + ")"

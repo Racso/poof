@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 const networkName = "poof-net"
@@ -19,6 +21,7 @@ type DeployConfig struct {
 	Networks      []string // extra Docker networks to attach (besides poof-net)
 	RegistryUser  string   // optional: login before pull
 	RegistryToken string   // optional: login before pull
+	CreateOnly    bool     // create the container without starting it (paused project)
 }
 
 // managedNetworkLabel marks Docker networks created by Poof so `poof net ls`
@@ -202,11 +205,18 @@ func Deploy(cfg DeployConfig) error {
 		}
 	}
 
+	// Create + start instead of `run` so a paused project can stage the new
+	// container without starting it. Restart policy is `no` while paused (a
+	// daemon restart must not revive a paused workload); resume flips it back.
+	restart := "always"
+	if cfg.CreateOnly {
+		restart = "no"
+	}
 	args := []string{
-		"run", "-d",
+		"create",
 		"--name", containerName,
 		"--network", networkName,
-		"--restart", "always",
+		"--restart", restart,
 	}
 
 	// Attach any additional project networks. Poof re-applies these on every
@@ -231,11 +241,19 @@ func Deploy(cfg DeployConfig) error {
 
 	out, err = exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker run failed: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("docker create failed: %s", strings.TrimSpace(string(out)))
 	}
-	if containerID := strings.TrimSpace(string(out)); containerID != "" {
-		log.Printf("deploy %s: container started: %s", cfg.Name, containerID)
+	containerID := strings.TrimSpace(string(out))
+
+	if cfg.CreateOnly {
+		log.Printf("deploy %s: container created (not started): %s", cfg.Name, containerID)
+		return nil
 	}
+
+	if out, err := exec.Command("docker", "start", containerName).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker start failed: %s", strings.TrimSpace(string(out)))
+	}
+	log.Printf("deploy %s: container started: %s", cfg.Name, containerID)
 	return nil
 }
 
@@ -252,6 +270,90 @@ func Stop(projectName string) error {
 		return fmt.Errorf("docker rm failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// Suspend stops a project's container without removing it, so its writable
+// layer survives for investigation and Start can bring back the identical
+// container. The restart policy is set to `no` first: with `always`, a
+// manually stopped container is revived when the Docker daemon restarts,
+// which would silently un-pause the workload on a server reboot.
+// A missing container is a no-op (paused project that was never deployed).
+func Suspend(projectName string) error {
+	containerName := containerFor(projectName)
+	if out, err := exec.Command("docker", "update", "--restart=no", containerName).CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "No such container") {
+			return nil
+		}
+		return fmt.Errorf("docker update failed: %s", strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("docker", "stop", containerName).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker stop failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Start starts a project's stopped or created container and restores the
+// `always` restart policy. A missing container is a no-op (paused project
+// that was never deployed).
+func Start(projectName string) error {
+	containerName := containerFor(projectName)
+	if out, err := exec.Command("docker", "update", "--restart=always", containerName).CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "No such container") {
+			return nil
+		}
+		return fmt.Errorf("docker update failed: %s", strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("docker", "start", containerName).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker start failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// SnapshotResult describes a forensic snapshot of a project's container.
+type SnapshotResult struct {
+	ImageRef string `json:"image"`
+	Dir      string `json:"dir"`
+}
+
+// Snapshot preserves a project's container for forensics: the writable layer
+// is committed to a local image (poof-snapshot/<project>:<timestamp>) and the
+// container's logs and full inspect output are dumped under
+// <dataDir>/snapshots/. Works on stopped containers and does not disturb the
+// container. Snapshot images use their own repository name and are never
+// recorded as deployments, so GC leaves them alone.
+func Snapshot(projectName, dataDir string) (*SnapshotResult, error) {
+	containerName := containerFor(projectName)
+	ts := time.Now().UTC().Format("20060102-150405")
+	ref := fmt.Sprintf("poof-snapshot/%s:%s", projectName, ts)
+
+	out, err := exec.Command("docker", "commit", containerName, ref).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("docker commit failed: %s", strings.TrimSpace(string(out)))
+	}
+
+	dir := filepath.Join(dataDir, "snapshots", projectName+"-"+ts)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("snapshot image %s created, but snapshot dir failed: %w", ref, err)
+	}
+
+	logs, err := exec.Command("docker", "logs", containerName).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot image %s created, but docker logs failed: %s", ref, strings.TrimSpace(string(logs)))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "logs.txt"), logs, 0600); err != nil {
+		return nil, fmt.Errorf("snapshot image %s created, but writing logs failed: %w", ref, err)
+	}
+
+	// Inspect output includes the container's env vars (secrets) — 0600.
+	inspect, err := exec.Command("docker", "inspect", containerName).Output()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot image %s created, but docker inspect failed: %w", ref, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "inspect.json"), inspect, 0600); err != nil {
+		return nil, fmt.Errorf("snapshot image %s created, but writing inspect failed: %w", ref, err)
+	}
+
+	return &SnapshotResult{ImageRef: ref, Dir: dir}, nil
 }
 
 // Logs returns the last n log lines from the project's container.

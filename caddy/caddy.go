@@ -10,8 +10,13 @@ import (
 	"github.com/racso/poof/store"
 )
 
+// pausedResponse is served on every route of a paused project.
+const pausedResponse = `respond "This site is temporarily unavailable." 503`
+
 // GenerateCaddyfile builds a complete Caddyfile from the given projects and
-// redirects. Only pass projects whose containers are currently running.
+// redirects. Only pass projects that are currently deployed (container running
+// or static files present) — plus paused projects, which get a 503 route
+// regardless of their deployment state.
 // rootDomain is used to generate subpath routing blocks on the root site.
 // poofHost (e.g. "poof.example.com") and poofPort are used to add a route
 // for the Poof API itself, which runs on the host rather than in a container.
@@ -37,9 +42,30 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 	// subpathLines collects handle_path directives grouped by root domain.
 	subpathLines := map[string][]string{}
 
+	writeSnippet := func(name string) {
+		if snip, ok := snippets[name]; ok && snip != "" {
+			for _, line := range strings.Split(snip, "\n") {
+				if line != "" {
+					fmt.Fprintf(&b, "\t%s\n", line)
+				}
+			}
+		}
+	}
+
 	for _, p := range projects {
 		// Skip if the project's domain is already emitted as the poofHost block above.
 		if poofHost != "" && p.Domain == poofHost {
+			continue
+		}
+
+		// A paused project answers 503 on every route and its custom snippet
+		// is withheld — nothing of the project's normal routing stays exposed.
+		if p.Paused {
+			fmt.Fprintf(&b, "%s {\n\t%s\n}\n\n", p.Domain, pausedResponse)
+			if rootDomain != "" && p.Domain != rootDomain && p.Subpath != "disabled" {
+				subpathLines[rootDomain] = append(subpathLines[rootDomain],
+					fmt.Sprintf("\thandle_path /%s/* {\n\t\t%s\n\t}", p.Name, pausedResponse))
+			}
 			continue
 		}
 
@@ -47,18 +73,21 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 			staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
 			fmt.Fprintf(&b, "%s {\n\troot * %s\n", p.Domain, staticRoot)
 			if p.Static == "spa" {
-				fmt.Fprintf(&b, "\ttry_files {path} /index.html\n")
+				// The SPA fallback lives in a catch-all handle placed after the
+				// custom snippet: a top-level try_files would run in Caddy's
+				// rewrite phase, BEFORE any handle block in the snippet, and
+				// rewrite e.g. /api/* to /index.html. Caddy evaluates handle
+				// blocks in order of appearance (first match wins), so snippet
+				// routes take precedence and everything else falls through here.
+				writeSnippet(p.Name)
+				fmt.Fprintf(&b, "\thandle {\n\t\ttry_files {path} /index.html\n\t\tfile_server\n\t}\n")
+			} else {
+				fmt.Fprintf(&b, "\tfile_server\n")
+				writeSnippet(p.Name)
 			}
-			fmt.Fprintf(&b, "\tfile_server\n")
 		} else {
 			fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n", p.Domain, p.Name, p.Port)
-		}
-		if snip, ok := snippets[p.Name]; ok && snip != "" {
-			for _, line := range strings.Split(snip, "\n") {
-				if line != "" {
-					fmt.Fprintf(&b, "\t%s\n", line)
-				}
-			}
+			writeSnippet(p.Name)
 		}
 		fmt.Fprintf(&b, "}\n\n")
 

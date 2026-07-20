@@ -771,6 +771,135 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 	s.runDeploy(w, p, prev.Image)
 }
 
+// --- Pause & Resume & Snapshot ---
+
+// pauseProject takes a project offline: the pause flag flips, Caddy re-syncs
+// so every route answers 503, and the container is stopped (not removed — its
+// writable layer is kept for investigation, and resume restores the identical
+// container). The registration (config, env vars, snippet) is untouched.
+// Failures are hard errors — pause is incident response, so the caller must
+// know when the site is not actually offline yet. The flag stays persisted
+// either way, so retrying converges.
+func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	if p.Paused {
+		jsonOK(w, map[string]string{"status": "already paused", "domain": p.Domain})
+		return
+	}
+
+	if err := s.store.SetProjectPaused(name, true); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.syncCaddy(); err != nil {
+		jsonError(w, fmt.Sprintf("project marked paused but routing update failed: %v — retry the command", err), http.StatusInternalServerError)
+		return
+	}
+	if !p.IsStatic() {
+		if err := s.container.Suspend(name); err != nil {
+			jsonError(w, fmt.Sprintf("paused (routing is offline) but stopping the container failed: %v — retry the command", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	log.Printf("project paused: %s", name)
+	jsonOK(w, map[string]string{"status": "paused", "domain": p.Domain})
+}
+
+// resumeProject puts a paused project back online: the container is started
+// (a no-op for static projects or when none was ever deployed), the flag
+// clears, and Caddy re-syncs to the exact pre-pause routing. If a deploy
+// happened while paused, its container was created but never started — that
+// deployment row sits at "staged" and is resolved here to success/failed by
+// the start outcome. A start failure does NOT re-pause: same as pushing a
+// broken image, the project ends up unpaused with the backend down, loudly.
+func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	if !p.Paused {
+		jsonOK(w, map[string]string{"status": "already resumed", "domain": p.Domain})
+		return
+	}
+
+	var startErr error
+	if !p.IsStatic() {
+		startErr = s.container.Start(name)
+	}
+
+	if err := s.store.SetProjectPaused(name, false); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if last, _ := s.store.LastDeployment(name); last != nil && last.Status == "staged" {
+		status := "success"
+		if startErr != nil {
+			status = "failed"
+		}
+		if err := s.store.UpdateDeploymentStatus(last.ID, status); err != nil {
+			log.Printf("warning: resolving staged deployment %d for %s: %v", last.ID, name, err)
+		}
+	}
+
+	if err := s.syncCaddy(); err != nil {
+		log.Printf("warning: caddy sync after resume failed: %v", err)
+	}
+
+	if startErr != nil {
+		jsonError(w, fmt.Sprintf("resumed, but the container failed to start: %v", startErr), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("project resumed: %s", name)
+	jsonOK(w, map[string]string{"status": "resumed", "domain": p.Domain})
+}
+
+// snapshotProject preserves the project's container for forensics: writable
+// layer committed to a local image, logs + inspect dumped to disk. Works on
+// paused (stopped) containers; intended flow is pause → snapshot → fix.
+func (s *Server) snapshotProject(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	p, err := s.store.GetProject(name)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
+		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	if p.IsStatic() {
+		jsonError(w, "static projects have no container to snapshot", http.StatusBadRequest)
+		return
+	}
+
+	res, err := s.container.Snapshot(name, s.cfg.DataDir)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("project snapshotted: %s → %s", name, res.ImageRef)
+	jsonOK(w, map[string]string{"status": "snapshotted", "image": res.ImageRef, "dir": res.Dir})
+}
+
 func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string) {
 	envVars, err := s.store.GetEnvVars(p.Name)
 	if err != nil {
@@ -811,6 +940,9 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
+	// While paused, the new container is created but not started: the fix is
+	// applied offline and resume brings it up. Its deployment row stays
+	// "staged" until resume resolves it to success/failed by the start outcome.
 	err = s.container.Deploy(ContainerDeployConfig{
 		Name:          p.Name,
 		Image:         image,
@@ -819,18 +951,29 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Networks:      nets,
 		RegistryUser:  s.settingGitHubUser(),
 		RegistryToken: s.settingGitHubToken(),
+		CreateOnly:    p.Paused,
 	})
 
-	status := "success"
 	if err != nil {
-		status = "failed"
-		s.store.UpdateDeploymentStatus(depID, status)
+		s.store.UpdateDeploymentStatus(depID, "failed")
 		log.Printf("deploy failed: %s → %v", p.Name, err)
 		jsonError(w, fmt.Sprintf("deploy failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	s.store.UpdateDeploymentStatus(depID, status)
+	if p.Paused {
+		s.store.UpdateDeploymentStatus(depID, "staged")
+		log.Printf("staged %s → %s (paused; container created, not started)", p.Name, image)
+		jsonOK(w, map[string]interface{}{
+			"status": "staged",
+			"image":  image,
+			"domain": p.Domain,
+			"note":   "project is paused — container replaced but not started; `poof resume` to start it",
+		})
+		return
+	}
+
+	s.store.UpdateDeploymentStatus(depID, "success")
 	log.Printf("deployed %s → %s", p.Name, image)
 
 	if err := s.syncCaddy(); err != nil {
@@ -1694,14 +1837,20 @@ func (s *Server) syncCaddy() error {
 	if err != nil {
 		return err
 	}
-	var running []store.Project
+	var routed []store.Project
 	for _, p := range projects {
+		// Paused projects are always routed — they get a 503 block even if
+		// their container is stopped or static files are gone.
+		if p.Paused {
+			routed = append(routed, p)
+			continue
+		}
 		if p.IsStatic() {
 			if s.static.IsDeployed(s.cfg.DataDir, p.Name) {
-				running = append(running, p)
+				routed = append(routed, p)
 			}
 		} else if s.container.IsRunning(p.Name) {
-			running = append(running, p)
+			routed = append(routed, p)
 		}
 	}
 	redirects, err := s.store.ListRedirects()
@@ -1712,7 +1861,7 @@ func (s *Server) syncCaddy() error {
 	if err != nil {
 		return err
 	}
-	caddyfile := caddy.GenerateCaddyfile(running, redirects, snippets, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
+	caddyfile := caddy.GenerateCaddyfile(routed, redirects, snippets, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
 	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 

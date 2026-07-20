@@ -38,6 +38,7 @@ type Project struct {
 	Build     bool      `json:"build"`
 	CI        bool      `json:"ci"`
 	CIMode    string    `json:"ci_mode"`
+	Paused    bool      `json:"paused"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -135,6 +136,7 @@ func (s *Store) migrate() error {
 			build      INTEGER NOT NULL DEFAULT 0,
 			ci         INTEGER NOT NULL DEFAULT 1,
 			ci_mode    TEXT NOT NULL DEFAULT 'managed',
+			paused     INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
@@ -221,6 +223,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN build INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci_mode TEXT NOT NULL DEFAULT 'managed'`)
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`)
 
 	// Structural migration: add project IDs, rewrite deployments table.
 	if err := s.migrateProjectIDs(); err != nil {
@@ -275,13 +278,14 @@ func (s *Store) migrateProjectIDs() error {
 		build      INTEGER NOT NULL DEFAULT 0,
 		ci         INTEGER NOT NULL DEFAULT 1,
 		ci_mode    TEXT NOT NULL DEFAULT 'managed',
+		paused     INTEGER NOT NULL DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
 		return fmt.Errorf("create projects_new: %w", err)
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, created_at)
-		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, created_at
+		INSERT INTO projects_new (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, paused, created_at)
+		SELECT name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, paused, created_at
 		FROM projects
 	`); err != nil {
 		return fmt.Errorf("copy projects: %w", err)
@@ -343,9 +347,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, paused, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.CreatedAt)
+	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.Paused, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -357,7 +361,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, paused, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -368,7 +372,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.Paused, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -431,6 +435,13 @@ func (s *Store) UpdateProject(p Project) error {
 		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=?, ci_mode=? WHERE name=?`,
 		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.Name,
 	)
+	return err
+}
+
+// SetProjectPaused flips the pause flag. Deliberately separate from
+// UpdateProject so configuration changes can never toggle pause state.
+func (s *Store) SetProjectPaused(name string, paused bool) error {
+	_, err := s.db.Exec(`UPDATE projects SET paused = ? WHERE name = ?`, paused, name)
 	return err
 }
 

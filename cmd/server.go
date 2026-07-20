@@ -76,6 +76,7 @@ func (dockerAdapter) Deploy(cfg server.ContainerDeployConfig) error {
 		Networks:      cfg.Networks,
 		RegistryUser:  cfg.RegistryUser,
 		RegistryToken: cfg.RegistryToken,
+		CreateOnly:    cfg.CreateOnly,
 	})
 }
 func (dockerAdapter) EnsureNetwork(name string, internal bool) error {
@@ -84,8 +85,17 @@ func (dockerAdapter) EnsureNetwork(name string, internal bool) error {
 func (dockerAdapter) CreateNetwork(name string, internal bool) error {
 	return docker.CreateNetwork(name, internal)
 }
-func (dockerAdapter) NetworkExists(name string) bool              { return docker.NetworkExists(name) }
-func (dockerAdapter) Stop(name string) error                      { return docker.Stop(name) }
+func (dockerAdapter) NetworkExists(name string) bool { return docker.NetworkExists(name) }
+func (dockerAdapter) Stop(name string) error         { return docker.Stop(name) }
+func (dockerAdapter) Suspend(name string) error      { return docker.Suspend(name) }
+func (dockerAdapter) Start(name string) error        { return docker.Start(name) }
+func (dockerAdapter) Snapshot(name, dataDir string) (server.SnapshotResult, error) {
+	r, err := docker.Snapshot(name, dataDir)
+	if err != nil {
+		return server.SnapshotResult{}, err
+	}
+	return server.SnapshotResult{ImageRef: r.ImageRef, Dir: r.Dir}, nil
+}
 func (dockerAdapter) IsRunning(name string) bool                  { return docker.IsRunning(name) }
 func (dockerAdapter) Logs(name string, lines int) (string, error) { return docker.Logs(name, lines) }
 func (dockerAdapter) GC(name, image string, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {

@@ -26,6 +26,9 @@ var statusCmd = &cobra.Command{
 		if running {
 			status = "running"
 		}
+		if p["paused"] == true {
+			status = "paused"
+		}
 
 		fmt.Printf("name:    %s\n", p["name"])
 		fmt.Printf("status:  %s\n", status)

@@ -36,11 +36,11 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 
 ## Data model (`store/store.go`)
 
-- **Project** — name, domain, image, repo, branch, port, subpath mode, folder (monorepo), static mode (`"" | static | spa`), build flag, CI flag, CI mode (`managed` | `callable`).
+- **Project** — name, domain, image, repo, branch, port, subpath mode, folder (monorepo), static mode (`"" | static | spa`), build flag, CI flag, CI mode (`managed` | `callable`), paused flag (503 routing while set; toggled only by pause/resume, never by configure).
 - **Volume** — managed (`/var/lib/poof/<project>/<container-path>`) or explicit (`host:container`).
 - **Network** — Poof-managed Docker network (`name`, `internal`) plus a `project_networks` join table of per-project attachments. Re-applied on every (re)deploy.
 - **Redirect** — independent 301 from one domain to another.
-- **Deployment** — image tag, status, timestamp; powers rollback.
+- **Deployment** — image tag, status, timestamp; powers rollback. Status lifecycle: `running` → `success`/`failed`; deploys made while the project is paused end at `staged` (created, never started) and are resolved to `success`/`failed` at resume. Rollback only considers `success` rows, so never-started images can't be rollback targets.
 - **GC policy** — per-project + global default (`keep`, `older_than_days`, `disabled`).
 
 ## CLI surface (`poof --help`)
@@ -56,6 +56,8 @@ Project lifecycle:
 Deploy / observe:
 - `poof deploy <name> [--image <tag>]` — manual redeploy.
 - `poof rollback <name>` — redeploy previous successful image.
+- `poof pause <name>` / `poof resume <name>` — take a project offline and back online. Pause: 503 on all routes (snippet withheld), container stopped without removal (`docker update --restart=no` + `docker stop` — the restart-policy flip prevents a daemon restart from reviving it). Registration untouched. Deploys while paused are **staged**: container created but not started (deploy path is always create+start; start is skipped when paused), deployment row recorded as `staged`. Resume: `--restart=always` + `docker start` (starts the staged container if one exists), clears flag, resolves the staged row to success/failed by the start outcome. A start failure does NOT re-pause — same semantics as pushing a broken image. `status`/`list` show `paused`.
+- `poof snapshot <name>` — forensic snapshot: `docker commit` to `poof-snapshot/<name>:<timestamp>` + logs + inspect dump under `<data_dir>/snapshots/` (0600 — inspect contains env secrets). Works on stopped containers; GC never touches snapshot images (separate repo name, never recorded as deployments). Flow: pause → snapshot → fix → resume. Refused for static projects.
 - `poof status <name>`, `poof list`, `poof logs <name> [-n N]`, `poof server-logs`, `poof troubleshoot`, `poof version`.
 
 Config / env / volumes / redirects:
@@ -137,6 +139,8 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 - Manual Caddyfiles: drop `*.Caddyfile` into `caddy_static_dir` for non-Poof services; survives reloads.
 - Per-project snippet override: `poof caddy set <name>` pushes a snippet that takes precedence over the generated route.
 - `poof redirect` rules apply at the Caddy layer, independent of any project.
+- SPA fallback: for `static=spa` projects the `try_files {path} /index.html` fallback is emitted inside a catch-all `handle` block placed after the project's snippet (never as a top-level rewrite-phase directive), so snippet `handle` routes like an `/api/*` proxy compose with `--spa`.
+- Paused projects: emitted as a bare `respond ... 503` site block (snippet withheld, subpath proxy route also 503s) regardless of container/static deploy state.
 
 ## CI integration
 

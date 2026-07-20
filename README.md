@@ -137,14 +137,17 @@ poof net delete <name>               delete a network record (must be detached)
 poof net add <project> <network>     attach a network to a project
 poof net list <project>              list networks attached to a project
 poof net remove <project> <id>       detach a network from a project
+poof pause <name>                    take a project offline (503 + container stopped) without touching its config
 poof redirect add <from> <to>        add a domain redirect (301)
 poof redirect delete <id>            delete a redirect by ID
 poof redirect list                   list all redirects
 poof refresh <name>                  re-sync GitHub secrets and workflow
 poof remove <name>                   remove project, stop container
+poof resume <name>                   put a paused project back online
 poof rollback <name>                 redeploy previous image
 poof server                          start the daemon
 poof server-logs                     show the Poof! server's own logs
+poof snapshot <name>                 preserve a project's container for forensics
 poof spell proxy <source> <target>   install a Caddy reverse_proxy on a project (see Spells)
 poof status <name>                   project details + last deployment
 poof troubleshoot                    diagnose server connectivity issues
@@ -230,6 +233,24 @@ poof refresh myapp
 
 Useful after template changes or server upgrades. Skips the workflow commit if the file is already up to date.
 
+## Pause & resume
+
+Take a project offline immediately — e.g. while investigating an abuse report — without deleting anything:
+
+```sh
+poof pause myapp      # 503 on every route, container stopped
+poof snapshot myapp   # optional: preserve the container for forensics
+poof resume myapp     # exact previous state restored
+```
+
+**Pause** does two things: every route on the project's domain (including subpath routes; the custom Caddy snippet is withheld too) responds 503, and the container is **stopped** — not removed — so a compromised workload can't keep making outbound calls, and its writable layer survives for investigation. The registration (repo, port, domain, env vars, snippet) stays untouched. `poof status` and `poof list` show `paused` as a distinct status.
+
+**Deploys while paused are staged**: the new container is created (image pulled, config applied) but not started, and the deployment is recorded as `staged`. This lets you apply a fix *before* going back online — the fix is what starts when you resume. Staged deployments become rollback candidates only after they've successfully started once.
+
+**Resume** starts the container (the staged one, if a deploy happened meanwhile), clears the flag, and restores the exact previous routing. If the container fails to start, the project still resumes — same outcome as pushing a broken image — and the staged deployment is marked `failed`.
+
+**Snapshot** (`poof snapshot <name>`) preserves evidence at any point: the container's writable layer is committed to a local image (`poof-snapshot/<name>:<timestamp>`) and its logs + `docker inspect` output are dumped under `/var/lib/poof/snapshots/` on the server. Works on stopped containers, doesn't disturb anything, and snapshot images are never touched by GC. Note the inspect dump includes the container's env vars — treat the snapshot dir as sensitive.
+
 ## Static sites
 
 For projects that just serve files, skip the container entirely — Caddy serves the files directly from disk. Faster, no RAM, no runtime to crash.
@@ -242,7 +263,7 @@ poof add mysite --static --spa --build      # build first via Dockerfile, then s
 
 **`--static`** turns off the container path. On each deploy, Poof! fetches the repo at the configured branch, extracts the files, and points Caddy at the new directory. Old versions are kept on disk for rollback (subject to the GC policy).
 
-**`--spa`** adds `try_files {path} /index.html` so client-side routes fall back to `index.html`. Required for React/Vue/Svelte SPAs.
+**`--spa`** adds a `try_files {path} /index.html` fallback so client-side routes fall back to `index.html`. Required for React/Vue/Svelte SPAs. The fallback is generated inside a catch-all `handle` block placed after your custom Caddy snippet, so `handle` routes in the snippet (an `/api/*` reverse_proxy, a WebSocket route) take precedence and compose cleanly with `--spa`.
 
 **`--build`** runs a Dockerfile in the repo to *produce* the static files (useful when the source needs a build step — Vite, Astro, etc.). The Dockerfile must output to `/poof`; everything in `/poof` is what gets served. Combine with `--static` (and optionally `--spa`).
 

@@ -32,6 +32,9 @@ type RepoManager interface {
 type ContainerManager interface {
 	Deploy(cfg ContainerDeployConfig) error
 	Stop(projectName string) error
+	Suspend(projectName string) error
+	Start(projectName string) error
+	Snapshot(projectName, dataDir string) (SnapshotResult, error)
 	IsRunning(projectName string) bool
 	Logs(projectName string, lines int) (string, error)
 	GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error)
@@ -60,6 +63,13 @@ type ContainerDeployConfig struct {
 	Networks      []string
 	RegistryUser  string
 	RegistryToken string
+	CreateOnly    bool
+}
+
+// SnapshotResult mirrors docker.SnapshotResult for the interface boundary.
+type SnapshotResult struct {
+	ImageRef string `json:"image"`
+	Dir      string `json:"dir"`
 }
 
 // StaticVersion provides deployment date info for static GC.
@@ -123,6 +133,11 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/deploy/static", s.authFlex(s.deployStaticProject))
 	mux.HandleFunc("POST /projects/{name}/rollback", s.auth(s.rollbackProject))
 	mux.HandleFunc("POST /projects/{name}/refresh", s.auth(s.refreshProject))
+
+	// Pause & resume (offline/online without touching the registration)
+	mux.HandleFunc("POST /projects/{name}/pause", s.auth(s.pauseProject))
+	mux.HandleFunc("POST /projects/{name}/resume", s.auth(s.resumeProject))
+	mux.HandleFunc("POST /projects/{name}/snapshot", s.auth(s.snapshotProject))
 
 	// Logs
 	mux.HandleFunc("GET /projects/{name}/logs", s.auth(s.getLogs))
