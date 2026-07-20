@@ -58,6 +58,14 @@ func TestTriggerBlock_Callable(t *testing.T) {
 	}
 }
 
+func TestStaticDockerTemplate_CreateHasExplicitCommand(t *testing.T) {
+	// `docker create` with no command fails on images without CMD/ENTRYPOINT
+	// (e.g. a `FROM scratch` final stage), so the template must pass one.
+	if !strings.Contains(staticWorkflowDockerTemplate, "docker create --name poof-extract poof-build noop-command") {
+		t.Errorf("static docker workflow must pass an explicit command to docker create, got:\n%s", staticWorkflowDockerTemplate)
+	}
+}
+
 func TestTriggerBlock_EmptyModeFallsBackToManaged(t *testing.T) {
 	got := triggerBlock("", "main", "")
 	if !strings.Contains(got, "push") || strings.Contains(got, "workflow_call") {
