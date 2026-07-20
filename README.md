@@ -246,6 +246,18 @@ poof add mysite --static --spa --build      # build first via Dockerfile, then s
 
 **`--build`** runs a Dockerfile in the repo to *produce* the static files (useful when the source needs a build step — Vite, Astro, etc.). The Dockerfile must output to `/poof`; everything in `/poof` is what gets served. Combine with `--static` (and optionally `--spa`).
 
+```dockerfile
+FROM node:24 AS build
+WORKDIR /app
+COPY . .
+RUN npm ci && npm run build
+
+FROM scratch
+COPY --from=build /app/dist /poof
+```
+
+The image is never run — it only exists so Poof! can extract `/poof` from it.
+
 Convert an existing project to static:
 
 ```sh
