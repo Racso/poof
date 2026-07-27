@@ -1352,6 +1352,22 @@
 
             <div class="cli-card">
                 <span class="cli-cat cli-cat--ops">ops</span>
+                <div class="cli-title">Pause &amp; resume</div>
+                <div class="cli-desc">Take a project offline in one command — every route answers 503, the container stops, and nothing else changes. Snapshot it for forensics, deploy a fix while paused, resume when ready.</div>
+                <div class="cli-code">
+<span class="cm">poof pause myapp</span><br>
+<span class="ok">&nbsp;&nbsp;✓ paused — https://myapp.mydomain.com now responds 503</span><br>
+<br>
+<span class="co"># preserve evidence, ship the fix offline</span><br>
+<span class="cm">poof snapshot myapp</span><br>
+<span class="cm">git push</span>&nbsp;&nbsp;<span class="co"># staged, not started</span><br>
+<br>
+<span class="cm">poof resume myapp</span>
+                </div>
+            </div>
+
+            <div class="cli-card">
+                <span class="cli-cat cli-cat--ops">ops</span>
                 <div class="cli-title">Declarative config</div>
                 <div class="cli-desc">Instead of running individual commands, you can define all projects in a <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">poof.ini</code> file and reconcile with one command. Great for reproducible infrastructure and staging environments.</div>
                 <div class="cli-code">

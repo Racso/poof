@@ -153,7 +153,7 @@ CI modes: `managed` (default; standalone push-triggered workflow) or `callable` 
 
 ## Garbage collection
 
-Detailed design lives in `GC_ROLL.md`. Per-project policy (`keep`, `older_than_days`) plus a global default; both conditions AND together when both are set. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions.
+Per-project policy (`keep`, `older_than_days`) plus a global default; both conditions AND together when both are set. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions. Snapshot images (`poof-snapshot/*`) are never touched: separate repo name, never recorded as deployments, always tagged.
 
 ## Pending ideas (not yet implemented)
 
