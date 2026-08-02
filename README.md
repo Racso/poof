@@ -528,6 +528,14 @@ poof apply --dry-run           # preview changes without applying
 poof apply --prune             # also remove projects absent from the file
 ```
 
+## Troubleshooting & gotchas
+
+- **Container-affecting changes require a redeploy.** Env vars, volumes, networks, port, and subpath are applied at container (re)creation — after `poof configure`, `poof env set`, `poof volume add`, or `poof net add`, run `poof deploy <name>` for the change to take effect.
+- **DNS must NOT be proxied through Cloudflare** (or any proxy that terminates TLS) if Caddy is to obtain certificates via ACME. Set the records to DNS-only (`proxied = false`).
+- **Custom domains need their own DNS records** pointing at the server. The wildcard record only covers subdomains of the root domain.
+- **Auth or connection errors from the CLI?** Check `~/.config/poof/poof.toml` (`server`, `token`) first, then run `poof troubleshoot`. With multiple servers, make sure the right profile is active (`--profile <name>` or `POOF_PROFILE` + `--profile-env`).
+- **Agents / automation:** the HTTP API behind the CLI is bearer-token authed and not a stable public surface — drive Poof! through the CLI.
+
 ## License
 
 [Mozilla Public License 2.0](https://www.mozilla.org/MPL/2.0/) + [Commons Clause](https://commonsclause.com/).
