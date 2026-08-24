@@ -73,6 +73,7 @@ func (dockerAdapter) Deploy(cfg server.ContainerDeployConfig) error {
 		Image:         cfg.Image,
 		EnvVars:       cfg.EnvVars,
 		Volumes:       cfg.Volumes,
+		Network:       cfg.Network,
 		Networks:      cfg.Networks,
 		RegistryUser:  cfg.RegistryUser,
 		RegistryToken: cfg.RegistryToken,
@@ -86,9 +87,16 @@ func (dockerAdapter) CreateNetwork(name string, internal bool) error {
 	return docker.CreateNetwork(name, internal)
 }
 func (dockerAdapter) NetworkExists(name string) bool { return docker.NetworkExists(name) }
-func (dockerAdapter) Stop(name string) error         { return docker.Stop(name) }
-func (dockerAdapter) Suspend(name string) error      { return docker.Suspend(name) }
-func (dockerAdapter) Start(name string) error        { return docker.Start(name) }
+func (dockerAdapter) ConnectNetwork(network, container string) error {
+	return docker.ConnectNetwork(network, container)
+}
+func (dockerAdapter) DisconnectNetwork(network, container string) error {
+	return docker.DisconnectNetwork(network, container)
+}
+func (dockerAdapter) RemoveNetwork(name string) error { return docker.RemoveNetwork(name) }
+func (dockerAdapter) Stop(name string) error          { return docker.Stop(name) }
+func (dockerAdapter) Suspend(name string) error       { return docker.Suspend(name) }
+func (dockerAdapter) Start(name string) error         { return docker.Start(name) }
 func (dockerAdapter) Snapshot(name, dataDir string) (server.SnapshotResult, error) {
 	r, err := docker.Snapshot(name, dataDir)
 	if err != nil {

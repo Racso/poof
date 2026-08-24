@@ -108,6 +108,13 @@ type mockContainerManager struct {
 	diskCalls       int
 	networksEnsured []string
 	networksCreated []string
+	connectCalls    []mockNetLink
+	disconnectCalls []mockNetLink
+	networksRemoved []string
+}
+
+type mockNetLink struct {
+	Network, Container string
 }
 
 type mockGCCall struct {
@@ -186,6 +193,21 @@ func (m *mockContainerManager) NetworkExists(name string) bool {
 		}
 	}
 	return false
+}
+
+func (m *mockContainerManager) ConnectNetwork(network, container string) error {
+	m.connectCalls = append(m.connectCalls, mockNetLink{network, container})
+	return nil
+}
+
+func (m *mockContainerManager) DisconnectNetwork(network, container string) error {
+	m.disconnectCalls = append(m.disconnectCalls, mockNetLink{network, container})
+	return nil
+}
+
+func (m *mockContainerManager) RemoveNetwork(name string) error {
+	m.networksRemoved = append(m.networksRemoved, name)
+	return nil
 }
 
 func (m *mockContainerManager) ImagesDiskUsage() (int64, error) {
@@ -307,9 +329,10 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 	t.Cleanup(func() { st.Close() })
 
 	cfg := &config.ServerConfig{
-		APIPort:   9000,
-		PublicURL: "https://poof.rac.so",
-		Token:     "global-test-token",
+		APIPort:       9000,
+		PublicURL:     "https://poof.rac.so",
+		Token:         "global-test-token",
+		CaddyAdminURL: "http://caddy-proxy:2019",
 	}
 
 	mocks := &testMocks{
@@ -1477,6 +1500,78 @@ func TestDeploySyncsCaddy(t *testing.T) {
 }
 
 // --- Delete cleanup ---
+
+// --- Per-app network isolation ---
+
+func TestDeployUsesPerAppNetwork(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects/web/deploy",
+		map[string]interface{}{"image": "ghcr.io/racso/web:v2"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Container is created on its own per-app network...
+	if got := mocks.container.deployCalls[0].Network; got != "poof-app-web" {
+		t.Errorf("primary network: got %q, want poof-app-web", got)
+	}
+	// ...which is ensured to exist...
+	found := false
+	for _, n := range mocks.container.networksEnsured {
+		if n == "poof-app-web" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected EnsureNetwork(poof-app-web), got %v", mocks.container.networksEnsured)
+	}
+	// ...and Caddy (name derived from the admin URL) is attached to it.
+	if len(mocks.container.connectCalls) != 1 ||
+		mocks.container.connectCalls[0] != (mockNetLink{"poof-app-web", "caddy-proxy"}) {
+		t.Errorf("expected ConnectNetwork(poof-app-web, caddy-proxy), got %v", mocks.container.connectCalls)
+	}
+}
+
+func TestDeleteProjectTearsDownAppNetwork(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	do(t, srv, "DELETE", "/projects/web", nil, globalToken)
+
+	if len(mocks.container.disconnectCalls) != 1 ||
+		mocks.container.disconnectCalls[0] != (mockNetLink{"poof-app-web", "caddy-proxy"}) {
+		t.Errorf("expected DisconnectNetwork(poof-app-web, caddy-proxy), got %v", mocks.container.disconnectCalls)
+	}
+	if len(mocks.container.networksRemoved) != 1 || mocks.container.networksRemoved[0] != "poof-app-web" {
+		t.Errorf("expected RemoveNetwork(poof-app-web), got %v", mocks.container.networksRemoved)
+	}
+}
+
+func TestDeleteStaticProjectTouchesNoNetworks(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so",
+		Repo: "racso/site", Branch: "main", Static: "static",
+	})
+
+	do(t, srv, "DELETE", "/projects/site", nil, globalToken)
+
+	if len(mocks.container.disconnectCalls) != 0 || len(mocks.container.networksRemoved) != 0 {
+		t.Errorf("static delete should not touch networks: disconnect=%v removed=%v",
+			mocks.container.disconnectCalls, mocks.container.networksRemoved)
+	}
+}
 
 func TestDeleteProjectStopsContainer(t *testing.T) {
 	srv, st, mocks := newTestServer(t)

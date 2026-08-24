@@ -11,7 +11,7 @@ poof add myapp
 
 1. `poof add myapp` registers a project. If a GitHub PAT is configured, Poof! also sets `POOF_TOKEN` as a repo secret and commits the deploy workflow into the repo.
 2. On every push to `main`, GitHub Actions builds a Docker image, pushes it to GHCR, then calls `POST /projects/myapp/deploy` on your Poof! server.
-3. Poof! pulls the image, starts the container on `poof-net`, and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
+3. Poof! pulls the image, starts the container on its own isolated network (`poof-app-myapp`, shared only with Caddy), and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
 
 No DNS changes needed per project — a single wildcard A record (`*.yourdomain.com → server`) covers everything.
 
@@ -346,7 +346,7 @@ poof deploy myapp   # redeploy to apply changes
 
 ## Networks
 
-Every project's container is always on `poof-net` (so Caddy can route to it). Attaching an **extra** network lets several projects talk to each other privately — e.g. an API and its worker sharing a backend database that's never exposed publicly.
+Every project's container runs on its **own** Docker network (`poof-app-<name>`), shared only with Caddy for routing — projects are isolated from each other by default, so a compromised container has no lateral reach. Attaching an **extra** network lets several projects talk to each other privately — e.g. an API and its worker sharing a backend database that's never exposed publicly.
 
 ```sh
 poof net create backend --internal   # private network, no external connectivity
@@ -430,7 +430,9 @@ Install a Caddy `reverse_proxy` on `<source>` pointing at `<target>`. Useful for
 
 ```
 <project>            another Poof project — container + port resolved automatically
-<container>:<port>   any container on poof-net (Poof-managed or not)
+<container>:<port>   any container on a network Caddy is attached to. For a
+                     hand-managed container, connect it to the source project's
+                     network first: docker network connect poof-app-<source> <container>
 ```
 
 ```sh

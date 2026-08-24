@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// networkName is the control-plane network: Caddy and the Poof daemon only.
+// Project containers do NOT live here — each gets its own per-app network.
 const networkName = "poof-net"
 
 type DeployConfig struct {
@@ -18,7 +20,8 @@ type DeployConfig struct {
 	Image         string
 	EnvVars       map[string]string
 	Volumes       []string // host:container mount specs
-	Networks      []string // extra Docker networks to attach (besides poof-net)
+	Network       string   // primary Docker network (the project's own per-app net)
+	Networks      []string // extra Docker networks to attach (besides the primary)
 	RegistryUser  string   // optional: login before pull
 	RegistryToken string   // optional: login before pull
 	CreateOnly    bool     // create the container without starting it (paused project)
@@ -173,8 +176,12 @@ func InspectLabels(image string) map[string]string {
 }
 
 // Deploy pulls the image, stops any existing container for the project, and
-// starts a new one on the poof-net network.
+// starts a new one on the project's own network (cfg.Network). The caller is
+// responsible for ensuring the network exists.
 func Deploy(cfg DeployConfig) error {
+	if cfg.Network == "" {
+		return fmt.Errorf("deploy %s: no network specified", cfg.Name)
+	}
 	if cfg.RegistryUser != "" && cfg.RegistryToken != "" {
 		if err := login(cfg.Image, cfg.RegistryUser, cfg.RegistryToken); err != nil {
 			return err
@@ -215,7 +222,7 @@ func Deploy(cfg DeployConfig) error {
 	args := []string{
 		"create",
 		"--name", containerName,
-		"--network", networkName,
+		"--network", cfg.Network,
 		"--restart", restart,
 	}
 
@@ -223,7 +230,7 @@ func Deploy(cfg DeployConfig) error {
 	// (re)create, so the membership survives redeploys — unlike a one-off
 	// `docker network connect`.
 	for _, net := range cfg.Networks {
-		if net == "" || net == networkName {
+		if net == "" || net == cfg.Network {
 			continue
 		}
 		args = append(args, "--network", net)
@@ -383,8 +390,54 @@ func containerFor(projectName string) string {
 	return "poof-" + projectName
 }
 
-// NetworkName returns the Docker network name that Poof uses.
+// NetworkName returns the control-plane Docker network name (Caddy + daemon).
 func NetworkName() string { return networkName }
+
+// ContainerName returns the Docker container name Poof uses for a project.
+func ContainerName(projectName string) string { return containerFor(projectName) }
+
+// ConnectNetwork attaches a container to a network. Idempotent: a container
+// already on the network is treated as success.
+func ConnectNetwork(network, container string) error {
+	out, err := exec.Command("docker", "network", "connect", network, container).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "already exists in network") || strings.Contains(msg, "already connected") {
+			return nil
+		}
+		return fmt.Errorf("docker network connect %s %s: %s", network, container, msg)
+	}
+	return nil
+}
+
+// DisconnectNetwork detaches a container from a network. Idempotent: a
+// container not on the network (or absent) is treated as success.
+func DisconnectNetwork(network, container string) error {
+	out, err := exec.Command("docker", "network", "disconnect", network, container).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "is not connected") || strings.Contains(msg, "No such container") || strings.Contains(msg, "No such network") {
+			return nil
+		}
+		return fmt.Errorf("docker network disconnect %s %s: %s", network, container, msg)
+	}
+	return nil
+}
+
+// RemoveNetwork removes a Docker network. A network that doesn't exist is
+// treated as success; a network with active endpoints is an error (the caller
+// decides whether that's fatal — hand-attached containers keep a net alive).
+func RemoveNetwork(name string) error {
+	out, err := exec.Command("docker", "network", "rm", name).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "not found") || strings.Contains(msg, "No such network") {
+			return nil
+		}
+		return fmt.Errorf("docker network rm %s: %s", name, msg)
+	}
+	return nil
+}
 
 // NetworkExists reports whether a Docker network with the given name exists.
 func NetworkExists(name string) bool {

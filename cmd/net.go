@@ -11,8 +11,9 @@ var netCmd = &cobra.Command{
 	Short: "Manage Docker networks and attach them to projects",
 	Long: `Manage Poof-managed Docker networks and attach them to projects.
 
-A project's container is always on poof-net (for Caddy routing). Attaching an
-extra network lets several projects talk to each other privately. Poof records
+Each project's container runs isolated on its own network (poof-app-<name>,
+shared only with Caddy for routing). Attaching an extra network lets several
+projects talk to each other privately. Poof records
 the attachment as desired state and re-applies it on every (re)deploy, so it
 survives redeploys — unlike a one-off 'docker network connect'.
 

@@ -44,7 +44,9 @@ Source forms:
 
 Target forms:
   <project>            Poof project — container and port are looked up by name
-  <container>:<port>   any container on poof-net (Poof- or hand-managed)
+  <container>:<port>   any container on a network Caddy is attached to — for a
+                       hand-managed container, connect it to the source project's
+                       network first: docker network connect poof-app-<source> <container>
 
 By default, the source path is stripped before the request is forwarded
 (so the backend doesn't have to know it's mounted under /api). Pass

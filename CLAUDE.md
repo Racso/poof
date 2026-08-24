@@ -4,7 +4,7 @@ Lightweight self-hosted deployment daemon. Single Go binary that acts as both CL
 
 ## What Poof! is
 
-A daemon that runs on one Linux server with Docker, plus a CLI that talks to it. The server registers projects, owns a SQLite store, runs containers on the `poof-net` Docker network, and pushes routing config to a Caddy container's admin API. GitHub Actions builds and pushes images to GHCR, then calls the server's deploy endpoint with the new image tag. Zero per-project DNS work — one wildcard A record covers everything.
+A daemon that runs on one Linux server with Docker, plus a CLI that talks to it. The server registers projects, owns a SQLite store, runs each project's container isolated on its own Docker network (`poof-app-<name>`, shared only with Caddy — no implicit neighbors, no lateral reach between projects; `poof-net` is the control plane, Caddy + daemon only), and pushes routing config to a Caddy container's admin API. GitHub Actions builds and pushes images to GHCR, then calls the server's deploy endpoint with the new image tag. Zero per-project DNS work — one wildcard A record covers everything.
 
 ## What Poof! is NOT
 
@@ -64,7 +64,7 @@ Config / env / volumes / redirects:
 - `poof config [set <key> [value]]` — local keys: `server`, `token`. Server keys: `domain`, `github-user`, `github-token`. With `--profile` / `--profile-env` for multi-server setups.
 - `poof env get|set|unset|copy` — copy supports `--all|--only|--except|--ask`.
 - `poof volume add|list|remove` — managed (`/app/data`) or explicit (`/host:/container`).
-- `poof net create|ls|delete|add|list|remove` — Poof-managed Docker networks for private inter-project traffic. `create <name> [--internal]` defines a network (DB-backed desired state); `add <project> <network>` attaches it. Poof re-attaches on every (re)deploy alongside the mandatory poof-net, so membership survives redeploys (unlike a one-off `docker network connect`). `delete` refuses while any project is still attached and leaves the underlying Docker network in place.
+- `poof net create|ls|delete|add|list|remove` — Poof-managed Docker networks for private inter-project traffic. `create <name> [--internal]` defines a network (DB-backed desired state); `add <project> <network>` attaches it. Poof re-attaches on every (re)deploy alongside the project's own `poof-app-<name>` net, so membership survives redeploys (unlike a one-off `docker network connect`). `delete` refuses while any project is still attached and leaves the underlying Docker network in place.
 - `poof redirect add|list|delete` — domain-level 301s independent of any project.
 
 Caddy / GC / install / update:
@@ -130,6 +130,13 @@ token  = "..."
 ```
 
 Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
+
+## Network model
+
+- Each containerized project gets its own Docker network `poof-app-<name>`, created at deploy time; Caddy is attached to it for routing. Torn down on project removal (best-effort — a net kept alive by hand-attached containers is left with a warning).
+- `poof-net` is the control plane: Caddy + the Poof daemon only. Project containers are never on it.
+- Cross-project traffic is always deliberate: a Poof-managed extra network (`poof net`), or a manual `docker network connect poof-app-<name> <container>` to invite a hand-managed container into a project's world (e.g. as a raw `poof spell proxy` target).
+- Static projects have no container and no per-app network.
 
 ## Routing model
 

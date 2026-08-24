@@ -427,6 +427,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		if err := s.container.Stop(name); err != nil {
 			log.Printf("warning: stopping container for %s: %v", name, err)
 		}
+		s.teardownAppNetwork(name)
 	}
 
 	// Clean up GitHub if PAT is configured.
@@ -937,6 +938,14 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		nets = append(nets, pn.Network)
 	}
 
+	// The project's own network: created on first deploy, Caddy attached for
+	// routing. The container's only automatic neighbor is Caddy.
+	appNet, err := s.ensureProjectNetwork(p)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("ensure project network: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
@@ -948,6 +957,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Image:         image,
 		EnvVars:       envVars,
 		Volumes:       mounts,
+		Network:       appNet,
 		Networks:      nets,
 		RegistryUser:  s.settingGitHubUser(),
 		RegistryToken: s.settingGitHubToken(),

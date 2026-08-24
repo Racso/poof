@@ -44,6 +44,9 @@ type ContainerManager interface {
 	EnsureNetwork(name string, internal bool) error
 	CreateNetwork(name string, internal bool) error
 	NetworkExists(name string) bool
+	ConnectNetwork(network, container string) error
+	DisconnectNetwork(network, container string) error
+	RemoveNetwork(name string) error
 }
 
 // GCResult mirrors docker.GCResult for the interface boundary.
@@ -60,6 +63,7 @@ type ContainerDeployConfig struct {
 	Image         string
 	EnvVars       map[string]string
 	Volumes       []string
+	Network       string
 	Networks      []string
 	RegistryUser  string
 	RegistryToken string
