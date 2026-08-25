@@ -1371,6 +1371,11 @@ func (s *Server) createNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Name == ControlPlaneNetwork {
+		jsonError(w, controlPlaneRefusal(), http.StatusBadRequest)
+		return
+	}
+
 	if existing, err := s.store.GetNetwork(req.Name); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1461,6 +1466,10 @@ func (s *Server) resolveMemberKind(name string) string {
 // than at the next deploy.
 func (s *Server) addNetworkMembers(w http.ResponseWriter, r *http.Request) {
 	network := r.PathValue("name")
+	if network == ControlPlaneNetwork {
+		jsonError(w, controlPlaneRefusal(), http.StatusBadRequest)
+		return
+	}
 	def, err := s.store.GetNetwork(network)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -1579,6 +1588,17 @@ func (s *Server) removeNetworkMembers(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("network members removed: network=%s count=%d", network, len(removed))
 	jsonOK(w, map[string]interface{}{"network": network, "removed": removed})
+}
+
+// controlPlaneRefusal explains why poof-net is off limits and what to do
+// instead — a bare refusal would just invite `docker network connect`.
+func controlPlaneRefusal() string {
+	return fmt.Sprintf(
+		"%q is Poof's control plane (Caddy + the daemon) and cannot take members. "+
+			"Projects each get their own network automatically. For a shared network, "+
+			"create one and attach what it needs: "+
+			"poof net create <name> && poof net add <name> <member...> [--caddy] [--poof]",
+		ControlPlaneNetwork)
 }
 
 // listNetworkMembers reports everything attached to a network.

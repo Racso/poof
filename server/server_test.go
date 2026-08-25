@@ -3044,3 +3044,36 @@ func TestSnapshotUnknownProject404(t *testing.T) {
 		t.Errorf("expected 404, got %d", rr.Code)
 	}
 }
+
+// poof-net carries Caddy and the daemon and nothing else. The refusal is
+// enforced rather than documented because the erosion is gradual: each
+// container added "just this once" becomes a neighbour of the daemon, which
+// holds the Docker socket.
+func TestControlPlaneNetworkRefusesMembersAndCreation(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "api", Domain: "api.rac.so", Image: "ghcr.io/racso/api",
+		Repo: "racso/api", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/networks",
+		map[string]interface{}{"name": "poof-net"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("creating poof-net: expected 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr = do(t, srv, "POST", "/networks/poof-net/members",
+		map[string]interface{}{"members": []string{"api"}}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("attaching to poof-net: expected 400, got %d — %s", rr.Code, rr.Body.String())
+	}
+	// The refusal must point at the alternative, or it just invites
+	// `docker network connect` instead.
+	if !strings.Contains(rr.Body.String(), "poof net create") {
+		t.Errorf("refusal should suggest creating a network; got: %s", rr.Body.String())
+	}
+
+	if members, _ := st.ListNetworkMembers("poof-net"); len(members) != 0 {
+		t.Errorf("nothing should have been recorded for poof-net, got %v", members)
+	}
+}

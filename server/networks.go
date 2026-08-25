@@ -16,6 +16,17 @@ import (
 //
 // poof-net itself is the control plane: Caddy and the Poof daemon only.
 
+// ControlPlaneNetwork is reserved: it carries Caddy and the Poof daemon and
+// nothing else. Poof refuses to manage it or attach members to it.
+//
+// The rule is enforced rather than merely documented because the failure is
+// gradual: every container added "just this once" becomes a neighbour of the
+// daemon, which holds the Docker socket. That is the flat network this design
+// exists to eliminate, and a convention would erode one exception at a time.
+// Anyone who genuinely wants a shared network can create their own and attach
+// Caddy and the daemon explicitly with --caddy / --poof.
+const ControlPlaneNetwork = "poof-net"
+
 // appNetName is the per-project Docker network Poof manages for a project's
 // container.
 func appNetName(project string) string { return "poof-app-" + project }

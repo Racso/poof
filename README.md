@@ -359,6 +359,8 @@ poof net add worker backend          # attach project 'worker'
 poof deploy api && poof deploy worker # redeploy to apply
 ```
 
+`poof-net` itself is off limits: it carries Caddy and the Poof! daemon and nothing else, and Poof! refuses to add members to it. Every project gets its own network automatically; if you want several things on one shared network, create it and attach what it needs.
+
 A network can hold more than projects. `--caddy` attaches the Caddy container (so it can route to members), `--poof` attaches the Poof! daemon (for members that call its API internally), and any name Poof! doesn't recognise as a project is treated as a container you manage yourself — from Compose, or started by hand:
 
 ```sh
