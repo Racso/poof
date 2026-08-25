@@ -47,6 +47,9 @@ type ContainerManager interface {
 	ConnectNetwork(network, container string) error
 	DisconnectNetwork(network, container string) error
 	RemoveNetwork(name string) error
+	ContainerExists(name string) bool
+	ContainerNetworks(container string) ([]string, error)
+	SelfContainerName() (string, error)
 }
 
 // GCResult mirrors docker.GCResult for the interface boundary.
@@ -162,10 +165,11 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /networks", s.auth(s.listNetworks))
 	mux.HandleFunc("POST /networks", s.auth(s.createNetwork))
 	mux.HandleFunc("DELETE /networks/{name}", s.auth(s.deleteNetwork))
+	mux.HandleFunc("GET /networks/{name}/members", s.auth(s.listNetworkMembers))
+	mux.HandleFunc("POST /networks/{name}/members", s.auth(s.addNetworkMembers))
+	mux.HandleFunc("DELETE /networks/{name}/members", s.auth(s.removeNetworkMembers))
+	// Read-only view: which networks is this project attached to?
 	mux.HandleFunc("GET /projects/{name}/networks", s.auth(s.listProjectNetworks))
-	mux.HandleFunc("POST /projects/{name}/networks", s.auth(s.addProjectNetwork))
-	mux.HandleFunc("GET /projects/{name}/networks/{id}", s.auth(s.getProjectNetwork))
-	mux.HandleFunc("DELETE /projects/{name}/networks/{id}", s.auth(s.removeProjectNetwork))
 
 	// Caddy snippets (per-project custom Caddy directives)
 	mux.HandleFunc("GET /caddy/snippets", s.auth(s.listCaddySnippets))

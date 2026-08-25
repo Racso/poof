@@ -64,15 +64,6 @@ type Network struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// ProjectNetwork attaches a project's container to an extra network (besides
-// the mandatory poof-net) on every (re)deploy.
-type ProjectNetwork struct {
-	ID        int64     `json:"id"`
-	Project   string    `json:"project"`
-	Network   string    `json:"network"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type Redirect struct {
 	ID         int64     `json:"id"`
 	FromDomain string    `json:"from"`
@@ -179,13 +170,13 @@ func (s *Store) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
-		CREATE TABLE IF NOT EXISTS project_networks (
+		CREATE TABLE IF NOT EXISTS network_members (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			project    TEXT NOT NULL,
 			network    TEXT NOT NULL,
+			member     TEXT NOT NULL,
+			kind       TEXT NOT NULL DEFAULT 'project',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE (project, network),
-			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+			UNIQUE (network, member, kind)
 		);
 
 		CREATE TABLE IF NOT EXISTS settings (
@@ -800,77 +791,6 @@ func (s *Store) DeleteNetwork(name string) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM networks WHERE name = ?`, name)
 	if err != nil {
 		return false, fmt.Errorf("delete network: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
-}
-
-// CountProjectsUsingNetwork returns how many project attachments reference the
-// given network — used to refuse deleting a network still in use.
-func (s *Store) CountProjectsUsingNetwork(network string) (int, error) {
-	var c int
-	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM project_networks WHERE network = ?`, network,
-	).Scan(&c)
-	if err != nil {
-		return 0, fmt.Errorf("count network usage: %w", err)
-	}
-	return c, nil
-}
-
-// --- Project networks ---
-
-func (s *Store) CreateProjectNetwork(pn ProjectNetwork) (*ProjectNetwork, error) {
-	res, err := s.db.Exec(
-		`INSERT INTO project_networks (project, network) VALUES (?, ?)`,
-		pn.Project, pn.Network,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create project network: %w", err)
-	}
-	id, _ := res.LastInsertId()
-	return s.GetProjectNetwork(id)
-}
-
-func (s *Store) GetProjectNetwork(id int64) (*ProjectNetwork, error) {
-	pn := &ProjectNetwork{}
-	err := s.db.QueryRow(
-		`SELECT id, project, network, created_at FROM project_networks WHERE id = ?`, id,
-	).Scan(&pn.ID, &pn.Project, &pn.Network, &pn.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get project network: %w", err)
-	}
-	return pn, nil
-}
-
-func (s *Store) ListProjectNetworks(project string) ([]ProjectNetwork, error) {
-	rows, err := s.db.Query(
-		`SELECT id, project, network, created_at FROM project_networks WHERE project = ? ORDER BY id`,
-		project,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list project networks: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var nets []ProjectNetwork
-	for rows.Next() {
-		var pn ProjectNetwork
-		if err := rows.Scan(&pn.ID, &pn.Project, &pn.Network, &pn.CreatedAt); err != nil {
-			return nil, err
-		}
-		nets = append(nets, pn)
-	}
-	return nets, rows.Err()
-}
-
-func (s *Store) DeleteProjectNetwork(id int64) (bool, error) {
-	res, err := s.db.Exec(`DELETE FROM project_networks WHERE id = ?`, id)
-	if err != nil {
-		return false, fmt.Errorf("delete project network: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil

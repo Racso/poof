@@ -135,10 +135,11 @@ poof logs <name> [--lines N]         container log lines
 poof migrate workflows [--apply]     one-shot migrations across breaking releases
 poof net create <name> [--internal] create a Poof-managed Docker network
 poof net ls                          list Poof-managed networks
-poof net delete <name>               delete a network record (must be detached)
-poof net add <project> <network>     attach a network to a project
-poof net list <project>              list networks attached to a project
-poof net remove <project> <id>       detach a network from a project
+poof net delete <name>               delete a network record (must be empty)
+poof net add <network> [member...] [--caddy] [--poof]   attach members
+poof net show <network>              show what is attached to a network
+poof net list <project>              list networks a project is attached to
+poof net remove <network> [member...] [--caddy] [--poof] detach members
 poof pause <name>                    take a project offline (503 + container stopped) without touching its config
 poof redirect add <from> <to>        add a domain redirect (301)
 poof redirect delete <id>            delete a redirect by ID
@@ -358,7 +359,19 @@ poof net add worker backend          # attach project 'worker'
 poof deploy api && poof deploy worker # redeploy to apply
 ```
 
-Poof! records each attachment as desired state and **re-applies it on every (re)deploy**, so membership survives redeploys — unlike a one-off `docker network connect`, which is lost the moment the container is recreated.
+A network can hold more than projects. `--caddy` attaches the Caddy container (so it can route to members), `--poof` attaches the Poof! daemon (for members that call its API internally), and any name Poof! doesn't recognise as a project is treated as a container you manage yourself — from Compose, or started by hand:
+
+```sh
+# Route a domain to a container Poof! doesn't manage
+poof net create edge-myapp
+poof net add edge-myapp my-compose-container --caddy
+
+poof net show edge-myapp     # what's attached
+poof net list api            # which networks a project is on
+poof net remove edge-myapp my-compose-container
+```
+
+Poof! records every attachment as desired state and **re-applies it**, so membership survives containers being recreated — unlike a one-off `docker network connect`, which is lost the moment that happens. Attaching takes effect immediately; no redeploy needed.
 
 **`--internal`** networks have no external connectivity (no egress, nothing published) — ideal for backend-only traffic between containers.
 

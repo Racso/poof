@@ -456,6 +456,12 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// network_members has no foreign key on member (a member may be a
+	// container Poof doesn't own), so clean up explicitly.
+	if err := s.store.DeleteNetworkMembersForProject(name); err != nil {
+		log.Printf("warning: removing network memberships for %s: %v", name, err)
+	}
+
 	if err := s.store.DeleteProject(name); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -929,7 +935,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		mounts[i] = v.HostPath + ":" + v.ContainerPath
 	}
 
-	projNets, err := s.store.ListProjectNetworks(p.Name)
+	projNets, err := s.store.ListNetworksForProject(p.Name)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1392,7 +1398,7 @@ func (s *Server) createNetwork(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteNetwork(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
-	count, err := s.store.CountProjectsUsingNetwork(name)
+	count, err := s.store.CountNetworkMembers(name)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1420,109 +1426,182 @@ func (s *Server) deleteNetwork(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listProjectNetworks(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	nets, err := s.store.ListProjectNetworks(name)
+	nets, err := s.store.ListNetworksForProject(name)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if nets == nil {
-		nets = []store.ProjectNetwork{}
+		nets = []store.NetworkMember{}
 	}
 	jsonOK(w, nets)
 }
 
-func (s *Server) getProjectNetwork(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		jsonError(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-	pn, err := s.store.GetProjectNetwork(id)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if pn == nil {
-		jsonError(w, "network attachment not found", http.StatusNotFound)
-		return
-	}
-	jsonOK(w, pn)
+// netMembersRequest is the body of POST/DELETE /networks/{name}/members.
+// Members are named containers or projects; caddy and poof are flags because
+// there is only ever one of each.
+type netMembersRequest struct {
+	Members []string `json:"members"`
+	Caddy   bool     `json:"caddy"`
+	Poof    bool     `json:"poof"`
 }
 
-type addProjectNetworkRequest struct {
-	Network string `json:"network"`
+// resolveMemberKind decides whether a name refers to a Poof project or to a
+// container Poof does not manage. Projects win: their membership is re-applied
+// on every deploy, which is the stronger guarantee.
+func (s *Server) resolveMemberKind(name string) string {
+	if p, err := s.store.GetProject(name); err == nil && p != nil {
+		return store.MemberProject
+	}
+	return store.MemberContainer
 }
 
-func (s *Server) addProjectNetwork(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	p, err := s.store.GetProject(name)
-	if err != nil || p == nil {
-		jsonError(w, "project not found", http.StatusNotFound)
-		return
-	}
-	if p.IsStatic() {
-		jsonError(w, "networks are not supported for static projects", http.StatusBadRequest)
-		return
-	}
-
-	var req addProjectNetworkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Network == "" {
-		jsonError(w, "network is required", http.StatusBadRequest)
-		return
-	}
-
-	def, err := s.store.GetNetwork(req.Network)
+// addNetworkMembers attaches projects, containers, Caddy and/or the daemon to
+// a network, then reconciles so the change takes effect immediately rather
+// than at the next deploy.
+func (s *Server) addNetworkMembers(w http.ResponseWriter, r *http.Request) {
+	network := r.PathValue("name")
+	def, err := s.store.GetNetwork(network)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if def == nil {
-		jsonError(w, fmt.Sprintf("network %q does not exist; create it with 'poof net create %s'", req.Network, req.Network), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("network %q does not exist; create it with 'poof net create %s'", network, network), http.StatusBadRequest)
 		return
 	}
 
-	pn, err := s.store.CreateProjectNetwork(store.ProjectNetwork{Project: name, Network: req.Network})
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+	var req netMembersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Members) == 0 && !req.Caddy && !req.Poof {
+		jsonError(w, "specify at least one member, or --caddy / --poof", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("network attached: project=%s network=%s id=%d", name, req.Network, pn.ID)
+	var added []store.NetworkMember
+	for _, name := range req.Members {
+		if name == "" {
+			continue
+		}
+		kind := s.resolveMemberKind(name)
+		if kind == store.MemberProject {
+			if p, _ := s.store.GetProject(name); p != nil && p.IsStatic() {
+				jsonError(w, fmt.Sprintf("project %q is static: it has no container to attach", name), http.StatusBadRequest)
+				return
+			}
+		}
+		m, err := s.store.AddNetworkMember(network, name, kind)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		added = append(added, *m)
+	}
+	for _, special := range []struct {
+		want bool
+		kind string
+	}{{req.Caddy, store.MemberCaddy}, {req.Poof, store.MemberPoof}} {
+		if !special.want {
+			continue
+		}
+		m, err := s.store.AddNetworkMember(network, special.kind, special.kind)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		added = append(added, *m)
+	}
+
+	// Apply now: attaching a live container needs no recreate.
+	s.reconcileNetworkMembers()
+	log.Printf("network members added: network=%s count=%d", network, len(added))
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, pn)
+	jsonOK(w, map[string]interface{}{"network": network, "added": added})
 }
 
-func (s *Server) removeProjectNetwork(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		jsonError(w, "invalid id", http.StatusBadRequest)
+// removeNetworkMembers detaches members. It updates desired state and detaches
+// the running containers; a member that was never attached is not an error.
+func (s *Server) removeNetworkMembers(w http.ResponseWriter, r *http.Request) {
+	network := r.PathValue("name")
+
+	var req netMembersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Members) == 0 && !req.Caddy && !req.Poof {
+		jsonError(w, "specify at least one member, or --caddy / --poof", http.StatusBadRequest)
 		return
 	}
 
-	pn, err := s.store.GetProjectNetwork(id)
+	targets := map[string]string{} // member -> kind
+	for _, name := range req.Members {
+		if name == "" {
+			continue
+		}
+		// Try both kinds: the caller names a thing, not a classification.
+		for _, kind := range []string{store.MemberProject, store.MemberContainer} {
+			if m, _ := s.store.GetNetworkMember(network, name, kind); m != nil {
+				targets[name] = kind
+			}
+		}
+	}
+	if req.Caddy {
+		targets[store.MemberCaddy] = store.MemberCaddy
+	}
+	if req.Poof {
+		targets[store.MemberPoof] = store.MemberPoof
+	}
+
+	var removed []string
+	for member, kind := range targets {
+		ok, err := s.store.RemoveNetworkMember(network, member, kind)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			continue
+		}
+		removed = append(removed, member)
+		// Detach the live container too, so the change is immediate.
+		if container, ok := s.resolveMemberContainer(store.NetworkMember{
+			Network: network, Member: member, Kind: kind,
+		}); ok {
+			if err := s.container.DisconnectNetwork(network, container); err != nil {
+				log.Printf("warning: detaching %s from %s: %v", container, network, err)
+			}
+		}
+	}
+
+	log.Printf("network members removed: network=%s count=%d", network, len(removed))
+	jsonOK(w, map[string]interface{}{"network": network, "removed": removed})
+}
+
+// listNetworkMembers reports everything attached to a network.
+func (s *Server) listNetworkMembers(w http.ResponseWriter, r *http.Request) {
+	network := r.PathValue("name")
+	def, err := s.store.GetNetwork(network)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if pn == nil {
-		jsonError(w, "network attachment not found", http.StatusNotFound)
+	if def == nil {
+		jsonError(w, "network not found", http.StatusNotFound)
 		return
 	}
-
-	found, err := s.store.DeleteProjectNetwork(id)
+	members, err := s.store.ListNetworkMembers(network)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !found {
-		jsonError(w, "network attachment not found", http.StatusNotFound)
-		return
+	if members == nil {
+		members = []store.NetworkMember{}
 	}
-
-	log.Printf("network detached: id=%d project=%s network=%s", id, pn.Project, pn.Network)
-	jsonOK(w, map[string]interface{}{"status": "removed", "network": pn.Network})
+	jsonOK(w, members)
 }
 
 // --- Caddy Snippets ---
@@ -1854,6 +1933,11 @@ func (s *Server) applyWorkflowMigration(w http.ResponseWriter, r *http.Request) 
 // syncCaddy regenerates the full Caddyfile from the current database state and
 // pushes it to the Caddy admin API for a zero-downtime reload.
 func (s *Server) syncCaddy() error {
+	// Network membership is desired state; re-apply it here because this runs
+	// on every mutation. Caddy and the daemon have no deploy of their own, so
+	// this is what makes their attachments self-healing.
+	s.reconcileNetworkMembers()
+
 	projects, err := s.store.ListProjects()
 	if err != nil {
 		return err

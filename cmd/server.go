@@ -93,10 +93,15 @@ func (dockerAdapter) ConnectNetwork(network, container string) error {
 func (dockerAdapter) DisconnectNetwork(network, container string) error {
 	return docker.DisconnectNetwork(network, container)
 }
-func (dockerAdapter) RemoveNetwork(name string) error { return docker.RemoveNetwork(name) }
-func (dockerAdapter) Stop(name string) error          { return docker.Stop(name) }
-func (dockerAdapter) Suspend(name string) error       { return docker.Suspend(name) }
-func (dockerAdapter) Start(name string) error         { return docker.Start(name) }
+func (dockerAdapter) RemoveNetwork(name string) error  { return docker.RemoveNetwork(name) }
+func (dockerAdapter) ContainerExists(name string) bool { return docker.ContainerExists(name) }
+func (dockerAdapter) ContainerNetworks(container string) ([]string, error) {
+	return docker.ContainerNetworks(container)
+}
+func (dockerAdapter) SelfContainerName() (string, error) { return docker.SelfContainerName() }
+func (dockerAdapter) Stop(name string) error             { return docker.Stop(name) }
+func (dockerAdapter) Suspend(name string) error          { return docker.Suspend(name) }
+func (dockerAdapter) Start(name string) error            { return docker.Start(name) }
 func (dockerAdapter) Snapshot(name, dataDir string) (server.SnapshotResult, error) {
 	r, err := docker.Snapshot(name, dataDir)
 	if err != nil {

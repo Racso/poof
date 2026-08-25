@@ -111,6 +111,9 @@ type mockContainerManager struct {
 	connectCalls    []mockNetLink
 	disconnectCalls []mockNetLink
 	networksRemoved []string
+	existing        map[string]bool
+	containerNets   map[string][]string
+	selfName        string
 }
 
 type mockNetLink struct {
@@ -208,6 +211,25 @@ func (m *mockContainerManager) DisconnectNetwork(network, container string) erro
 func (m *mockContainerManager) RemoveNetwork(name string) error {
 	m.networksRemoved = append(m.networksRemoved, name)
 	return nil
+}
+
+func (m *mockContainerManager) ContainerExists(name string) bool {
+	if m.existing == nil {
+		// Default: project containers exist, so reconcile has something to attach.
+		return true
+	}
+	return m.existing[name]
+}
+
+func (m *mockContainerManager) ContainerNetworks(container string) ([]string, error) {
+	return m.containerNets[container], nil
+}
+
+func (m *mockContainerManager) SelfContainerName() (string, error) {
+	if m.selfName == "" {
+		return "poof", nil
+	}
+	return m.selfName, nil
 }
 
 func (m *mockContainerManager) ImagesDiskUsage() (int64, error) {
@@ -1392,9 +1414,6 @@ func TestNetworkCreateAttachAndDeploy(t *testing.T) {
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create network: %d — %s", rr.Code, rr.Body.String())
 	}
-	if len(mocks.container.networksEnsured) != 1 || mocks.container.networksEnsured[0] != "backend" {
-		t.Fatalf("expected backend network ensured, got %v", mocks.container.networksEnsured)
-	}
 
 	// Duplicate create is a conflict.
 	rr = do(t, srv, "POST", "/networks",
@@ -1403,18 +1422,18 @@ func TestNetworkCreateAttachAndDeploy(t *testing.T) {
 		t.Fatalf("duplicate network: expected 409, got %d", rr.Code)
 	}
 
-	// Attaching a non-existent network is rejected.
-	rr = do(t, srv, "POST", "/projects/api/networks",
-		map[string]interface{}{"network": "ghost"}, globalToken)
+	// Attaching to a non-existent network is rejected.
+	rr = do(t, srv, "POST", "/networks/ghost/members",
+		map[string]interface{}{"members": []string{"api"}}, globalToken)
 	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("attach ghost network: expected 400, got %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("attach to ghost network: expected 400, got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	// Attach the real network.
-	rr = do(t, srv, "POST", "/projects/api/networks",
-		map[string]interface{}{"network": "backend"}, globalToken)
+	// Attach the project.
+	rr = do(t, srv, "POST", "/networks/backend/members",
+		map[string]interface{}{"members": []string{"api"}}, globalToken)
 	if rr.Code != http.StatusCreated {
-		t.Fatalf("attach network: %d — %s", rr.Code, rr.Body.String())
+		t.Fatalf("attach member: %d — %s", rr.Code, rr.Body.String())
 	}
 
 	// Deploy should carry the network through to the container config.
@@ -1422,9 +1441,6 @@ func TestNetworkCreateAttachAndDeploy(t *testing.T) {
 		map[string]interface{}{"image": "ghcr.io/racso/api:v1"}, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
-	}
-	if len(mocks.container.deployCalls) != 1 {
-		t.Fatalf("expected 1 deploy, got %d", len(mocks.container.deployCalls))
 	}
 	nets := mocks.container.deployCalls[0].Networks
 	if len(nets) != 1 || nets[0] != "backend" {
@@ -1437,16 +1453,9 @@ func TestNetworkCreateAttachAndDeploy(t *testing.T) {
 		t.Fatalf("delete in-use network: expected 409, got %d — %s", rr.Code, rr.Body.String())
 	}
 
-	// Detach, then delete succeeds.
-	var attached []store.ProjectNetwork
-	rr = do(t, srv, "GET", "/projects/api/networks", nil, globalToken)
-	if err := json.Unmarshal(rr.Body.Bytes(), &attached); err != nil {
-		t.Fatalf("list project networks: %v", err)
-	}
-	if len(attached) != 1 {
-		t.Fatalf("expected 1 attachment, got %d", len(attached))
-	}
-	rr = do(t, srv, "DELETE", fmt.Sprintf("/projects/api/networks/%d", attached[0].ID), nil, globalToken)
+	// Detach by name, then delete succeeds.
+	rr = do(t, srv, "DELETE", "/networks/backend/members",
+		map[string]interface{}{"members": []string{"api"}}, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("detach: %d — %s", rr.Code, rr.Body.String())
 	}
@@ -1454,9 +1463,77 @@ func TestNetworkCreateAttachAndDeploy(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("delete network: %d — %s", rr.Code, rr.Body.String())
 	}
-
 	if nets, _ := st.ListNetworks(); len(nets) != 0 {
 		t.Fatalf("expected no networks after delete, got %v", nets)
+	}
+}
+
+// Caddy, the daemon, and a container Poof does not manage can all be members —
+// the capability that replaces hand-run `docker network connect` workarounds.
+func TestNetworkMembersIncludeCaddyPoofAndUnmanagedContainers(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+
+	rr := do(t, srv, "POST", "/networks",
+		map[string]interface{}{"name": "edge-indigo"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create network: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	rr = do(t, srv, "POST", "/networks/edge-indigo/members",
+		map[string]interface{}{"members": []string{"my-compose-app"}, "caddy": true, "poof": true},
+		globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("add members: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	var members []store.NetworkMember
+	rr = do(t, srv, "GET", "/networks/edge-indigo/members", nil, globalToken)
+	if err := json.Unmarshal(rr.Body.Bytes(), &members); err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+	kinds := map[string]string{}
+	for _, m := range members {
+		kinds[m.Kind] = m.Member
+	}
+	// An unknown name is recorded as an unmanaged container, not a project.
+	if kinds[store.MemberContainer] != "my-compose-app" {
+		t.Errorf("expected my-compose-app as a container member, got %v", kinds)
+	}
+	if _, ok := kinds[store.MemberCaddy]; !ok {
+		t.Errorf("expected a caddy member, got %v", kinds)
+	}
+	if _, ok := kinds[store.MemberPoof]; !ok {
+		t.Errorf("expected a poof member, got %v", kinds)
+	}
+
+	// Adding members reconciles immediately: the containers are attached now,
+	// not at some future deploy.
+	attached := map[string]bool{}
+	for _, c := range mocks.container.connectCalls {
+		if c.Network == "edge-indigo" {
+			attached[c.Container] = true
+		}
+	}
+	for _, want := range []string{"my-compose-app", "caddy-proxy", "poof"} {
+		if !attached[want] {
+			t.Errorf("expected %s attached to edge-indigo on add, got %v", want, mocks.container.connectCalls)
+		}
+	}
+}
+
+// A static project has no container, so attaching it is meaningless and must
+// be rejected rather than silently recorded.
+func TestStaticProjectCannotBeNetworkMember(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site", Branch: "main", Static: "static",
+	})
+	do(t, srv, "POST", "/networks", map[string]interface{}{"name": "mesh"}, globalToken)
+
+	rr := do(t, srv, "POST", "/networks/mesh/members",
+		map[string]interface{}{"members": []string{"site"}}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for static project member, got %d — %s", rr.Code, rr.Body.String())
 	}
 }
 

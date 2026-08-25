@@ -424,6 +424,26 @@ func DisconnectNetwork(network, container string) error {
 	return nil
 }
 
+// ContainerNetworks returns the names of the networks a container is attached
+// to. A non-existent container yields an empty list rather than an error.
+func ContainerNetworks(container string) ([]string, error) {
+	out, err := exec.Command(
+		"docker", "inspect", "--format",
+		`{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}`,
+		container,
+	).Output()
+	if err != nil {
+		return nil, nil
+	}
+	var nets []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			nets = append(nets, s)
+		}
+	}
+	return nets, nil
+}
+
 // RemoveNetwork removes a Docker network. A network that doesn't exist is
 // treated as success; a network with active endpoints is an error (the caller
 // decides whether that's fatal — hand-attached containers keep a net alive).

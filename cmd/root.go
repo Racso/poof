@@ -127,6 +127,12 @@ func apiDelete(path string) error {
 	return apiRequest("DELETE", path, nil, nil)
 }
 
+// apiDeleteBody sends a DELETE with a JSON body — used where the thing being
+// deleted is a set (e.g. detaching several network members at once).
+func apiDeleteBody(path string, payload interface{}, out interface{}) error {
+	return apiRequest("DELETE", path, payload, out)
+}
+
 func apiRequest(method, path string, payload interface{}, out interface{}) error {
 	var body io.Reader
 	if payload != nil {
