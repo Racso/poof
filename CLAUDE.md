@@ -70,7 +70,7 @@ Config / env / volumes / redirects:
 Caddy / GC / install / update:
 - `poof caddy get|set|delete|list` — per-project Caddy snippet override (in addition to `/etc/caddy/conf.d/*.Caddyfile` static files).
 - `poof gc [project] [--keep N] [--older-than D] [--all] [--dry-run]`, `poof gc set|status|off`.
-- `poof install [--domain --token --use-caddy --yes]` — bootstraps Caddy + server container.
+- `poof install [--domain --token --use-caddy --yes]` — bootstraps Docker address pools + Caddy + server container.
 - `poof update local|server|both [version]`.
 - `poof migrate workflows [--apply]` — one-shot migrations across breaking releases.
 
@@ -137,6 +137,8 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 - `poof-net` is the control plane: Caddy + the Poof daemon only. Project containers are never on it.
 - Cross-project traffic is always deliberate: a Poof-managed extra network (`poof net`), or a manual `docker network connect poof-app-<name> <container>` to invite a hand-managed container into a project's world (e.g. as a raw `poof spell proxy` target).
 - Static projects have no container and no per-app network.
+- **Docker address pools.** One network per project runs into Docker's built-in ceiling of 31 networks (15 × /16 from `172.17/12` + 16 × /20 from `192.168/16`); past it, every deploy fails with `all predefined address pools have been fully subnetted`. `poof install` therefore sets `default-address-pools` in `/etc/docker/daemon.json` to a single free `/19` sliced into `/28`s — 512 networks of 13 usable addresses. The base is chosen at install time by scanning existing Docker subnets *and* host routes, preferring `172.16.0.0/16` (Docker's own defaults start at `172.17`, so it's conventionally free) and falling back to `10.210+`. The step is idempotent: if `default-address-pools` is already present it is left alone and Docker is not restarted. Existing networks keep whatever subnet they were created with — changing the pool does not renumber them.
+- **Project names must be DNS-safe.** Caddy dials containers by name (`poof-<project>`), and Go's resolver enforces RFC 1123 strictly while Docker's embedded DNS does not — so an invalid name resolves fine from inside a container but 502s every proxied request. `store.ValidateProjectName` rejects such names at `add`/`clone` time (e.g. `.z0` → `poof-.z0`, whose first label `poof-` ends in a hyphen).
 
 ## Routing model
 

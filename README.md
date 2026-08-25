@@ -21,6 +21,8 @@ No DNS changes needed per project — a single wildcard A record (`*.yourdomain.
 - A wildcard DNS A record pointing to the server (for subdomains), or individual DNS records per project
 - A `Dockerfile` in each project repo (unless deploying static sites)
 
+> `poof install` configures Docker's `default-address-pools` (in `/etc/docker/daemon.json`) and restarts Docker. Poof gives every project its own network, and Docker's defaults cap you at 31 networks total — past that, deploys fail. Poof picks a free `/19` by inspecting your existing Docker subnets and host routes, so it won't collide with a VPC or LAN you already use. If you've already set `default-address-pools` yourself, Poof leaves it alone.
+
 ## Installation
 
 ### Server
@@ -536,6 +538,8 @@ poof apply --prune             # also remove projects absent from the file
 - **DNS must NOT be proxied through Cloudflare** (or any proxy that terminates TLS) if Caddy is to obtain certificates via ACME. Set the records to DNS-only (`proxied = false`).
 - **Custom domains need their own DNS records** pointing at the server. The wildcard record only covers subdomains of the root domain.
 - **Auth or connection errors from the CLI?** Check `~/.config/poof/poof.toml` (`server`, `token`) first, then run `poof troubleshoot`. With multiple servers, make sure the right profile is active (`--profile <name>` or `POOF_PROFILE` + `--profile-env`).
+- **Project names must be valid hostnames.** A project becomes a container named `poof-<name>`, which Caddy resolves by DNS. Names are restricted to what RFC 1123 allows for a hostname — letters, digits, hyphens and dots, with each dot-separated part starting and ending alphanumerically. `poof add` rejects anything else up front, because the failure mode is otherwise miserable to diagnose: Docker's own DNS is permissive enough that the name resolves fine from inside a container, while every request proxied through Caddy returns 502.
+- **Running out of networks?** `all predefined address pools have been fully subnetted` means Docker exhausted its address pools — its defaults only allow 31 networks, and Poof uses one per project. `poof install` configures a larger pool; see [Requirements](#requirements).
 - **Agents / automation:** the HTTP API behind the CLI is bearer-token authed and not a stable public surface — drive Poof! through the CLI.
 
 ## License

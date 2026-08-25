@@ -134,7 +134,11 @@ func runInstall(cmd *cobra.Command, args []string) {
 		printOK("Ports 80 and 443 are free")
 	}
 
-	// ── 4. Create poof-net ───────────────────────────────────────────
+	// ── 4. Docker address pools + poof-net ───────────────────────────
+	// Pools first: Poof creates one network per project, and Docker's
+	// defaults run out at 31 networks total.
+	ensureAddressPools()
+
 	printStep("Setting up Docker network")
 
 	if networkExists("poof-net") {
@@ -527,4 +531,10 @@ func printOK(msg string) {
 
 func printFail(msg string) {
 	fmt.Fprintf(os.Stderr, "  ✗ %s\n", msg)
+}
+
+// printWarn reports a non-fatal problem: install continues, but the operator
+// should know something is off.
+func printWarn(msg string) {
+	fmt.Fprintf(os.Stderr, "  ! %s\n", msg)
 }

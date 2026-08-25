@@ -148,6 +148,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The project name becomes the container name, which Caddy resolves by
+	// DNS — reject anything that wouldn't be a valid hostname.
+	if err := store.ValidateProjectName(req.Name); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Validate static mode.
 	if req.Static != "" && req.Static != "static" && req.Static != "spa" {
 		jsonError(w, "static must be empty, \"static\", or \"spa\"", http.StatusBadRequest)
@@ -511,6 +518,10 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cloneName := sourceName + "-" + req.Suffix
+	if err := store.ValidateProjectName(cloneName); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Check duplicate.
 	if existing, _ := s.store.GetProject(cloneName); existing != nil {
