@@ -86,7 +86,7 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 				writeSnippet(p.Name)
 			}
 		} else {
-			fmt.Fprintf(&b, "%s {\n\treverse_proxy poof-%s:%d\n", p.Domain, p.Name, p.Port)
+			fmt.Fprintf(&b, "%s {\n\treverse_proxy %s\n", p.Domain, p.Upstream())
 			writeSnippet(p.Name)
 		}
 		fmt.Fprintf(&b, "}\n\n")
@@ -107,7 +107,7 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 					subpathLines[rootDomain] = append(subpathLines[rootDomain], block)
 				} else {
 					subpathLines[rootDomain] = append(subpathLines[rootDomain],
-						fmt.Sprintf("\thandle_path /%s/* {\n\t\treverse_proxy poof-%s:%d\n\t}", p.Name, p.Name, p.Port))
+						fmt.Sprintf("\thandle_path /%s/* {\n\t\treverse_proxy %s\n\t}", p.Name, p.Upstream()))
 				}
 			}
 		}

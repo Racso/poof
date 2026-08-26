@@ -347,6 +347,19 @@ poof deploy myapp   # redeploy to apply changes
 
 **Explicit mounts** — `host/path:container/path` format. You control the host directory; Poof! never touches it.
 
+## External projects
+
+Route a domain to a container Poof! doesn't manage — one started by Compose, or by hand:
+
+```sh
+poof add ws --external my-compose-app:3000
+# live at ws.yourdomain.com, no deploys involved
+```
+
+Poof! owns the domain, the TLS and the routing; the container stays yours. There's no image, repo, branch or CI, and `deploy` / `rollback` / `snapshot` refuse — there's nothing of Poof!'s to deploy. `poof remove` takes down the route and the network it created, and leaves the container running.
+
+The port defaults to `80`. Registration fails if the container doesn't exist, so a typo is caught immediately rather than showing up later as a 502; a *stopped* container is fine.
+
 ## Networks
 
 Every project's container runs on its **own** Docker network (`poof-app-<name>`), shared only with Caddy for routing — projects are isolated from each other by default, so a compromised container has no lateral reach. Attaching an **extra** network lets several projects talk to each other privately — e.g. an API and its worker sharing a backend database that's never exposed publicly.

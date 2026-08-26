@@ -36,7 +36,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 
 ## Data model (`store/store.go`)
 
-- **Project** — name, domain, image, repo, branch, port, subpath mode, folder (monorepo), static mode (`"" | static | spa`), build flag, CI flag, CI mode (`managed` | `callable`), paused flag (503 routing while set; toggled only by pause/resume, never by configure).
+- **Project** — name, domain, image, repo, branch, port, subpath mode, folder (monorepo), static mode (`"" | static | spa`), external upstream container (`external`; `Upstream()` returns `host:port`, `IsExternal()` gates container operations), build flag, CI flag, CI mode (`managed` | `callable`), paused flag (503 routing while set; toggled only by pause/resume, never by configure).
 - **Volume** — managed (`/var/lib/poof/<project>/<container-path>`) or explicit (`host:container`).
 - **Network** — Poof-managed Docker network (`name`, `internal`) plus a `network_members` table of attachments. A member has a kind: `project`, `container` (unmanaged), `caddy`, or `poof`. Membership is desired state, re-applied by `reconcileNetworkMembers` on every sync.
 - **Redirect** — independent 301 from one domain to another.
@@ -47,6 +47,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 
 Project lifecycle:
 - `poof add <name>` — register; auto-sets GitHub secrets + commits `.github/workflows/poof.yml` if a PAT is configured.
+- `poof add <name> --external <container>[:<port>]` — **external project**: Poof owns the domain and routing, nothing else. No image, repo, branch or CI; Caddy proxies straight to a container Poof doesn't manage (Compose, hand-run). Port defaults to 80. Registration **refuses if the container doesn't exist** (existing is enough — a stopped container still proves the name is real), so a typo fails immediately instead of surfacing later as a 502. The per-app network is created and the upstream attached at registration, since there's no deploy step to do it. `deploy`/`rollback`/`snapshot` refuse; `remove` deletes the route and network and explicitly reports that the container was left running. Replaces the static-project-plus-snippet shim.
 - `poof configure <name>` — change any field except token; only passed flags mutate.
 - `poof clone <src> <suffix>` — create `<src>-<suffix>` deploying from branch `<suffix>`; optional `--env --all|--only|--except|--ask`. Refuses if the source has a Caddy snippet unless `--caddy-yes` (copy verbatim — references to the source's container are NOT rewritten) or `--caddy-no` (skip) is passed.
 - `poof remove <name>` — stop container, delete project; `--data-keep|--data-delete` for managed volumes.

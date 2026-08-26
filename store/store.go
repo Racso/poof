@@ -39,7 +39,23 @@ type Project struct {
 	CI        bool      `json:"ci"`
 	CIMode    string    `json:"ci_mode"`
 	Paused    bool      `json:"paused"`
+	External  string    `json:"external"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// IsExternal reports whether this project routes to a container Poof does not
+// manage, instead of deploying one of its own. External projects have no
+// image, repo, or CI: Poof owns the domain and the routing, nothing else.
+func (p Project) IsExternal() bool { return p.External != "" }
+
+// Upstream is the host:port Caddy proxies to — the project's own container
+// normally, or the named external container when set.
+func (p Project) Upstream() string {
+	host := ContainerPrefix + p.Name
+	if p.IsExternal() {
+		host = p.External
+	}
+	return fmt.Sprintf("%s:%d", host, p.Port)
 }
 
 // IsStatic returns true if the project is a static site or SPA.
@@ -215,6 +231,7 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci_mode TEXT NOT NULL DEFAULT 'managed'`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`)
+	s.db.Exec(`ALTER TABLE projects ADD COLUMN external TEXT NOT NULL DEFAULT ''`)
 
 	// Structural migration: add project IDs, rewrite deployments table.
 	if err := s.migrateProjectIDs(); err != nil {
@@ -325,9 +342,9 @@ func (s *Store) CreateProject(p Project) error {
 		p.CIMode = CIModeManaged
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode)
-		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode,
+		`INSERT INTO projects (name, domain, image, repo, branch, port, token, subpath, folder, static, build, ci, ci_mode, external)
+		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.External,
 	)
 	if err != nil {
 		return fmt.Errorf("create project: %w", err)
@@ -338,9 +355,9 @@ func (s *Store) CreateProject(p Project) error {
 func (s *Store) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	err := s.db.QueryRow(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, paused, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, paused, external, created_at
 		 FROM projects WHERE name = ?`, name,
-	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.Paused, &p.CreatedAt)
+	).Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.Paused, &p.External, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -352,7 +369,7 @@ func (s *Store) GetProject(name string) (*Project, error) {
 
 func (s *Store) ListProjects() ([]Project, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, paused, created_at
+		`SELECT id, name, domain, image, repo, branch, port, subpath, folder, static, build, ci, ci_mode, paused, external, created_at
 		 FROM projects ORDER BY name`,
 	)
 	if err != nil {
@@ -363,7 +380,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.Paused, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Domain, &p.Image, &p.Repo, &p.Branch, &p.Port, &p.Subpath, &p.Folder, &p.Static, &p.Build, &p.CI, &p.CIMode, &p.Paused, &p.External, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -423,8 +440,8 @@ func (s *Store) UpdateProject(p Project) error {
 		p.CIMode = CIModeManaged
 	}
 	_, err := s.db.Exec(
-		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=?, ci_mode=? WHERE name=?`,
-		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.Name,
+		`UPDATE projects SET domain=?, image=?, repo=?, branch=?, port=?, subpath=?, folder=?, static=?, build=?, ci=?, ci_mode=?, external=? WHERE name=?`,
+		p.Domain, p.Image, p.Repo, p.Branch, p.Port, p.Subpath, p.Folder, p.Static, p.Build, p.CI, p.CIMode, p.External, p.Name,
 	)
 	return err
 }

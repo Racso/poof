@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"net/url"
 
@@ -45,6 +46,9 @@ func (s *Server) caddyContainerName() string {
 // ensureProjectNetwork makes sure the project's per-app network exists and
 // Caddy is attached to it. Idempotent — called on every (re)deploy. Returns
 // the network name.
+//
+// For an external project the upstream container is attached too: Poof never
+// deploys it, so this is the only point at which it can be wired in.
 func (s *Server) ensureProjectNetwork(p *store.Project) (string, error) {
 	net := appNetName(p.Name)
 	if err := s.container.EnsureNetwork(net, false); err != nil {
@@ -53,6 +57,11 @@ func (s *Server) ensureProjectNetwork(p *store.Project) (string, error) {
 	if caddy := s.caddyContainerName(); caddy != "" {
 		if err := s.container.ConnectNetwork(net, caddy); err != nil {
 			return "", err
+		}
+	}
+	if p.IsExternal() {
+		if err := s.container.ConnectNetwork(net, p.External); err != nil {
+			return "", fmt.Errorf("attach %s to %s: %w", p.External, net, err)
 		}
 	}
 	return net, nil

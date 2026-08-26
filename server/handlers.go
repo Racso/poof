@@ -127,18 +127,19 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 type createProjectRequest struct {
-	Name    string `json:"name"`
-	Domain  string `json:"domain"`
-	Image   string `json:"image"`
-	Repo    string `json:"repo"`
-	Branch  string `json:"branch"`
-	Port    int    `json:"port"`
-	Subpath string `json:"subpath"`
-	Folder  string `json:"folder"`
-	Static  string `json:"static"`
-	Build   bool   `json:"build"`
-	CI      *bool  `json:"ci"`
-	CIMode  string `json:"ci_mode"`
+	Name     string `json:"name"`
+	Domain   string `json:"domain"`
+	Image    string `json:"image"`
+	Repo     string `json:"repo"`
+	Branch   string `json:"branch"`
+	Port     int    `json:"port"`
+	Subpath  string `json:"subpath"`
+	Folder   string `json:"folder"`
+	Static   string `json:"static"`
+	Build    bool   `json:"build"`
+	CI       *bool  `json:"ci"`
+	CIMode   string `json:"ci_mode"`
+	External string `json:"external"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -162,11 +163,43 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	isStatic := req.Static == "static" || req.Static == "spa"
 
+	// External projects route to a container Poof does not manage. They own a
+	// domain and nothing else: no image, no repo, no CI, no deploys.
+	var externalHost string
+	if req.External != "" {
+		if isStatic {
+			jsonError(w, "--external and --static are mutually exclusive", http.StatusBadRequest)
+			return
+		}
+		host, port, err := parseExternalTarget(req.External)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Refuse to register a route that points at nothing: the failure would
+		// otherwise surface much later as a 502 with no obvious cause, and a
+		// typo is by far the likeliest explanation. Existing is enough — a
+		// stopped container still proves the name is real.
+		if !s.container.ContainerExists(host) {
+			jsonError(w, fmt.Sprintf(
+				"container %q not found — check the name (it must already exist; it may be stopped)", host),
+				http.StatusBadRequest)
+			return
+		}
+		externalHost = host
+		req.Port = port
+		req.Image = ""
+		req.Repo = ""
+		ciOff := false
+		req.CI = &ciOff
+	}
+
 	// Apply defaults
 	if req.Domain == "" {
 		req.Domain = req.Name + "." + s.settingDomain()
 	}
-	if !isStatic {
+	isExternal := externalHost != ""
+	if !isStatic && !isExternal {
 		if req.Image == "" {
 			req.Image = fmt.Sprintf("ghcr.io/%s/%s", strings.ToLower(s.settingGitHubUser()), strings.ToLower(req.Name))
 		}
@@ -174,10 +207,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			req.Port = defaults.Port
 		}
 	}
-	if req.Repo == "" {
+	// An external project has no repo to build from and no branch to track:
+	// leave those empty rather than inventing defaults that mean nothing.
+	if req.Repo == "" && !isExternal {
 		req.Repo = fmt.Sprintf("%s/%s", s.settingGitHubUser(), req.Name)
 	}
-	if req.Branch == "" {
+	if req.Branch == "" && !isExternal {
 		req.Branch = defaults.Branch
 	}
 
@@ -241,18 +276,19 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := store.Project{
-		Name:    req.Name,
-		Domain:  req.Domain,
-		Image:   req.Image,
-		Repo:    req.Repo,
-		Branch:  req.Branch,
-		Port:    req.Port,
-		Subpath: req.Subpath,
-		Folder:  req.Folder,
-		Static:  req.Static,
-		Build:   req.Build,
-		CI:      ci,
-		CIMode:  ciMode,
+		Name:     req.Name,
+		Domain:   req.Domain,
+		Image:    req.Image,
+		Repo:     req.Repo,
+		Branch:   req.Branch,
+		Port:     req.Port,
+		Subpath:  req.Subpath,
+		Folder:   req.Folder,
+		Static:   req.Static,
+		Build:    req.Build,
+		CI:       ci,
+		CIMode:   ciMode,
+		External: externalHost,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -271,6 +307,21 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		if err := client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static, p.CIMode, req.Build); err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 		}
+	}
+
+	// An external project is live the moment it is registered: there is no
+	// deploy step to wire up its network or publish its route.
+	if p.IsExternal() {
+		if _, err := s.ensureProjectNetwork(&p); err != nil {
+			log.Printf("warning: network setup for external project %s: %v", p.Name, err)
+		}
+		if err := s.syncCaddy(); err != nil {
+			log.Printf("warning: caddy sync after creating %s: %v", p.Name, err)
+		}
+		log.Printf("external project created: %s → %s", p.Name, p.Upstream())
+		w.WriteHeader(http.StatusCreated)
+		jsonOK(w, p)
+		return
 	}
 
 	log.Printf("project created: %s (repo=%s branch=%s image=%s static=%s build=%v ci=%v mode=%s)", p.Name, p.Repo, p.Branch, p.Image, p.Static, p.Build, p.CI, p.CIMode)
@@ -428,9 +479,15 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Stop container or clean up static files.
-	if p.IsStatic() {
+	switch {
+	case p.IsStatic():
 		s.static.Remove(s.cfg.DataDir, name)
-	} else {
+	case p.IsExternal():
+		// The upstream container belongs to whoever created it. Remove the
+		// route and the network Poof made; leave the container running.
+		s.teardownAppNetwork(name)
+		log.Printf("external project removed: %s (container %s left untouched)", name, p.External)
+	default:
 		if err := s.container.Stop(name); err != nil {
 			log.Printf("warning: stopping container for %s: %v", name, err)
 		}
@@ -482,7 +539,14 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		log.Printf("warning: caddy sync after delete failed: %v", err)
 	}
 
-	jsonOK(w, map[string]string{"status": "deleted"})
+	resp := map[string]string{"status": "deleted"}
+	if p.IsExternal() {
+		// Say plainly what was and wasn't destroyed — the container is not ours.
+		resp["note"] = fmt.Sprintf(
+			"removed the route and network; container %q was left running (Poof does not manage it)",
+			p.External)
+	}
+	jsonOK(w, resp)
 }
 
 type cloneRequest struct {
@@ -703,6 +767,10 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "this is a static project — use POST /projects/"+name+"/deploy/static", http.StatusBadRequest)
 		return
 	}
+	if p.IsExternal() {
+		jsonError(w, externalRefusal(p), http.StatusBadRequest)
+		return
+	}
 
 	var req deployRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Image == "" {
@@ -760,6 +828,10 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 	p, err := s.store.GetProject(name)
 	if err != nil || p == nil {
 		jsonError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	if p.IsExternal() {
+		jsonError(w, externalRefusal(p), http.StatusBadRequest)
 		return
 	}
 
@@ -905,6 +977,10 @@ func (s *Server) snapshotProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.IsStatic() {
 		jsonError(w, "static projects have no container to snapshot", http.StatusBadRequest)
+		return
+	}
+	if p.IsExternal() {
+		jsonError(w, externalRefusal(p), http.StatusBadRequest)
 		return
 	}
 
@@ -1970,6 +2046,12 @@ func (s *Server) syncCaddy() error {
 			routed = append(routed, p)
 			continue
 		}
+		if p.IsExternal() {
+			// Poof does not own the upstream container, so its state is not
+			// ours to gate on: publish the route and let Caddy report reality.
+			routed = append(routed, p)
+			continue
+		}
 		if p.IsStatic() {
 			if s.static.IsDeployed(s.cfg.DataDir, p.Name) {
 				routed = append(routed, p)
@@ -2006,4 +2088,31 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// parseExternalTarget splits a `container:port` target. The port is optional
+// and defaults to 80, matching the default for a normal project.
+func parseExternalTarget(target string) (host string, port int, err error) {
+	host, portStr, found := strings.Cut(target, ":")
+	if host == "" {
+		return "", 0, fmt.Errorf("external target must be <container> or <container>:<port>")
+	}
+	if !found {
+		return host, defaults.Port, nil
+	}
+	port, convErr := strconv.Atoi(portStr)
+	if convErr != nil || port <= 0 || port > 65535 {
+		return "", 0, fmt.Errorf("invalid port %q in external target %q", portStr, target)
+	}
+	return host, port, nil
+}
+
+// externalRefusal explains why container lifecycle operations don't apply to
+// an external project. Poof owns the domain and the routing for these, never
+// the container — so deploying, rolling back or snapshotting is meaningless.
+func externalRefusal(p *store.Project) string {
+	return fmt.Sprintf(
+		"%q is an external project: it routes to container %q, which Poof does not manage. "+
+			"Deploy, rollback and snapshot only apply to containers Poof owns.",
+		p.Name, p.External)
 }

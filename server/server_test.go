@@ -3077,3 +3077,133 @@ func TestControlPlaneNetworkRefusesMembersAndCreation(t *testing.T) {
 		t.Errorf("nothing should have been recorded for poof-net, got %v", members)
 	}
 }
+
+// --- External projects ---
+
+// An external project owns a domain and routes to a container Poof does not
+// manage: no image, no repo, no CI, and live the moment it is registered.
+func TestCreateExternalProject(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "my-compose-app:3000"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	p, _ := st.GetProject("ws")
+	if p == nil || !p.IsExternal() {
+		t.Fatalf("expected an external project, got %+v", p)
+	}
+	if p.External != "my-compose-app" || p.Port != 3000 {
+		t.Errorf("target: got %s:%d, want my-compose-app:3000", p.External, p.Port)
+	}
+	if p.Image != "" || p.Repo != "" || p.CI {
+		t.Errorf("external project should carry no image/repo/CI, got image=%q repo=%q ci=%v", p.Image, p.Repo, p.CI)
+	}
+	if p.Upstream() != "my-compose-app:3000" {
+		t.Errorf("upstream: got %q", p.Upstream())
+	}
+
+	// The upstream container is attached to the project's network at creation:
+	// there is no deploy step that would otherwise do it.
+	attached := false
+	for _, c := range mocks.container.connectCalls {
+		if c.Network == "poof-app-ws" && c.Container == "my-compose-app" {
+			attached = true
+		}
+	}
+	if !attached {
+		t.Errorf("expected my-compose-app attached to poof-app-ws, got %v", mocks.container.connectCalls)
+	}
+
+	// Caddy is reconfigured immediately, pointing at the external upstream.
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "reverse_proxy my-compose-app:3000") {
+		t.Errorf("caddyfile should proxy to the external container, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+}
+
+// A route pointing at nothing is worse than a rejected registration: the
+// failure would otherwise surface later as a 502, and a typo is the likeliest
+// cause.
+func TestExternalProjectRequiresExistingContainer(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{} // nothing exists
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "typo-container:3000"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing container, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if p, _ := st.GetProject("ws"); p != nil {
+		t.Error("project should not have been created")
+	}
+}
+
+func TestExternalTargetPortDefaultsAndValidation(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"app": true}
+
+	// Port omitted → defaults to 80.
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "a", "external": "app"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create without port: %d — %s", rr.Code, rr.Body.String())
+	}
+	if p, _ := st.GetProject("a"); p == nil || p.Port != 80 {
+		t.Errorf("expected default port 80, got %+v", p)
+	}
+
+	// Nonsense port is rejected.
+	rr = do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "b", "external": "app:notaport"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad port, got %d", rr.Code)
+	}
+}
+
+// Deploy, rollback and snapshot are container lifecycle operations; Poof owns
+// no container here, so they must refuse rather than half-work.
+func TestExternalProjectRefusesContainerOperations(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"app": true}
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "app:3000"}, globalToken)
+
+	for _, path := range []string{
+		"/projects/ws/deploy", "/projects/ws/rollback", "/projects/ws/snapshot",
+	} {
+		rr := do(t, srv, "POST", path, map[string]interface{}{}, globalToken)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d — %s", path, rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "external project") {
+			t.Errorf("%s: refusal should explain why; got %s", path, rr.Body.String())
+		}
+	}
+	if len(mocks.container.deployCalls) != 0 {
+		t.Errorf("no container should have been deployed, got %v", mocks.container.deployCalls)
+	}
+}
+
+// Removing an external project takes down the route Poof created, and must
+// leave the container — which belongs to someone else — alone.
+func TestRemoveExternalProjectLeavesContainerAlone(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"app": true}
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "app:3000"}, globalToken)
+
+	rr := do(t, srv, "DELETE", "/projects/ws", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.stopCalls) != 0 {
+		t.Errorf("must not stop an unmanaged container, got %v", mocks.container.stopCalls)
+	}
+	// The response says so explicitly, so the operator isn't left guessing.
+	if !strings.Contains(rr.Body.String(), "left running") {
+		t.Errorf("delete response should state the container was untouched; got %s", rr.Body.String())
+	}
+}

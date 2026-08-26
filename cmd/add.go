@@ -59,6 +59,23 @@ Static sites:
 		spaFlag, _ := cmd.Flags().GetBool("spa")
 		buildFlag, _ := cmd.Flags().GetBool("build")
 		ciVal, _ := cmd.Flags().GetString("ci")
+		external, _ := cmd.Flags().GetString("external")
+
+		// An external project routes to a container Poof does not manage, so
+		// everything about building and deploying one is meaningless for it.
+		if external != "" {
+			for _, bad := range []struct {
+				set  bool
+				flag string
+			}{
+				{staticFlag, "--static"}, {spaFlag, "--spa"}, {buildFlag, "--build"},
+				{image != "", "--image"}, {repo != "", "--repo"}, {ciVal != "", "--ci"},
+			} {
+				if bad.set {
+					fatal("--external cannot be combined with %s (Poof does not build or deploy an external project)", bad.flag)
+				}
+			}
+		}
 
 		// --spa and --build require --static.
 		if spaFlag && !staticFlag {
@@ -76,8 +93,9 @@ Static sites:
 			staticMode = "static"
 		}
 
-		// Validate Dockerfile presence: required for container projects, optional for static.
-		if !isStatic {
+		// Validate Dockerfile presence: required for container projects, optional
+		// for static. External projects have no build at all.
+		if !isStatic && external == "" {
 			if folder == "" {
 				if _, err := os.Stat("Dockerfile"); os.IsNotExist(err) {
 					suggestions := findDockerfileSubfolders()
@@ -134,6 +152,9 @@ Static sites:
 		if buildFlag {
 			payload["build"] = true
 		}
+		if external != "" {
+			payload["external"] = external
+		}
 		if ciVal != "" {
 			ci, mode, err := parseCIModeFlag(ciVal)
 			if err != nil {
@@ -153,6 +174,15 @@ Static sites:
 		fmt.Printf("✓ project %q registered\n", name)
 		if d, ok := result["domain"].(string); ok {
 			fmt.Printf("  domain:  %s\n", d)
+		}
+		if e, ok := result["external"].(string); ok && e != "" {
+			port := 80
+			if pf, ok := result["port"].(float64); ok {
+				port = int(pf)
+			}
+			fmt.Printf("  routes to: %s:%d (container not managed by Poof)\n", e, port)
+			fmt.Printf("\nNo deploys for this project — it is live now.\n")
+			return
 		}
 		if i, ok := result["image"].(string); ok && i != "" {
 			fmt.Printf("  image:   %s\n", i)
@@ -200,6 +230,7 @@ func init() {
 	addCmd.Flags().Int("port", 0, fmt.Sprintf("container port (default: %d)", defaults.Port))
 	addCmd.Flags().String("subpath", "", "subpath routing mode: disabled, redirect, or proxy (default: server's subpath_default)")
 	addCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (for monorepos)")
+	addCmd.Flags().String("external", "", "route to a container Poof does not manage: <container>[:<port>]")
 	addCmd.Flags().Bool("static", false, "deploy as a static site served by Caddy")
 	addCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
 	addCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
