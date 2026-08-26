@@ -1,12 +1,32 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/racso/poof/store"
+)
+
+const (
+	// defaultGCQuietPeriod is how long the host must go without a deploy
+	// before an automatic sweep starts. A push to main typically deploys two
+	// projects (test, then prod) seconds apart from the same image; waiting
+	// for quiet collapses those into a single sweep after both have landed,
+	// instead of firing one into the gap between them.
+	defaultGCQuietPeriod = 30 * time.Second
+
+	// gcQuietAttempts bounds how many quiet periods a pending automatic sweep
+	// will wait through before giving up. The next deploy re-requests it.
+	gcQuietAttempts = 10
+
+	// manualGCWait bounds how long an operator-requested GC waits for
+	// in-flight deploys before giving up, so a hung pull cannot wedge it (and,
+	// with it, every subsequent deploy) forever.
+	manualGCWait = 2 * time.Minute
 )
 
 // gcRequest is the body of POST /gc.
@@ -36,6 +56,19 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	override := req.Keep != nil || req.OlderThanDays != nil
+
+	// A manual GC was explicitly asked for, so it waits for in-flight deploys
+	// rather than skipping. Deploys arriving from here on queue behind it.
+	// Dry runs touch nothing and need no gate.
+	if !req.DryRun {
+		ctx, cancel := context.WithTimeout(r.Context(), manualGCWait)
+		defer cancel()
+		if err := s.gate.enterGC(ctx); err != nil {
+			jsonError(w, "timed out waiting for in-flight deploys to finish", http.StatusServiceUnavailable)
+			return
+		}
+		defer s.gate.leaveGC()
+	}
 
 	var projects []store.Project
 	if req.All {
@@ -284,9 +317,53 @@ func (s *Server) deleteGCPolicy(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "removed"})
 }
 
+// requestAutoGC asks the GC worker for a sweep. Non-blocking: if a request is
+// already pending it is left as is, since one sweep covers every project.
+func (s *Server) requestAutoGC() {
+	select {
+	case s.gcSignal <- struct{}{}:
+	default:
+	}
+}
+
+// gcWorker owns every automatic sweep. Running them through a single worker
+// (rather than a goroutine per deploy) means concurrent deploys can never
+// produce concurrent collectors, and back-to-back deploys coalesce into one
+// sweep.
+func (s *Server) gcWorker() {
+	for range s.gcSignal {
+		s.autoGCWhenQuiet()
+	}
+}
+
+// autoGCWhenQuiet waits for a deploy-free window, then sweeps under the gate.
+// Automatic GC is opportunistic: it never makes a deploy wait for it.
+func (s *Server) autoGCWhenQuiet() {
+	quiet := s.gcQuiet
+	if quiet <= 0 {
+		quiet = defaultGCQuietPeriod
+	}
+	for attempt := 0; attempt < gcQuietAttempts; attempt++ {
+		time.Sleep(quiet)
+		if !s.gate.tryEnterGC() {
+			continue // a deploy is in flight — wait for the next quiet window
+		}
+		s.gcSweep()
+		s.gate.leaveGC()
+		// The sweep covered every project, so a request raised while it was
+		// pending or running is already satisfied.
+		select {
+		case <-s.gcSignal:
+		default:
+		}
+		return
+	}
+	log.Printf("auto-gc: still no quiet window after %d attempts — skipping; the next deploy will request another sweep", gcQuietAttempts)
+}
+
 // runAutoGC iterates every container project, applies its resolved GC policy,
 // and prunes dangling images. Designed to be invoked from a goroutine after
-// every successful deploy.
+// every successful deploy. Callers must hold the deploy gate.
 func (s *Server) runAutoGC() {
 	projects, err := s.store.ListProjects()
 	if err != nil {

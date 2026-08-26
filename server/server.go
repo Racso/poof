@@ -107,10 +107,24 @@ type Server struct {
 	container ContainerManager
 	static    StaticDeployer
 	caddy     CaddySyncer
+
+	// gate keeps garbage collection and deploy pulls off the Docker layer
+	// store at the same time. See gate.go.
+	gate *deployGate
+	// gcSignal carries auto-GC requests to the single GC worker. Buffered to
+	// one: a sweep covers every project, so a pending request already stands
+	// in for any deploy that happens before it runs.
+	gcSignal chan struct{}
+	// gcQuiet is how long the host must be free of deploys before an
+	// automatic sweep starts. Overridden in tests.
+	gcQuiet time.Duration
+	// gcSweep is the work an automatic sweep performs. Always runAutoGC in
+	// production; injectable so the scheduling loop can be tested on its own.
+	gcSweep func()
 }
 
 func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string) RepoManager, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
-	return &Server{
+	srv := &Server{
 		cfg:       cfg,
 		store:     st,
 		logPath:   filepath.Join(cfg.DataDir, "server.log"),
@@ -118,7 +132,12 @@ func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string)
 		container: container,
 		static:    static,
 		caddy:     caddySyncer,
+		gate:      newDeployGate(),
+		gcSignal:  make(chan struct{}, 1),
+		gcQuiet:   defaultGCQuietPeriod,
 	}
+	srv.gcSweep = srv.runAutoGC
+	return srv
 }
 
 // handler builds and returns the HTTP mux. Separated from Run so tests can
@@ -298,6 +317,8 @@ func (s *Server) Run() error {
 	if err := s.syncCaddy(); err != nil {
 		log.Printf("warning: initial caddy sync failed: %v", err)
 	}
+
+	go s.gcWorker()
 
 	return http.ListenAndServe(addr, s.requestLogger(s.handler()))
 }

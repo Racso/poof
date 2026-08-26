@@ -31,7 +31,11 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request) {
 	log.Printf("update: current version=%s commit=%s", version.Number, version.Commit)
 	log.Printf("update: pulling %s", image)
 
+	// Same layer-store race as a project deploy: keep GC off the host while
+	// this pull runs.
+	s.gate.enterDeploy()
 	pullOut, err := docker.PullSelf(image, s.settingGitHubUser(), s.settingGitHubToken())
+	s.gate.leaveDeploy()
 	if err != nil {
 		jsonError(w, fmt.Sprintf("pull failed: %v", err), http.StatusInternalServerError)
 		return

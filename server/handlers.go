@@ -802,6 +802,11 @@ func (s *Server) deployStaticProject(w http.ResponseWriter, r *http.Request) {
 	// Limit upload size (500MB).
 	r.Body = http.MaxBytesReader(w, r.Body, 500<<20)
 
+	// Static GC prunes version directories; hold the gate so it cannot run
+	// against a half-written one.
+	s.gate.enterDeploy()
+	defer s.gate.leaveDeploy()
+
 	depID, _ := s.store.RecordDeployment(name, "static", "running")
 
 	if err := s.static.Deploy(s.cfg.DataDir, name, depID, r.Body); err != nil {
@@ -1039,6 +1044,11 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		return
 	}
 
+	// Hold the deploy gate across the pull: garbage collection frees layers
+	// host-wide and would otherwise pull them out from under it.
+	s.gate.enterDeploy()
+	defer s.gate.leaveDeploy()
+
 	log.Printf("deploy started: %s → %s", p.Name, image)
 	depID, _ := s.store.RecordDeployment(p.Name, image, "running")
 
@@ -1083,7 +1093,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		log.Printf("warning: caddy sync after deploy failed: %v", err)
 	}
 
-	go s.runAutoGC()
+	s.requestAutoGC()
 
 	jsonOK(w, map[string]interface{}{
 		"status": "deployed",

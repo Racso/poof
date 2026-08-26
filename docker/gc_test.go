@@ -115,7 +115,7 @@ func TestSelectForRemoval_KeepOnly(t *testing.T) {
 		mkImage("v5", 1, now),
 	}
 
-	del, keep := selectForRemoval(images, "", 3, 0, now)
+	del, keep := selectForRemoval(images, nil, 3, 0, now)
 
 	wantDel := []string{"v1", "v2"}        // oldest two
 	wantKeep := []string{"v3", "v4", "v5"} // newest three
@@ -136,7 +136,7 @@ func TestSelectForRemoval_OlderThanOnly(t *testing.T) {
 		mkImage("fresh", 1, now),
 	}
 
-	del, keep := selectForRemoval(images, "", 0, 14, now)
+	del, keep := selectForRemoval(images, nil, 0, 14, now)
 
 	wantDel := []string{"ancient", "oldish"}
 	wantKeep := []string{"fresh", "recent"}
@@ -167,7 +167,7 @@ func TestSelectForRemoval_BothFiltersAreANDed(t *testing.T) {
 		mkImage("outside-and-old", 30, now),
 	}
 
-	del, keep := selectForRemoval(images, "", 3, 14, now)
+	del, keep := selectForRemoval(images, nil, 3, 14, now)
 
 	if !equalRefs(refs(del), []string{"outside-and-old"}) {
 		t.Errorf("delete: got %v, want [outside-and-old]", refs(del))
@@ -178,7 +178,7 @@ func TestSelectForRemoval_BothFiltersAreANDed(t *testing.T) {
 
 	// Sanity: the same image set under OR (separate keep + age passes) DOES
 	// kill outside-but-recent. Confirms the test exercises the AND/OR boundary.
-	delKeep, _ := selectForRemoval(images, "", 3, 0, now)
+	delKeep, _ := selectForRemoval(images, nil, 3, 0, now)
 	if len(delKeep) != 2 {
 		t.Errorf("keep-only pass should delete 2 (outside the window), got %d", len(delKeep))
 	}
@@ -191,7 +191,7 @@ func TestSelectForRemoval_NeverDeletesRunningImage(t *testing.T) {
 		mkImage("recent", 1, now),
 	}
 	// The running image is the ancient one; even with keep=1 it must survive.
-	del, keep := selectForRemoval(images, "sha256:ancient", 1, 0, now)
+	del, keep := selectForRemoval(images, map[string]bool{"sha256:ancient": true}, 1, 0, now)
 
 	if !equalRefs(refs(del), nil) {
 		t.Errorf("delete: got %v, want nothing (running image protected)", refs(del))
@@ -207,7 +207,7 @@ func TestSelectForRemoval_NoRulesDeletesNothing(t *testing.T) {
 		mkImage("a", 100, now),
 		mkImage("b", 1, now),
 	}
-	del, keep := selectForRemoval(images, "", 0, 0, now)
+	del, keep := selectForRemoval(images, nil, 0, 0, now)
 	if len(del) != 0 {
 		t.Errorf("delete: got %v, want none", refs(del))
 	}
@@ -224,7 +224,7 @@ func TestSelectForRemoval_OutOfOrderInputStillWorks(t *testing.T) {
 		mkImage("oldest", 30, now),
 		mkImage("newest", 1, now),
 	}
-	del, keep := selectForRemoval(images, "", 1, 0, now)
+	del, keep := selectForRemoval(images, nil, 1, 0, now)
 
 	if !equalRefs(refs(del), []string{"middle", "oldest"}) {
 		t.Errorf("delete: got %v", refs(del))
@@ -247,8 +247,8 @@ func TestSelectForRemoval_EquivalentToOR_WhenAppliedSequentially(t *testing.T) {
 		mkImage("v5", 1, now),
 	}
 
-	delA, _ := selectForRemoval(images, "", 3, 0, now)  // outside keep
-	delB, _ := selectForRemoval(images, "", 0, 14, now) // older than 14d
+	delA, _ := selectForRemoval(images, nil, 3, 0, now)  // outside keep
+	delB, _ := selectForRemoval(images, nil, 0, 14, now) // older than 14d
 	union := map[string]bool{}
 	for _, img := range delA {
 		union[img.Reference] = true
@@ -259,8 +259,8 @@ func TestSelectForRemoval_EquivalentToOR_WhenAppliedSequentially(t *testing.T) {
 
 	// Now simulate chaining: pass 1 (--keep 3), then pass 2 (--older-than 14)
 	// against the survivors of pass 1.
-	pass1Del, pass1Keep := selectForRemoval(images, "", 3, 0, now)
-	pass2Del, _ := selectForRemoval(pass1Keep, "", 0, 14, now)
+	pass1Del, pass1Keep := selectForRemoval(images, nil, 3, 0, now)
+	pass2Del, _ := selectForRemoval(pass1Keep, nil, 0, 14, now)
 	chained := map[string]bool{}
 	for _, img := range pass1Del {
 		chained[img.Reference] = true

@@ -103,12 +103,13 @@ func runningImageID(projectName string) string {
 // should be deleted vs kept. It is pure: no docker calls, deterministic given
 // inputs. Behavior:
 //   - Images are sorted newest first before filtering.
-//   - Any image whose ID matches runningID is always kept.
+//   - Any image backing a running container is always kept — on any project,
+//     not just this one, since one image repo may be deployed by several.
 //   - When both keep and olderThanDays are >0, an image must satisfy BOTH
 //     conditions to be deleted (outside keep window AND older than N days).
 //   - When only one is set, that condition alone governs deletion.
 //   - When both are 0, nothing is deleted.
-func selectForRemoval(images []LocalImage, runningID string, keep, olderThanDays int, now time.Time) (toDelete, toKeep []LocalImage) {
+func selectForRemoval(images []LocalImage, running map[string]bool, keep, olderThanDays int, now time.Time) (toDelete, toKeep []LocalImage) {
 	if keep <= 0 && olderThanDays <= 0 {
 		return nil, images
 	}
@@ -125,7 +126,7 @@ func selectForRemoval(images []LocalImage, runningID string, keep, olderThanDays
 	}
 
 	for i, img := range sorted {
-		if runningID != "" && img.ID == runningID {
+		if running[img.ID] {
 			toKeep = append(toKeep, img)
 			continue
 		}
@@ -166,7 +167,11 @@ func GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResu
 		return res, err
 	}
 
-	toDelete, toKeep := selectForRemoval(images, runningImageID(projectName), keep, olderThanDays, time.Now())
+	// Protect every running container's image, not just this project's: a
+	// single image repo is often deployed by more than one project (a test and
+	// a prod copy of the same app), and untagging the image another project is
+	// running leaves it displayed as a bare image id.
+	toDelete, toKeep := selectForRemoval(images, runningImageIDs(), keep, olderThanDays, time.Now())
 
 	for _, img := range toKeep {
 		res.Kept = append(res.Kept, img.Reference)

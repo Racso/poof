@@ -18,7 +18,7 @@ A daemon that runs on one Linux server with Docker, plus a CLI that talks to it.
 ```
 main.go → cmd.Execute()       (cobra root)
 cmd/                          CLI subcommands (one file per command)
-server/                       HTTP daemon: handlers.go, server.go, gc.go, update.go
+server/                       HTTP daemon: handlers.go, server.go, gc.go, gate.go, update.go
 store/                        SQLite-backed persistence (modernc.org/sqlite)
 config/                       Client + server config TOML loader
 caddy/                        Generates Caddyfile, talks to Caddy admin API
@@ -166,7 +166,17 @@ CI modes: `managed` (default; standalone push-triggered workflow) or `callable` 
 
 ## Garbage collection
 
-Per-project policy (`keep`, `older_than_days`) plus a global default; both conditions AND together when both are set. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions. Snapshot images (`poof-snapshot/*`) are never touched: separate repo name, never recorded as deployments, always tagged.
+Per-project policy (`keep`, `older_than_days`) plus a global default; both conditions AND together when both are set. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions. Snapshot images (`poof-snapshot/*`) are never touched: separate repo name, never recorded as deployments, always tagged. Images backing a **running container on any project** are always kept — one image repo is often deployed by several projects (a test and a prod copy), and untagging one another project is running leaves it shown as a bare image id.
+
+### GC / deploy exclusion (`server/gate.go`)
+
+Docker's layer store is shared host-wide, so `docker rmi` / `docker image prune` can free layers an in-flight `docker pull` is still extracting — surfacing as a containerd `failed to extract layer ... UtimesNanoAt ... no such file or directory` and a 500 on an otherwise healthy deploy. `deployGate` is a reader/writer gate over that hazard:
+
+- **Deploys are readers** — concurrent with each other (they race only with deletion). Held across the pull in `runDeploy`, the static deploy handler, and the self-update pull.
+- **GC is the writer** — exclusive. Automatic GC uses `tryEnterGC` and *skips* if a deploy is in flight; it is opportunistic and must never make a deploy wait. Manual `poof gc` uses `enterGC(ctx)` and waits (2 min cap, so a hung pull can't wedge it). A waiting writer blocks new deploys, so a stream of deploys can't starve it.
+- **One GC worker, not a goroutine per deploy.** Deploys call `requestAutoGC()`, a non-blocking send on a 1-buffered channel; `gcWorker` waits for a 30s deploy-free window before sweeping, then drains any request the sweep already covered. A push to main deploys test then prod seconds apart from the same image — the quiet period collapses those into one sweep *after* both land, rather than firing one into the gap between them.
+
+Single daemon, single process, so an in-process gate is the whole story — no queue to persist.
 
 ## Pending ideas (not yet implemented)
 
