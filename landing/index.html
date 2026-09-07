@@ -1386,21 +1386,6 @@
 
             <div class="cli-card">
                 <span class="cli-cat cli-cat--ops">ops</span>
-                <div class="cli-title">Declarative config</div>
-                <div class="cli-desc">Instead of running individual commands, you can define all projects in a <code style="font-family:'JetBrains Mono',monospace;font-size:0.9em">poof.ini</code> file and reconcile with one command. Great for reproducible infrastructure and staging environments.</div>
-                <div class="cli-code">
-<span class="co"># poof.ini</span><br>
-<span class="cm">[api]</span><br>
-<span class="cm">domain = api.mydomain.com</span><br>
-<span class="cm">port   = 3000</span><br>
-<br>
-<span class="cm">poof apply --dry-run</span><br>
-<span class="cm">poof apply</span>
-                </div>
-            </div>
-
-            <div class="cli-card">
-                <span class="cli-cat cli-cat--ops">ops</span>
                 <div class="cli-title">Logs, status & updates</div>
                 <div class="cli-desc">Inspect running projects, tail logs, and keep both the CLI and the server up to date, all from your machine.</div>
                 <div class="cli-code">

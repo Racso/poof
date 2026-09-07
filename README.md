@@ -113,7 +113,6 @@ import = "~/.config/poof/work.toml"
 
 ```
 poof add <name> [flags]              register project + automate GitHub setup
-poof apply [-f file] [--dry-run] [--prune]   declarative project sync
 poof caddy get|set|delete <name>     manage a project's Caddy snippet
 poof caddy list                      list projects with custom Caddy snippets
 poof clone <name> <suffix>           clone project as <name>-<suffix> on branch <suffix>
@@ -535,29 +534,6 @@ poof gc off --all                   # disable globally
 ```
 
 Without an explicit policy, the built-in default is `--keep 3`. The currently running image is never deleted. `--all` also sweeps **orphan images** — images Poof! deployed previously but whose project has since been deleted, renamed, or converted to static.
-
-## Declarative projects file
-
-Declare all projects in an INI file and apply it idempotently:
-
-```ini
-[myapp]
-
-[api]
-domain = api.yourdomain.com
-port   = 3000
-
-[worker]
-image  = ghcr.io/myorg/worker
-branch = stable
-```
-
-```sh
-poof apply                     # apply poof.ini in current directory
-poof apply -f /path/to/file
-poof apply --dry-run           # preview changes without applying
-poof apply --prune             # also remove projects absent from the file
-```
 
 ## Troubleshooting & gotchas
 

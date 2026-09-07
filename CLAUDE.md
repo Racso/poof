@@ -52,7 +52,6 @@ Project lifecycle:
 - `poof clone <src> <suffix>` — create `<src>-<suffix>` deploying from branch `<suffix>`; optional `--env --all|--only|--except|--ask`. Refuses if the source has a Caddy snippet unless `--caddy-yes` (copy verbatim — references to the source's container are NOT rewritten) or `--caddy-no` (skip) is passed.
 - `poof remove <name>` — stop container, delete project; `--data-keep|--data-delete` for managed volumes.
 - `poof refresh <name>` — re-sync GitHub secrets + workflow file (idempotent).
-- `poof apply [-f poof.ini] [--dry-run] [--prune]` — declarative INI sync.
 
 Deploy / observe:
 - `poof deploy <name> [--image <tag>]` — manual redeploy.
