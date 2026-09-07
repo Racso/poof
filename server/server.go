@@ -34,7 +34,7 @@ type ContainerManager interface {
 	Snapshot(projectName, dataDir string) (SnapshotResult, error)
 	IsRunning(projectName string) bool
 	Logs(projectName string, lines int) (string, error)
-	GC(projectName, image string, keep, olderThanDays int, dryRun bool) (GCResult, error)
+	GC(projectName, image string, keep int, dryRun bool) (GCResult, error)
 	SweepOrphans(refs []string, dryRun bool) (GCResult, error)
 	PruneDangling() error
 	ImagesDiskUsage() (int64, error)
@@ -88,7 +88,7 @@ type StaticDeployer interface {
 	Rollback(dataDir, project string, depID int64) error
 	IsDeployed(dataDir, project string) bool
 	Remove(dataDir, project string)
-	GC(dataDir, project string, versions []StaticVersion, keep, olderThanDays int, dryRun bool) (GCResult, error)
+	GC(dataDir, project string, versions []StaticVersion, keep int, dryRun bool) (GCResult, error)
 }
 
 // CaddySyncer abstracts Caddy configuration reload.
@@ -205,8 +205,7 @@ func (s *Server) handler() http.Handler {
 	// Garbage collection
 	mux.HandleFunc("POST /gc", s.auth(s.triggerGC))
 	mux.HandleFunc("GET /gc/status", s.auth(s.gcStatus))
-	mux.HandleFunc("PUT /gc/policy/{name}", s.auth(s.setGCPolicy))
-	mux.HandleFunc("DELETE /gc/policy/{name}", s.auth(s.deleteGCPolicy))
+	mux.HandleFunc("PUT /gc/config", s.auth(s.setGCConfig))
 
 	// Server logs, version, and self-update
 	mux.HandleFunc("GET /logs/server", s.auth(s.getServerLogs))

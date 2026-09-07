@@ -2,20 +2,15 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	gcKeep      int
-	gcOlderThan int
-	gcDryRun    bool
-	gcAll       bool
-	gcSetKeep   int
-	gcSetOlder  int
-	gcSetAll    bool
-	gcOffAll    bool
+	gcKeep    int
+	gcDryRun  bool
+	gcAll     bool
+	gcSetKeep int
 )
 
 var gcCmd = &cobra.Command{
@@ -23,12 +18,9 @@ var gcCmd = &cobra.Command{
 	Short: "Delete old Docker images for a project",
 	Long: `Delete cached Docker images for a project (or all projects with --all).
 
-Without flags, the project's policy is used (or the built-in default of keep=3).
-Flags override the policy for this run only.
-
-When both --keep and --older-than are given, an image must satisfy BOTH
-conditions to be deleted (outside the keep window AND older than N days).
-For OR semantics, run two separate calls.`,
+Retention is a single global rule: keep the N most recent images per image
+repo. Images backing a running container are always kept, on any project.
+--keep overrides the configured retention for this run only.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if !gcAll && len(args) == 0 {
@@ -47,9 +39,6 @@ For OR semantics, run two separate calls.`,
 		if cmd.Flags().Changed("keep") {
 			payload["keep"] = gcKeep
 		}
-		if cmd.Flags().Changed("older-than") {
-			payload["older_than_days"] = gcOlderThan
-		}
 
 		var resp struct {
 			Results []struct {
@@ -59,14 +48,19 @@ For OR semantics, run two separate calls.`,
 				Failed  []string `json:"failed"`
 			} `json:"results"`
 			DryRun     bool   `json:"dry_run"`
+			Disabled   bool   `json:"disabled"`
 			BytesFreed *int64 `json:"bytes_freed,omitempty"`
 		}
 		if err := apiPost("/gc", payload, &resp); err != nil {
 			fatal("%v", err)
 		}
 
+		if resp.Disabled {
+			fmt.Println("gc is disabled (poof gc on, or pass --keep to override for one run)")
+			return
+		}
 		if len(resp.Results) == 0 {
-			fmt.Println("no projects matched (static projects and projects with GC disabled are skipped)")
+			fmt.Println("no projects matched")
 			return
 		}
 
@@ -121,157 +115,78 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %s", v, units[u])
 }
 
+// putGCConfig sends a partial update; omitted fields keep their stored value.
+func putGCConfig(payload map[string]interface{}) {
+	if err := apiPut("/gc/config", payload, nil); err != nil {
+		fatal("%v", err)
+	}
+}
+
 var gcSetCmd = &cobra.Command{
-	Use:   "set [project]",
-	Short: "Set the GC retention policy for a project (or --all for global)",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "set",
+	Short: "Set how many images to keep (applies to every project)",
+	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		if !gcSetAll && len(args) == 0 {
-			fatal("project name required (or use --all for the global default)")
+		if !cmd.Flags().Changed("keep") {
+			fatal("--keep is required")
 		}
-		if gcSetAll && len(args) > 0 {
-			fatal("cannot combine project name with --all")
+		if gcSetKeep < 0 {
+			fatal("--keep must be >= 0")
 		}
-		if !cmd.Flags().Changed("keep") && !cmd.Flags().Changed("older-than") {
-			fatal("at least one of --keep or --older-than is required")
-		}
-
-		target := "_default"
-		if !gcSetAll {
-			target = args[0]
-		}
-
-		payload := map[string]interface{}{}
-		if cmd.Flags().Changed("keep") {
-			payload["keep_count"] = gcSetKeep
-		}
-		if cmd.Flags().Changed("older-than") {
-			payload["older_than_days"] = gcSetOlder
-		}
-
-		if err := apiPut("/gc/policy/"+target, payload, nil); err != nil {
-			fatal("%v", err)
-		}
-
-		label := target
-		if target == "_default" {
-			label = "global default"
-		}
-		fmt.Printf("✓ gc policy updated for %s\n", label)
+		putGCConfig(map[string]interface{}{"keep": gcSetKeep, "disabled": false})
+		fmt.Printf("✓ gc keeps the %d most recent images per project\n", gcSetKeep)
 	},
 }
 
 var gcOffCmd = &cobra.Command{
-	Use:   "off [project]",
-	Short: "Disable automatic GC for a project (or --all for global)",
-	Args:  cobra.MaximumNArgs(1),
+	Use:   "off",
+	Short: "Disable automatic GC",
+	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		if !gcOffAll && len(args) == 0 {
-			fatal("project name required (or use --all)")
-		}
-		if gcOffAll && len(args) > 0 {
-			fatal("cannot combine project name with --all")
-		}
+		putGCConfig(map[string]interface{}{"disabled": true})
+		fmt.Println("✓ gc disabled")
+	},
+}
 
-		target := "_default"
-		if !gcOffAll {
-			target = args[0]
-		}
-
-		payload := map[string]interface{}{"disabled": true}
-		if err := apiPut("/gc/policy/"+target, payload, nil); err != nil {
-			fatal("%v", err)
-		}
-
-		label := target
-		if target == "_default" {
-			label = "global default"
-		}
-		fmt.Printf("✓ gc disabled for %s\n", label)
+var gcOnCmd = &cobra.Command{
+	Use:   "on",
+	Short: "Re-enable automatic GC with the stored retention",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		putGCConfig(map[string]interface{}{"disabled": false})
+		fmt.Println("✓ gc enabled")
 	},
 }
 
 var gcStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show the GC policy for each project",
+	Short: "Show the GC retention policy",
 	Run: func(cmd *cobra.Command, args []string) {
 		var resp struct {
-			Policies []struct {
-				Project       string `json:"project"`
-				KeepCount     *int   `json:"keep_count"`
-				OlderThanDays *int   `json:"older_than_days"`
-				Disabled      bool   `json:"disabled"`
-			} `json:"policies"`
-			Resolved []struct {
-				Project       string `json:"project"`
-				KeepCount     *int   `json:"keep_count"`
-				OlderThanDays *int   `json:"older_than_days"`
-				Enabled       bool   `json:"enabled"`
-				Source        string `json:"source"`
-			} `json:"resolved"`
+			Keep     int  `json:"keep"`
+			Disabled bool `json:"disabled"`
 		}
 		if err := apiGet("/gc/status", &resp); err != nil {
 			fatal("%v", err)
 		}
-
-		// Show the global default first if it's set.
-		var globalLine string
-		for _, p := range resp.Policies {
-			if p.Project == "*" {
-				globalLine = formatPolicy(p.KeepCount, p.OlderThanDays, p.Disabled)
-				break
-			}
-		}
-		if globalLine == "" {
-			globalLine = "keep 3 (built-in)"
-		}
-		fmt.Printf("global default: %s\n\n", globalLine)
-
-		if len(resp.Resolved) == 0 {
-			fmt.Println("no container projects")
+		if resp.Disabled {
+			fmt.Printf("gc: disabled (keep %d when re-enabled)\n", resp.Keep)
 			return
 		}
-
-		fmt.Printf("%-20s %-12s %s\n", "PROJECT", "SOURCE", "POLICY")
-		fmt.Printf("%-20s %-12s %s\n", "-------", "------", "------")
-		for _, r := range resp.Resolved {
-			policy := formatPolicy(r.KeepCount, r.OlderThanDays, !r.Enabled)
-			fmt.Printf("%-20s %-12s %s\n", r.Project, r.Source, policy)
-		}
+		fmt.Printf("gc: keep %d most recent images per project\n", resp.Keep)
 	},
-}
-
-func formatPolicy(keep, older *int, disabled bool) string {
-	if disabled {
-		return "disabled"
-	}
-	var parts []string
-	if keep != nil {
-		parts = append(parts, fmt.Sprintf("keep %d", *keep))
-	}
-	if older != nil {
-		parts = append(parts, fmt.Sprintf("older-than %dd", *older))
-	}
-	if len(parts) == 0 {
-		return "(no rules)"
-	}
-	return strings.Join(parts, " AND ")
 }
 
 func init() {
 	rootCmd.AddCommand(gcCmd)
-	gcCmd.Flags().IntVar(&gcKeep, "keep", 0, "keep the N most recent images, delete the rest")
-	gcCmd.Flags().IntVar(&gcOlderThan, "older-than", 0, "delete images older than N days")
+	gcCmd.Flags().IntVar(&gcKeep, "keep", 0, "override retention for this run only")
 	gcCmd.Flags().BoolVar(&gcDryRun, "dry-run", false, "show what would be deleted without deleting")
 	gcCmd.Flags().BoolVar(&gcAll, "all", false, "GC every project")
 
 	gcCmd.AddCommand(gcSetCmd)
 	gcSetCmd.Flags().IntVar(&gcSetKeep, "keep", 0, "keep the N most recent images")
-	gcSetCmd.Flags().IntVar(&gcSetOlder, "older-than", 0, "delete images older than N days")
-	gcSetCmd.Flags().BoolVar(&gcSetAll, "all", false, "set the global default policy")
 
 	gcCmd.AddCommand(gcOffCmd)
-	gcOffCmd.Flags().BoolVar(&gcOffAll, "all", false, "disable GC globally")
-
+	gcCmd.AddCommand(gcOnCmd)
 	gcCmd.AddCommand(gcStatusCmd)
 }

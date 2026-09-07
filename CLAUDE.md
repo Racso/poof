@@ -41,7 +41,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 - **Network** — Poof-managed Docker network (`name`, `internal`) plus a `network_members` table of attachments. A member has a kind: `project`, `container` (unmanaged), `caddy`, or `poof`. Membership is desired state, re-applied by `reconcileNetworkMembers` on every sync.
 - **Redirect** — independent 301 from one domain to another.
 - **Deployment** — image tag, status, timestamp; powers rollback. Status lifecycle: `running` → `success`/`failed`; deploys made while the project is paused end at `staged` (created, never started) and are resolved to `success`/`failed` at resume. Rollback only considers `success` rows, so never-started images can't be rollback targets.
-- **GC policy** — per-project + global default (`keep`, `older_than_days`, `disabled`).
+- **GC config** — one global policy (`keep`, `disabled`), stored in `settings`. No per-project overrides and no age-based rule; both were removed after production showed a single policy row in use.
 
 ## CLI surface (`poof --help`)
 
@@ -72,7 +72,7 @@ Config / env / volumes / redirects:
 
 Caddy / GC / install / update:
 - `poof caddy get|set|delete|list` — per-project Caddy snippet override (in addition to `/etc/caddy/conf.d/*.Caddyfile` static files).
-- `poof gc [project] [--keep N] [--older-than D] [--all] [--dry-run]`, `poof gc set|status|off`.
+- `poof gc [project] [--keep N] [--all] [--dry-run]`, `poof gc set --keep N`, `poof gc status|on|off`.
 - `poof install [--domain --token --use-caddy --yes]` — bootstraps Docker address pools + Caddy + server container.
 - `poof update local|server|both [version]`.
 
@@ -164,7 +164,7 @@ CI modes: `managed` (default; standalone push-triggered workflow) or `callable` 
 
 ## Garbage collection
 
-Per-project policy (`keep`, `older_than_days`) plus a global default; both conditions AND together when both are set. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions. Snapshot images (`poof-snapshot/*`) are never touched: separate repo name, never recorded as deployments, always tagged. Images backing a **running container on any project** are always kept — one image repo is often deployed by several projects (a test and a prod copy), and untagging one another project is running leaves it shown as a bare image id.
+One global policy: keep the N newest tags per image repo (default 3). `--keep` on a manual run overrides it for that run only, and overrides the disabled flag too — an operator asking by hand means it. Sweeps orphan images and prunes dangling layers on schedule. `--dry-run` shows planned deletions. Snapshot images (`poof-snapshot/*`) are never touched: separate repo name, never recorded as deployments, always tagged. Images backing a **running container on any project** are always kept — one image repo is often deployed by several projects (a test and a prod copy), and untagging one another project is running leaves it shown as a bare image id.
 
 ### GC / deploy exclusion (`server/gate.go`)
 

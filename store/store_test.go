@@ -1,11 +1,13 @@
 package store_test
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/racso/poof/store"
+	_ "modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) *store.Store {
@@ -640,143 +642,137 @@ func TestGetAllCaddySnippets(t *testing.T) {
 	}
 }
 
-// --- GC Policies ---
+// --- GC Config ---
 
-func intPtr(v int) *int { return &v }
-
-func TestSetAndGetGCPolicy(t *testing.T) {
+func TestGCConfigDefaults(t *testing.T) {
 	st := newTestStore(t)
+	c := st.GetGCConfig()
+	if c.Keep != store.GCKeepDefault {
+		t.Errorf("keep: got %d, want %d", c.Keep, store.GCKeepDefault)
+	}
+	if c.Disabled {
+		t.Error("expected gc enabled by default")
+	}
+}
 
-	if err := st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(5)}); err != nil {
+func TestSetAndGetGCConfig(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.SetGCConfig(store.GCConfig{Keep: 5}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
+	if got := st.GetGCConfig(); got.Keep != 5 || got.Disabled {
+		t.Errorf("got %+v, want keep=5 enabled", got)
+	}
+}
 
-	got, err := st.GetGCPolicy("demo")
+func TestGCConfigDisableKeepsCount(t *testing.T) {
+	st := newTestStore(t)
+	st.SetGCConfig(store.GCConfig{Keep: 7})
+	st.SetGCConfig(store.GCConfig{Keep: 7, Disabled: true})
+
+	got := st.GetGCConfig()
+	if !got.Disabled {
+		t.Error("expected disabled")
+	}
+	if got.Keep != 7 {
+		t.Errorf("keep should survive disabling: got %d, want 7", got.Keep)
+	}
+
+	// Re-enabling restores the stored count rather than the built-in default.
+	st.SetGCConfig(store.GCConfig{Keep: got.Keep, Disabled: false})
+	if got := st.GetGCConfig(); got.Disabled || got.Keep != 7 {
+		t.Errorf("got %+v, want keep=7 enabled", got)
+	}
+}
+
+func TestGCConfigKeepZeroIsPreserved(t *testing.T) {
+	// keep=0 means "delete nothing", and must not be confused with "unset".
+	st := newTestStore(t)
+	st.SetGCConfig(store.GCConfig{Keep: 0})
+	if got := st.GetGCConfig(); got.Keep != 0 {
+		t.Errorf("keep: got %d, want 0", got.Keep)
+	}
+}
+
+func TestMigrateLegacyGCPolicies(t *testing.T) {
+	// A pre-existing database carries its global keep_count over to the
+	// setting, and the per-project rows are dropped with the table.
+	f, err := os.CreateTemp("", "poof-gcmig-*.db")
 	if err != nil {
-		t.Fatalf("get: %v", err)
+		t.Fatalf("temp db: %v", err)
 	}
-	if got == nil || got.KeepCount == nil || *got.KeepCount != 5 {
-		t.Fatalf("got %+v, want keep=5", got)
-	}
-	if got.OlderThanDays != nil {
-		t.Errorf("older_than: got %v, want nil", *got.OlderThanDays)
-	}
-	if got.Disabled {
-		t.Errorf("disabled: want false")
-	}
-}
+	f.Close()
+	t.Cleanup(func() { os.Remove(f.Name()) })
 
-func TestGetGCPolicyNotFound(t *testing.T) {
-	st := newTestStore(t)
-	got, err := st.GetGCPolicy("missing")
+	db, err := sql.Open("sqlite", f.Name())
 	if err != nil {
-		t.Fatalf("get: %v", err)
+		t.Fatalf("open raw: %v", err)
 	}
-	if got != nil {
-		t.Errorf("expected nil, got %+v", got)
+	if _, err := db.Exec(`
+		CREATE TABLE gc_policies (
+			project         TEXT PRIMARY KEY,
+			keep_count      INTEGER,
+			older_than_days INTEGER,
+			disabled        INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO gc_policies (project, keep_count) VALUES ('*', 2);
+		INSERT INTO gc_policies (project, keep_count) VALUES ('alpha', 9);
+	`); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-}
+	db.Close()
 
-func TestSetGCPolicyOverwrites(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(5)})
-	st.SetGCPolicy(store.GCPolicy{Project: "demo", OlderThanDays: intPtr(14)})
-
-	got, _ := st.GetGCPolicy("demo")
-	if got.KeepCount != nil {
-		t.Errorf("keep_count: got %v, want nil after overwrite", *got.KeepCount)
-	}
-	if got.OlderThanDays == nil || *got.OlderThanDays != 14 {
-		t.Errorf("older_than: got %v, want 14", got.OlderThanDays)
-	}
-}
-
-func TestDeleteGCPolicy(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(5)})
-	if err := st.DeleteGCPolicy("demo"); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	got, _ := st.GetGCPolicy("demo")
-	if got != nil {
-		t.Errorf("expected nil after delete, got %+v", got)
-	}
-}
-
-func TestListGCPolicies(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(3)})
-	st.SetGCPolicy(store.GCPolicy{Project: "alpha", KeepCount: intPtr(5)})
-	st.SetGCPolicy(store.GCPolicy{Project: "beta", Disabled: true})
-
-	all, err := st.ListGCPolicies()
+	st, err := store.Open(f.Name())
 	if err != nil {
-		t.Fatalf("list: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if len(all) != 3 {
-		t.Fatalf("expected 3 rows, got %d", len(all))
+	defer st.Close()
+
+	if got := st.GetGCConfig(); got.Keep != 2 || got.Disabled {
+		t.Errorf("migrated config: got %+v, want keep=2 enabled", got)
+	}
+
+	// Re-opening must be a no-op, not a re-migration.
+	st.Close()
+	st2, err := store.Open(f.Name())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer st2.Close()
+	if got := st2.GetGCConfig(); got.Keep != 2 {
+		t.Errorf("after reopen: got %+v, want keep=2", got)
 	}
 }
 
-func TestResolveGCPolicy_Default(t *testing.T) {
-	st := newTestStore(t)
-	pol, enabled := st.ResolveGCPolicy("demo")
-	if !enabled {
-		t.Fatal("expected enabled with built-in default")
+func TestMigrateLegacyGCPoliciesGlobalDisabled(t *testing.T) {
+	f, err := os.CreateTemp("", "poof-gcmig2-*.db")
+	if err != nil {
+		t.Fatalf("temp db: %v", err)
 	}
-	if pol.KeepCount == nil || *pol.KeepCount != 3 {
-		t.Errorf("default keep: got %v, want 3", pol.KeepCount)
-	}
-	if pol.OlderThanDays != nil {
-		t.Errorf("default older_than: got %v, want nil", pol.OlderThanDays)
-	}
-}
+	f.Close()
+	t.Cleanup(func() { os.Remove(f.Name()) })
 
-func TestResolveGCPolicy_GlobalOverridesDefault(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(7)})
-
-	pol, enabled := st.ResolveGCPolicy("demo")
-	if !enabled {
-		t.Fatal("expected enabled")
+	db, _ := sql.Open("sqlite", f.Name())
+	if _, err := db.Exec(`
+		CREATE TABLE gc_policies (
+			project         TEXT PRIMARY KEY,
+			keep_count      INTEGER,
+			older_than_days INTEGER,
+			disabled        INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO gc_policies (project, disabled) VALUES ('*', 1);
+	`); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-	if *pol.KeepCount != 7 {
-		t.Errorf("got keep=%d, want 7", *pol.KeepCount)
+	db.Close()
+
+	st, err := store.Open(f.Name())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
-	if pol.Project != "demo" {
-		t.Errorf("project name not rebound: got %q", pol.Project)
-	}
-}
+	defer st.Close()
 
-func TestResolveGCPolicy_ProjectOverridesGlobal(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(7)})
-	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: intPtr(2)})
-
-	pol, _ := st.ResolveGCPolicy("demo")
-	if *pol.KeepCount != 2 {
-		t.Errorf("got keep=%d, want 2", *pol.KeepCount)
-	}
-}
-
-func TestResolveGCPolicy_ProjectDisabledOverridesGlobal(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: intPtr(7)})
-	st.SetGCPolicy(store.GCPolicy{Project: "demo", Disabled: true})
-
-	if _, enabled := st.ResolveGCPolicy("demo"); enabled {
-		t.Error("expected disabled for project")
-	}
-	if _, enabled := st.ResolveGCPolicy("other"); !enabled {
-		t.Error("expected enabled for other project (still inherits global)")
-	}
-}
-
-func TestResolveGCPolicy_GlobalDisabledSkipsDefault(t *testing.T) {
-	st := newTestStore(t)
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, Disabled: true})
-
-	if _, enabled := st.ResolveGCPolicy("demo"); enabled {
-		t.Error("expected disabled — global off should suppress built-in default")
+	if got := st.GetGCConfig(); !got.Disabled {
+		t.Errorf("expected gc disabled after migration, got %+v", got)
 	}
 }

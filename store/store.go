@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -96,18 +98,20 @@ type Deployment struct {
 	DeployedAt time.Time `json:"deployed_at"`
 }
 
-// GCPolicyGlobalKey is the project name used to store the global default GC
-// policy that applies to projects without their own override.
-const GCPolicyGlobalKey = "*"
+// GCKeepDefault is the retention used when nothing has been configured.
+const GCKeepDefault = 3
 
-// GCPolicy is the GC retention policy for one project (or the global default).
-// KeepCount and OlderThanDays are nil when not set; Disabled=true means GC is
-// explicitly turned off and the row exists only as an override.
-type GCPolicy struct {
-	Project       string `json:"project"`
-	KeepCount     *int   `json:"keep_count,omitempty"`
-	OlderThanDays *int   `json:"older_than_days,omitempty"`
-	Disabled      bool   `json:"disabled,omitempty"`
+const (
+	settingGCKeep     = "gc-keep"
+	settingGCDisabled = "gc-disabled"
+)
+
+// GCConfig is the image-retention policy. There is exactly one, and it applies
+// to every project: keep the N newest tags per image repo, plus anything a
+// running container needs.
+type GCConfig struct {
+	Keep     int  `json:"keep"`
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 func Open(path string) (*Store, error) {
@@ -210,13 +214,6 @@ func (s *Store) migrate() error {
 			content TEXT NOT NULL,
 			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
 		);
-
-		CREATE TABLE IF NOT EXISTS gc_policies (
-			project         TEXT PRIMARY KEY,
-			keep_count      INTEGER,
-			older_than_days INTEGER,
-			disabled        INTEGER NOT NULL DEFAULT 0
-		);
 	`)
 	if err != nil {
 		return err
@@ -233,12 +230,62 @@ func (s *Store) migrate() error {
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN external TEXT NOT NULL DEFAULT ''`)
 
+	// Retention collapsed from per-project GC policies to one global setting.
+	// Carry the old global row's keep_count over, then drop the table.
+	if err := s.migrateGCPolicies(); err != nil {
+		return fmt.Errorf("gc-policy migration: %w", err)
+	}
+
 	// Structural migration: add project IDs, rewrite deployments table.
 	if err := s.migrateProjectIDs(); err != nil {
 		return fmt.Errorf("project-id migration: %w", err)
 	}
 
 	_, err = s.db.Exec(`PRAGMA foreign_keys = ON`)
+	return err
+}
+
+// migrateGCPolicies collapses the old per-project gc_policies table into the
+// single global GC setting. Only the global ("*") row carried meaning in
+// practice; per-project overrides and the time-based condition were removed.
+// Idempotent: the table is dropped once carried over, and a database that
+// never had it is untouched.
+func (s *Store) migrateGCPolicies() error {
+	var exists int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'gc_policies'`,
+	).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists == 0 {
+		return nil
+	}
+
+	// Only carry over if the new setting has not been written yet, so a
+	// re-created legacy table can never clobber a deliberate later change.
+	if cur, _ := s.GetSetting(settingGCKeep); cur == "" {
+		var keep sql.NullInt64
+		var disabled int
+		err := s.db.QueryRow(
+			`SELECT keep_count, disabled FROM gc_policies WHERE project = '*'`,
+		).Scan(&keep, &disabled)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == nil {
+			c := GCConfig{Keep: GCKeepDefault, Disabled: disabled != 0}
+			if keep.Valid {
+				c.Keep = int(keep.Int64)
+			}
+			if err := s.SetGCConfig(c); err != nil {
+				return err
+			}
+			log.Printf("gc: migrated global policy to settings (keep=%d disabled=%v)", c.Keep, c.Disabled)
+		}
+	}
+
+	_, err = s.db.Exec(`DROP TABLE gc_policies`)
 	return err
 }
 
@@ -899,120 +946,34 @@ func (s *Store) GetAllCaddySnippets() (map[string]string, error) {
 	return snippets, rows.Err()
 }
 
-// --- GC Policies ---
+// --- GC Config ---
 
-func (s *Store) GetGCPolicy(project string) (*GCPolicy, error) {
-	p := &GCPolicy{Project: project}
-	var keep, older sql.NullInt64
-	var disabled int
-	err := s.db.QueryRow(
-		`SELECT keep_count, older_than_days, disabled FROM gc_policies WHERE project = ?`,
-		project,
-	).Scan(&keep, &older, &disabled)
-	if err == sql.ErrNoRows {
-		return nil, nil
+// GetGCConfig returns the global retention policy, falling back to the
+// built-in default when nothing has been set.
+func (s *Store) GetGCConfig() GCConfig {
+	c := GCConfig{Keep: GCKeepDefault}
+	if v, _ := s.GetSetting(settingGCKeep); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			c.Keep = n
+		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("get gc policy: %w", err)
+	if v, _ := s.GetSetting(settingGCDisabled); v == "1" {
+		c.Disabled = true
 	}
-	if keep.Valid {
-		v := int(keep.Int64)
-		p.KeepCount = &v
-	}
-	if older.Valid {
-		v := int(older.Int64)
-		p.OlderThanDays = &v
-	}
-	p.Disabled = disabled != 0
-	return p, nil
+	return c
 }
 
-func (s *Store) SetGCPolicy(p GCPolicy) error {
-	var keep, older interface{}
-	if p.KeepCount != nil {
-		keep = *p.KeepCount
+// SetGCConfig stores the global retention policy.
+func (s *Store) SetGCConfig(c GCConfig) error {
+	if err := s.SetSetting(settingGCKeep, strconv.Itoa(c.Keep)); err != nil {
+		return fmt.Errorf("set gc keep: %w", err)
 	}
-	if p.OlderThanDays != nil {
-		older = *p.OlderThanDays
+	disabled := ""
+	if c.Disabled {
+		disabled = "1"
 	}
-	disabled := 0
-	if p.Disabled {
-		disabled = 1
-	}
-	_, err := s.db.Exec(
-		`INSERT INTO gc_policies (project, keep_count, older_than_days, disabled)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(project) DO UPDATE SET
-		   keep_count = excluded.keep_count,
-		   older_than_days = excluded.older_than_days,
-		   disabled = excluded.disabled`,
-		p.Project, keep, older, disabled,
-	)
-	if err != nil {
-		return fmt.Errorf("set gc policy: %w", err)
+	if err := s.SetSetting(settingGCDisabled, disabled); err != nil {
+		return fmt.Errorf("set gc disabled: %w", err)
 	}
 	return nil
-}
-
-func (s *Store) DeleteGCPolicy(project string) error {
-	_, err := s.db.Exec(`DELETE FROM gc_policies WHERE project = ?`, project)
-	if err != nil {
-		return fmt.Errorf("delete gc policy: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) ListGCPolicies() ([]GCPolicy, error) {
-	rows, err := s.db.Query(
-		`SELECT project, keep_count, older_than_days, disabled FROM gc_policies ORDER BY project`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list gc policies: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var policies []GCPolicy
-	for rows.Next() {
-		var p GCPolicy
-		var keep, older sql.NullInt64
-		var disabled int
-		if err := rows.Scan(&p.Project, &keep, &older, &disabled); err != nil {
-			return nil, err
-		}
-		if keep.Valid {
-			v := int(keep.Int64)
-			p.KeepCount = &v
-		}
-		if older.Valid {
-			v := int(older.Int64)
-			p.OlderThanDays = &v
-		}
-		p.Disabled = disabled != 0
-		policies = append(policies, p)
-	}
-	return policies, rows.Err()
-}
-
-// ResolveGCPolicy returns the effective policy for a project. Returns (nil, false)
-// when GC is disabled (either explicitly for the project, or globally with no
-// per-project override). The built-in default keep=3 applies when neither the
-// project nor the global override exists.
-func (s *Store) ResolveGCPolicy(project string) (*GCPolicy, bool) {
-	if p, _ := s.GetGCPolicy(project); p != nil {
-		if p.Disabled {
-			return nil, false
-		}
-		return p, true
-	}
-	if g, _ := s.GetGCPolicy(GCPolicyGlobalKey); g != nil {
-		if g.Disabled {
-			return nil, false
-		}
-		// Project inherits global, but the resolved struct names the project.
-		out := *g
-		out.Project = project
-		return &out, true
-	}
-	def := 3
-	return &GCPolicy{Project: project, KeepCount: &def}, true
 }

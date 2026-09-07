@@ -124,10 +124,10 @@ poof env copy <src> <dst> <mode>     copy env vars (--all, --only, --except, --a
 poof env get <name>                  list env var keys (comma-separated, values never shown)
 poof env set <name> KEY=VALUE        set env vars
 poof env unset <name> KEY            remove env var
-poof gc [name] [--keep N] [--older-than D] [--all] [--dry-run]   run garbage collection
-poof gc set [name] [--keep N] [--older-than D] [--all]   set GC retention policy
-poof gc status                       show GC policies
-poof gc off [name] | --all           disable GC for a project or globally
+poof gc [name] [--keep N] [--all] [--dry-run]   run garbage collection
+poof gc set --keep N                 set how many images to keep
+poof gc status                       show the GC policy
+poof gc on | off                     enable or disable automatic GC
 poof install                         set up a Poof! server on this machine
 poof list                            list all projects and status
 poof logs <name> [--lines N]         container log lines
@@ -262,7 +262,7 @@ poof add mysite --static --spa              # SPA: add try_files fallback to /in
 poof add mysite --static --spa --build      # build first via Dockerfile, then serve
 ```
 
-**`--static`** turns off the container path. On each deploy, Poof! fetches the repo at the configured branch, extracts the files, and points Caddy at the new directory. Old versions are kept on disk for rollback (subject to the GC policy).
+**`--static`** turns off the container path. On each deploy, Poof! fetches the repo at the configured branch, extracts the files, and points Caddy at the new directory. Old versions are kept on disk subject to the GC policy.
 
 **`--spa`** adds a `try_files {path} /index.html` fallback so client-side routes fall back to `index.html`. Required for React/Vue/Svelte SPAs. The fallback is generated inside a catch-all `handle` block placed after your custom Caddy snippet, so `handle` routes in the snippet (an `/api/*` reverse_proxy, a WebSocket route) take precedence and compose cleanly with `--spa`.
 
@@ -508,32 +508,31 @@ The spell **does not deploy** — static deploys need the repo files. After the 
 
 ## Garbage collection
 
-Every deploy pulls a fresh Docker image. Without cleanup, disk fills up fast (production saw 342 images / 41 GB before GC existed). Poof! garbage-collects images per a configurable policy.
+Every deploy pulls a fresh Docker image. Without cleanup, disk fills up fast (production saw 342 images / 41 GB before GC existed). Poof! keeps the **N most recent images per project** and deletes the rest.
+
+Retention is one global number. There are no per-project policies and no age-based rules: the only question GC answers is "how many builds back do you want to be able to roll back to", and that answer is rarely different per project.
 
 **Run on demand:**
 
 ```sh
-poof gc myapp                       # apply myapp's policy now
+poof gc myapp                       # GC one project
 poof gc --all                       # GC every project + sweep orphans
-poof gc myapp --keep 5              # override: keep the 5 most recent
-poof gc myapp --older-than 14       # override: delete anything older than 14 days
+poof gc myapp --keep 5              # override retention for this run only
 poof gc --all --dry-run             # show what would be deleted, don't delete
 ```
 
-When both `--keep` and `--older-than` are set, an image must satisfy **both** conditions to be deleted — it must be outside the keep window AND older than N days. Prevents accidentally nuking recent images.
-
-**Set a policy** (runs automatically after every deploy):
+**Configure** (GC also runs automatically after every deploy):
 
 ```sh
-poof gc set myapp --keep 5          # per-project
-poof gc set --all --keep 3          # global default
-poof gc set --all --older-than 30   # alternative: age-based default
-poof gc status                      # show all policies
-poof gc off myapp                   # disable for one project
-poof gc off --all                   # disable globally
+poof gc set --keep 5                # keep the 5 most recent images per project
+poof gc status                      # show the current policy
+poof gc off                         # disable automatic GC
+poof gc on                          # re-enable it, keeping the same count
 ```
 
-Without an explicit policy, the built-in default is `--keep 3`. The currently running image is never deleted. `--all` also sweeps **orphan images** — images Poof! deployed previously but whose project has since been deleted, renamed, or converted to static.
+Without configuration the built-in default is `keep 3`. Images backing a **running container on any project** are never deleted — one image repo is often deployed by several projects (a test and a prod copy), and untagging one that another project is running would leave it shown as a bare image id. `--all` also sweeps **orphan images**: images Poof! deployed previously but whose project has since been deleted, renamed, or converted to static.
+
+Snapshot images (`poof-snapshot/*`) are never touched.
 
 ## Troubleshooting & gotchas
 

@@ -11,7 +11,7 @@ import (
 )
 
 // VersionInfo provides the deployment date for a static version so GC can
-// apply the older-than policy. Supplied by the caller (from the store).
+// order versions newest-first. Supplied by the caller (from the store).
 type VersionInfo struct {
 	DepID      int64
 	DeployedAt time.Time
@@ -27,15 +27,14 @@ type GCResult struct {
 
 // GC removes old tarballs and extracted directories for a static project.
 //
-// Tarballs follow the keep/older-than policy (same semantics as Docker image
-// GC). Extracted directories are pruned aggressively — only the current
-// version's directory is kept; older versions can be re-extracted from their
-// tarball on rollback.
+// Tarballs follow the keep policy (same semantics as Docker image GC).
+// Extracted directories are pruned aggressively — only the current version's
+// directory is kept.
 //
 // The currently serving version (from the "current" symlink) is never deleted.
-func GC(dataDir, project string, versions []VersionInfo, keep, olderThanDays int, dryRun bool) (GCResult, error) {
+func GC(dataDir, project string, versions []VersionInfo, keep int, dryRun bool) (GCResult, error) {
 	res := GCResult{Project: project}
-	if keep <= 0 && olderThanDays <= 0 {
+	if keep <= 0 {
 		return res, nil
 	}
 
@@ -43,12 +42,6 @@ func GC(dataDir, project string, versions []VersionInfo, keep, olderThanDays int
 	versionsDir := filepath.Join(base, "versions")
 
 	currentDep := currentVersionID(dataDir, project)
-
-	// Build a date index from the version info.
-	dateOf := make(map[int64]time.Time, len(versions))
-	for _, v := range versions {
-		dateOf[v.DepID] = v.DeployedAt
-	}
 
 	// Sort versions newest first by deployed_at.
 	sorted := make([]VersionInfo, len(versions))
@@ -58,11 +51,6 @@ func GC(dataDir, project string, versions []VersionInfo, keep, olderThanDays int
 	})
 
 	// Select tarballs for removal (same logic as Docker selectForRemoval).
-	var cutoff time.Time
-	if olderThanDays > 0 {
-		cutoff = time.Now().AddDate(0, 0, -olderThanDays)
-	}
-
 	removeTarballs := make(map[int64]bool)
 	for i, v := range sorted {
 		tar := fmt.Sprintf("v%d.tar.gz", v.DepID)
@@ -72,20 +60,7 @@ func GC(dataDir, project string, versions []VersionInfo, keep, olderThanDays int
 			continue
 		}
 
-		outsideKeep := keep > 0 && i >= keep
-		olderThan := !cutoff.IsZero() && v.DeployedAt.Before(cutoff)
-
-		var eligible bool
-		switch {
-		case keep > 0 && olderThanDays > 0:
-			eligible = outsideKeep && olderThan
-		case keep > 0:
-			eligible = outsideKeep
-		case olderThanDays > 0:
-			eligible = olderThan
-		}
-
-		if eligible {
+		if i >= keep {
 			removeTarballs[v.DepID] = true
 			tarPath := filepath.Join(versionsDir, tar)
 			if dryRun {

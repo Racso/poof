@@ -89,11 +89,10 @@ type mockNetLink struct {
 }
 
 type mockGCCall struct {
-	Project       string
-	Image         string
-	Keep          int
-	OlderThanDays int
-	DryRun        bool
+	Project string
+	Image   string
+	Keep    int
+	DryRun  bool
 }
 
 func (m *mockContainerManager) Deploy(cfg server.ContainerDeployConfig) error {
@@ -131,8 +130,8 @@ func (m *mockContainerManager) IsRunning(name string) bool {
 	return m.running[name]
 }
 
-func (m *mockContainerManager) GC(name, image string, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
-	m.gcCalls = append(m.gcCalls, mockGCCall{name, image, keep, olderThanDays, dryRun})
+func (m *mockContainerManager) GC(name, image string, keep int, dryRun bool) (server.GCResult, error) {
+	m.gcCalls = append(m.gcCalls, mockGCCall{name, image, keep, dryRun})
 	return server.GCResult{Project: name, Removed: []string{name + ":old"}}, nil
 }
 
@@ -232,11 +231,10 @@ type mockStaticDeployer struct {
 }
 
 type mockStaticGCCall struct {
-	Project       string
-	Versions      []server.StaticVersion
-	Keep          int
-	OlderThanDays int
-	DryRun        bool
+	Project  string
+	Versions []server.StaticVersion
+	Keep     int
+	DryRun   bool
 }
 
 type mockStaticDeployCall struct {
@@ -270,8 +268,8 @@ func (m *mockStaticDeployer) Remove(_, project string) {
 	m.removeCalls = append(m.removeCalls, project)
 }
 
-func (m *mockStaticDeployer) GC(_ string, project string, versions []server.StaticVersion, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
-	m.gcCalls = append(m.gcCalls, mockStaticGCCall{project, versions, keep, olderThanDays, dryRun})
+func (m *mockStaticDeployer) GC(_ string, project string, versions []server.StaticVersion, keep int, dryRun bool) (server.GCResult, error) {
+	m.gcCalls = append(m.gcCalls, mockStaticGCCall{project, versions, keep, dryRun})
 	var removed []string
 	for _, v := range versions {
 		removed = append(removed, fmt.Sprintf("v%d.tar.gz", v.DepID))
@@ -2071,8 +2069,6 @@ func TestGetProjectShowsHasCaddySnippet(t *testing.T) {
 
 // --- GC ---
 
-func gcIntPtr(v int) *int { return &v }
-
 func TestGCRequiresProjectOrAll(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	rr := do(t, srv, "POST", "/gc", map[string]interface{}{}, globalToken)
@@ -2103,9 +2099,6 @@ func TestGCSingleProjectUsesDefaultPolicy(t *testing.T) {
 	if c.Keep != 3 {
 		t.Errorf("expected default keep=3, got %d", c.Keep)
 	}
-	if c.OlderThanDays != 0 {
-		t.Errorf("expected older_than=0, got %d", c.OlderThanDays)
-	}
 	if c.DryRun {
 		t.Errorf("expected dry_run=false")
 	}
@@ -2114,12 +2107,12 @@ func TestGCSingleProjectUsesDefaultPolicy(t *testing.T) {
 	}
 }
 
-func TestGCFlagOverrideBeatsPolicy(t *testing.T) {
+func TestGCFlagOverrideBeatsConfig(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.CreateProject(store.Project{
 		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
 	})
-	st.SetGCPolicy(store.GCPolicy{Project: "demo", KeepCount: gcIntPtr(99)})
+	st.SetGCConfig(store.GCConfig{Keep: 99})
 
 	rr := do(t, srv, "POST", "/gc", map[string]interface{}{
 		"project": "demo", "keep": 1,
@@ -2218,7 +2211,7 @@ func TestGCDryRunSkipsPrune(t *testing.T) {
 	}
 }
 
-func TestGCAllSkipsDisabledAndRoutesCorrectly(t *testing.T) {
+func TestGCAllRoutesStaticAndContainerProjects(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.CreateProject(store.Project{
 		Name: "container-app", Image: "ghcr.io/x/c", Repo: "x/c", Branch: "main", Port: 80,
@@ -2226,16 +2219,11 @@ func TestGCAllSkipsDisabledAndRoutesCorrectly(t *testing.T) {
 	st.CreateProject(store.Project{
 		Name: "static-site", Repo: "x/s", Branch: "main", Static: "static",
 	})
-	st.CreateProject(store.Project{
-		Name: "disabled-app", Image: "ghcr.io/x/d", Repo: "x/d", Branch: "main", Port: 80,
-	})
-	st.SetGCPolicy(store.GCPolicy{Project: "disabled-app", Disabled: true})
 
 	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"all": true}, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
 	}
-	// Container GC should only run for container-app (disabled-app is disabled).
 	if len(mocks.container.gcCalls) != 1 {
 		t.Fatalf("expected 1 container GC call, got %d", len(mocks.container.gcCalls))
 	}
@@ -2347,107 +2335,110 @@ func TestGCAllIncludesStaticProjects(t *testing.T) {
 	}
 }
 
-func TestGCStatusReportsResolvedSource(t *testing.T) {
+func TestGCStatusReportsGlobalConfig(t *testing.T) {
 	srv, st, _ := newTestServer(t)
-	st.CreateProject(store.Project{
-		Name: "with-policy", Image: "ghcr.io/x/a", Repo: "x/a", Branch: "main", Port: 80,
-	})
-	st.CreateProject(store.Project{
-		Name: "from-global", Image: "ghcr.io/x/b", Repo: "x/b", Branch: "main", Port: 80,
-	})
-	st.CreateProject(store.Project{
-		Name: "default-only", Image: "ghcr.io/x/c", Repo: "x/c", Branch: "main", Port: 80,
-	})
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: gcIntPtr(7)})
-	st.SetGCPolicy(store.GCPolicy{Project: "with-policy", KeepCount: gcIntPtr(2)})
-	// "default-only" can't be reached because global is set; remove global temporarily.
+	st.SetGCConfig(store.GCConfig{Keep: 7})
 
 	rr := do(t, srv, "GET", "/gc/status", nil, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got %d", rr.Code)
 	}
 	var resp struct {
-		Resolved []struct {
-			Project string `json:"project"`
-			Source  string `json:"source"`
-			Enabled bool   `json:"enabled"`
-		} `json:"resolved"`
+		Keep     int  `json:"keep"`
+		Disabled bool `json:"disabled"`
 	}
 	decode(t, rr, &resp)
-	got := map[string]string{}
-	for _, r := range resp.Resolved {
-		got[r.Project] = r.Source
-	}
-	if got["with-policy"] != "project" {
-		t.Errorf("with-policy source: got %q, want project", got["with-policy"])
-	}
-	if got["from-global"] != "global" {
-		t.Errorf("from-global source: got %q, want global", got["from-global"])
-	}
-	if got["default-only"] != "global" {
-		t.Errorf("default-only inherits global when one is set: got %q", got["default-only"])
+	if resp.Keep != 7 || resp.Disabled {
+		t.Errorf("got %+v, want keep=7 enabled", resp)
 	}
 }
 
-func TestSetGCPolicyForProject(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-	st.CreateProject(store.Project{
-		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
-	})
-
-	rr := do(t, srv, "PUT", "/gc/policy/demo", map[string]interface{}{"keep_count": 5}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
-	}
-
-	pol, _ := st.GetGCPolicy("demo")
-	if pol == nil || pol.KeepCount == nil || *pol.KeepCount != 5 {
-		t.Errorf("policy not stored: %+v", pol)
-	}
-}
-
-func TestSetGCPolicyForGlobalDefault(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-	rr := do(t, srv, "PUT", "/gc/policy/_default", map[string]interface{}{"keep_count": 10}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
-	}
-	pol, _ := st.GetGCPolicy(store.GCPolicyGlobalKey)
-	if pol == nil || *pol.KeepCount != 10 {
-		t.Errorf("global policy: %+v", pol)
-	}
-}
-
-func TestSetGCPolicyMissingProject(t *testing.T) {
+func TestGCStatusDefaultsWhenUnset(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	rr := do(t, srv, "PUT", "/gc/policy/ghost", map[string]interface{}{"keep_count": 5}, globalToken)
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", rr.Code)
+	rr := do(t, srv, "GET", "/gc/status", nil, globalToken)
+	var resp struct {
+		Keep int `json:"keep"`
+	}
+	decode(t, rr, &resp)
+	if resp.Keep != store.GCKeepDefault {
+		t.Errorf("keep: got %d, want %d", resp.Keep, store.GCKeepDefault)
 	}
 }
 
-func TestSetGCPolicyRequiresAField(t *testing.T) {
+func TestSetGCConfigKeep(t *testing.T) {
 	srv, st, _ := newTestServer(t)
-	st.CreateProject(store.Project{
-		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
-	})
-	rr := do(t, srv, "PUT", "/gc/policy/demo", map[string]interface{}{}, globalToken)
+	rr := do(t, srv, "PUT", "/gc/config", map[string]interface{}{"keep": 10}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := st.GetGCConfig(); got.Keep != 10 {
+		t.Errorf("got %+v, want keep=10", got)
+	}
+}
+
+func TestSetGCConfigDisableLeavesKeepIntact(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetGCConfig(store.GCConfig{Keep: 6})
+
+	rr := do(t, srv, "PUT", "/gc/config", map[string]interface{}{"disabled": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+	got := st.GetGCConfig()
+	if !got.Disabled {
+		t.Error("expected disabled")
+	}
+	if got.Keep != 6 {
+		t.Errorf("keep must survive a partial update: got %d, want 6", got.Keep)
+	}
+}
+
+func TestSetGCConfigRequiresAField(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	rr := do(t, srv, "PUT", "/gc/config", map[string]interface{}{}, globalToken)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rr.Code)
 	}
 }
 
-func TestDeleteGCPolicy(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-	st.SetGCPolicy(store.GCPolicy{Project: store.GCPolicyGlobalKey, KeepCount: gcIntPtr(5)})
-
-	rr := do(t, srv, "DELETE", "/gc/policy/_default", nil, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got %d", rr.Code)
+func TestSetGCConfigRejectsNegativeKeep(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	rr := do(t, srv, "PUT", "/gc/config", map[string]interface{}{"keep": -1}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
 	}
-	pol, _ := st.GetGCPolicy(store.GCPolicyGlobalKey)
-	if pol != nil {
-		t.Errorf("expected policy gone, got %+v", pol)
+}
+
+func TestGCDisabledSkipsSweep(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
+	})
+	st.SetGCConfig(store.GCConfig{Keep: 3, Disabled: true})
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"all": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.gcCalls) != 0 {
+		t.Errorf("expected no GC calls while disabled, got %d", len(mocks.container.gcCalls))
+	}
+}
+
+func TestGCDisabledStillHonoursExplicitKeep(t *testing.T) {
+	// An operator asking for a sweep by hand overrides the disabled flag.
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "demo", Image: "ghcr.io/x/demo", Repo: "x/demo", Branch: "main", Port: 80,
+	})
+	st.SetGCConfig(store.GCConfig{Keep: 3, Disabled: true})
+
+	rr := do(t, srv, "POST", "/gc", map[string]interface{}{"project": "demo", "keep": 1}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.gcCalls) != 1 || mocks.container.gcCalls[0].Keep != 1 {
+		t.Errorf("expected one GC call with keep=1, got %+v", mocks.container.gcCalls)
 	}
 }
 

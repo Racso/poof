@@ -111,8 +111,8 @@ func (dockerAdapter) Snapshot(name, dataDir string) (server.SnapshotResult, erro
 }
 func (dockerAdapter) IsRunning(name string) bool                  { return docker.IsRunning(name) }
 func (dockerAdapter) Logs(name string, lines int) (string, error) { return docker.Logs(name, lines) }
-func (dockerAdapter) GC(name, image string, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
-	r, err := docker.GC(name, image, keep, olderThanDays, dryRun)
+func (dockerAdapter) GC(name, image string, keep int, dryRun bool) (server.GCResult, error) {
+	r, err := docker.GC(name, image, keep, dryRun)
 	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
 }
 func (dockerAdapter) SweepOrphans(refs []string, dryRun bool) (server.GCResult, error) {
@@ -135,12 +135,12 @@ func (staticAdapter) IsDeployed(dataDir, project string) bool {
 	return static.IsDeployed(dataDir, project)
 }
 func (staticAdapter) Remove(dataDir, project string) { static.Remove(dataDir, project) }
-func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion, keep, olderThanDays int, dryRun bool) (server.GCResult, error) {
+func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion, keep int, dryRun bool) (server.GCResult, error) {
 	sv := make([]static.VersionInfo, len(versions))
 	for i, v := range versions {
 		sv[i] = static.VersionInfo{DepID: v.DepID, DeployedAt: v.DeployedAt}
 	}
-	r, err := static.GC(dataDir, project, sv, keep, olderThanDays, dryRun)
+	r, err := static.GC(dataDir, project, sv, keep, dryRun)
 	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
 }
 
