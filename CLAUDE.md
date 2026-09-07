@@ -76,7 +76,6 @@ Caddy / GC / install / update:
 - `poof gc [project] [--keep N] [--older-than D] [--all] [--dry-run]`, `poof gc set|status|off`.
 - `poof install [--domain --token --use-caddy --yes]` — bootstraps Docker address pools + Caddy + server container.
 - `poof update local|server|both [version]`.
-- `poof migrate workflows [--apply]` — one-shot migrations across breaking releases.
 
 Spells (`poof spell <name>`):
 - `poof spell proxy <source> <target>` — install a Caddy reverse_proxy on a source project. Source: `<project>` or `<project>/<path>`. Target: `<project>` (port resolved from DB) or `<container>:<port>`. Strip-prefix implicit when path is present; `--keep-prefix` opts out.

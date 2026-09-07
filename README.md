@@ -132,7 +132,6 @@ poof gc off [name] | --all           disable GC for a project or globally
 poof install                         set up a Poof! server on this machine
 poof list                            list all projects and status
 poof logs <name> [--lines N]         container log lines
-poof migrate workflows [--apply]     one-shot migrations across breaking releases
 poof net create <name> [--internal] create a Poof-managed Docker network
 poof net ls                          list Poof-managed networks
 poof net delete <name>               delete a network record (must be empty)

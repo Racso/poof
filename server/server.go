@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/racso/poof/config"
-	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/store"
 	"github.com/racso/poof/version"
 )
@@ -24,8 +23,6 @@ type RepoManager interface {
 	SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode string, build bool) error
 	RemoveRepoCI(owner, repo, projectName, branch string, deleteSecrets bool) error
 	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error
-	WorkflowMigrationDiagnostic(owner, repo, projectName, branch string, ci bool) (*gh.WorkflowDiagnostic, error)
-	DeleteLegacyWorkflow(owner, repo, projectName string) error
 }
 
 // ContainerManager abstracts Docker container operations.
@@ -215,10 +212,6 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /logs/server", s.auth(s.getServerLogs))
 	mux.HandleFunc("GET /version", s.auth(s.getVersion))
 	mux.HandleFunc("POST /update", s.auth(s.updateServer))
-
-	// One-shot migrations (e.g. v0.16.0 workflow filename rename).
-	mux.HandleFunc("GET /migrate/workflows", s.auth(s.diagnoseWorkflowMigration))
-	mux.HandleFunc("POST /migrate/workflows", s.auth(s.applyWorkflowMigration))
 
 	return mux
 }
