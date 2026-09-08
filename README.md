@@ -142,7 +142,7 @@ poof pause <name>                    take a project offline (503 + container sto
 poof redirect add <from> <to>        add a domain redirect (301)
 poof redirect delete <id>            delete a redirect by ID
 poof redirect list                   list all redirects
-poof refresh <name>                  re-sync GitHub secrets and workflow
+poof refresh <name> | --all          re-sync GitHub secrets and workflow
 poof remove <name>                   remove project, stop container
 poof resume <name>                   put a paused project back online
 poof rollback <name>                 redeploy previous image
@@ -230,6 +230,7 @@ Re-sync secrets and workflow files for a project:
 
 ```sh
 poof refresh myapp
+poof refresh --all      # after a workflow-template change
 ```
 
 Useful after template changes or server upgrades. Skips the workflow commit if the file is already up to date.

@@ -216,20 +216,43 @@ func expandTilde(p string) string {
 	return p
 }
 
-// WriteClientSetting writes or updates a single key in the client config file at path.
-// The file is created if it doesn't exist. Existing keys are preserved.
-func WriteClientSetting(path, key, value string) error {
+// WriteClientSetting writes or updates a single key in the client config file
+// at path. The file is created if it doesn't exist and existing keys are
+// preserved.
+//
+// profile selects where the key lands: "" writes the root-level field, a name
+// writes into that profile's TOML table (creating it if needed). Writing the
+// root field while a profile is active would silently corrupt the default
+// server's config, which is what this parameter exists to prevent.
+//
+// A profile that delegates to another file via `import` is refused: the value
+// would be written somewhere the loader never reads.
+func WriteClientSetting(path, profile, key, value string) error {
 	raw := make(map[string]interface{})
 	if _, err := os.Stat(path); err == nil {
 		if _, err := toml.DecodeFile(path, &raw); err != nil {
 			return fmt.Errorf("reading config: %w", err)
 		}
 	}
-	raw[key] = value
+
+	if profile == "" {
+		raw[key] = value
+	} else {
+		table, _ := raw[profile].(map[string]interface{})
+		if table == nil {
+			table = make(map[string]interface{})
+		}
+		if imp, ok := table["import"].(string); ok && imp != "" {
+			return fmt.Errorf("profile %q imports its settings from %s — edit that file instead", profile, imp)
+		}
+		table[key] = value
+		raw[profile] = table
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}

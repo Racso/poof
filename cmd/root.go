@@ -51,6 +51,24 @@ func loadConfig() {
 	}
 }
 
+// activeProfile returns the profile name selected by --profile or
+// --profile-env, or "" for the default (root-level) profile. Writers must use
+// this so a `config set` under --profile never lands on the default profile.
+func activeProfile() string {
+	if profileEnvFlag {
+		return os.Getenv("POOF_PROFILE")
+	}
+	return profileFlag
+}
+
+// profileSuffix renders the active profile for user-facing output.
+func profileSuffix() string {
+	if p := activeProfile(); p != "" {
+		return fmt.Sprintf(" [%s]", p)
+	}
+	return ""
+}
+
 // troubleshootHint returns the `poof troubleshoot` invocation string,
 // including the active profile flag if one is set.
 func troubleshootHint() string {

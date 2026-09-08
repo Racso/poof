@@ -84,20 +84,20 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 			value = config.ServerLocal
 		}
 		path := config.ClientConfigPath()
-		if err := config.WriteClientSetting(path, "server", value); err != nil {
+		if err := config.WriteClientSetting(path, activeProfile(), "server", value); err != nil {
 			fatal("writing config: %v", err)
 		}
-		fmt.Printf("server = %q  →  %s\n", value, path)
+		fmt.Printf("server = %q  →  %s%s\n", value, path, profileSuffix())
 
 	case "token":
 		if value == "" {
 			fatal("value required: poof config set token <token>")
 		}
 		path := config.ClientConfigPath()
-		if err := config.WriteClientSetting(path, "token", value); err != nil {
+		if err := config.WriteClientSetting(path, activeProfile(), "token", value); err != nil {
 			fatal("writing config: %v", err)
 		}
-		fmt.Printf("token updated  →  %s\n", path)
+		fmt.Printf("token updated  →  %s%s\n", path, profileSuffix())
 
 	case "domain", "github-user", "github-token":
 		if value == "" {
