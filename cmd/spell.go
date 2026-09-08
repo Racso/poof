@@ -214,67 +214,6 @@ func renderCleanURLsSnippet(project string) string {
 		spellHeaderPrefix, project)
 }
 
-// --- spell: to-static ----------------------------------------------------
-
-var (
-	spellToStaticSPA   bool
-	spellToStaticBuild bool
-)
-
-var spellToStaticCmd = &cobra.Command{
-	Use:   "to-static <project>",
-	Short: "Convert a container-served project to static (Caddy serves files directly)",
-	Long: `Reconfigure <project> as a --static deploy. Equivalent to:
-
-    poof configure <project> --static [--spa] [--build]
-
-Refuses if the project is already static.
-
-After the spell runs, you still need to deploy:
-
-    poof deploy <project>   # from inside the repo to upload the files
-
-or push a commit if CI is wired up. The old container keeps running
-until the next deploy lands and is then stopped automatically.`,
-	Args: cobra.ExactArgs(1),
-	Run:  runSpellToStatic,
-}
-
-func runSpellToStatic(cmd *cobra.Command, args []string) {
-	project := args[0]
-
-	var resp struct {
-		Project struct {
-			Static string `json:"static"`
-		} `json:"project"`
-	}
-	if err := apiGet("/projects/"+project, &resp); err != nil {
-		fatal("project: %v", err)
-	}
-	current := resp.Project.Static
-	if current == "static" || current == "spa" {
-		fatal("project %q is already static (mode: %s); nothing to do",
-			project, current)
-	}
-
-	mode := "static"
-	if spellToStaticSPA {
-		mode = "spa"
-	}
-	payload := map[string]interface{}{"static": mode}
-	if spellToStaticBuild {
-		payload["build"] = true
-	}
-	if err := apiPatch("/projects/"+project, payload, nil); err != nil {
-		fatal("configure failed: %v", err)
-	}
-
-	fmt.Printf("✓ %s reconfigured (mode: %s, build: %t)\n", project, mode, spellToStaticBuild)
-	fmt.Printf("  Next: deploy to actually swap the container out.\n")
-	fmt.Printf("    poof deploy %s   (from inside the repo)\n", project)
-	fmt.Printf("  Or push a commit if CI is wired up.\n")
-}
-
 // -------------------------------------------------------------------------
 
 func renderProxySnippet(sourceArg, targetArg, path, upstream string, stripPrefix, keepPrefix bool) string {
@@ -324,9 +263,4 @@ func init() {
 
 	spellCmd.AddCommand(spellCleanURLsCmd)
 
-	spellCmd.AddCommand(spellToStaticCmd)
-	spellToStaticCmd.Flags().BoolVar(&spellToStaticSPA, "spa", false,
-		"convert to SPA mode (try_files fallback to /index.html)")
-	spellToStaticCmd.Flags().BoolVar(&spellToStaticBuild, "build", false,
-		"use the repo's Dockerfile to build the static files")
 }

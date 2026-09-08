@@ -79,9 +79,8 @@ Caddy / GC / install / update:
 Spells (`poof spell <name>`):
 - `poof spell proxy <source> <target>` — install a Caddy reverse_proxy on a source project. Source: `<project>` or `<project>/<path>`. Target: `<project>` (port resolved from DB) or `<container>:<port>`. Strip-prefix implicit when path is present; `--keep-prefix` opts out.
 - `poof spell clean-urls <project>` — install `try_files {path}.html {path}` so static sites serve `/about` from `/about.html`.
-- `poof spell to-static <project> [--spa] [--build]` — reconfigure a container-served project as `--static`. Doesn't redeploy (static deploys need local files); prints the next command.
 
-Snippet-writing spells (`proxy`, `clean-urls`) refuse to overwrite an existing Caddy snippet — clear it with `poof caddy delete <name>` first. `to-static` refuses if the project is already static. Reversal for snippet spells is `poof caddy delete <project>`; for `to-static` it's `poof configure --no-static`.
+Both spells refuse to overwrite an existing Caddy snippet — clear it with `poof caddy delete <name>` first. Reversal is `poof caddy delete <project>`.
 
 Global flags: `--profile <name>`, `--profile-env`.
 
