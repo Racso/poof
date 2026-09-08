@@ -133,7 +133,6 @@ type createProjectRequest struct {
 	Repo     string `json:"repo"`
 	Branch   string `json:"branch"`
 	Port     int    `json:"port"`
-	Subpath  string `json:"subpath"`
 	Folder   string `json:"folder"`
 	Static   string `json:"static"`
 	Build    bool   `json:"build"`
@@ -232,18 +231,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		ciMode = req.CIMode
 	}
 
-	// Apply subpath default and validate
-	if req.Subpath == "" {
-		req.Subpath = s.cfg.SubpathDefault
-	}
-	if req.Subpath == "" {
-		req.Subpath = "disabled"
-	}
-	if !validSubpath(req.Subpath) {
-		jsonError(w, "subpath must be disabled, redirect, or proxy", http.StatusBadRequest)
-		return
-	}
-
 	// Validate required fields after defaults
 	if req.Name == "" {
 		jsonError(w, "name is required", http.StatusBadRequest)
@@ -282,7 +269,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Repo:     req.Repo,
 		Branch:   req.Branch,
 		Port:     req.Port,
-		Subpath:  req.Subpath,
 		Folder:   req.Folder,
 		Static:   req.Static,
 		Build:    req.Build,
@@ -373,14 +359,6 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		case "port":
 			if v, ok := val.(float64); ok && v != 0 {
 				p.Port = int(v)
-			}
-		case "subpath":
-			if v, ok := val.(string); ok && v != "" {
-				if !validSubpath(v) {
-					jsonError(w, "subpath must be disabled, redirect, or proxy", http.StatusBadRequest)
-					return
-				}
-				p.Subpath = v
 			}
 		case "folder":
 			if v, ok := val.(string); ok {
@@ -637,18 +615,17 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 
 	// Derive clone config from source. Domain is left for the server default.
 	p := store.Project{
-		Name:    cloneName,
-		Domain:  cloneName + "." + s.settingDomain(),
-		Image:   source.Image,
-		Repo:    source.Repo,
-		Branch:  req.Suffix,
-		Port:    source.Port,
-		Subpath: source.Subpath,
-		Folder:  source.Folder,
-		Static:  source.Static,
-		Build:   source.Build,
-		CI:      source.CI,
-		CIMode:  source.CIMode,
+		Name:   cloneName,
+		Domain: cloneName + "." + s.settingDomain(),
+		Image:  source.Image,
+		Repo:   source.Repo,
+		Branch: req.Suffix,
+		Port:   source.Port,
+		Folder: source.Folder,
+		Static: source.Static,
+		Build:  source.Build,
+		CI:     source.CI,
+		CIMode: source.CIMode,
 	}
 
 	if err := s.store.CreateProject(p); err != nil {
@@ -1894,19 +1871,11 @@ func (s *Server) syncCaddy() error {
 	if err != nil {
 		return err
 	}
-	caddyfile := caddy.GenerateCaddyfile(routed, redirects, snippets, s.settingDomain(), s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
+	caddyfile := caddy.GenerateCaddyfile(routed, redirects, snippets, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
 	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }
 
 // --- Helpers ---
-
-func validSubpath(mode string) bool {
-	switch mode {
-	case "disabled", "redirect", "proxy":
-		return true
-	}
-	return false
-}
 
 func generateToken() (string, error) {
 	b := make([]byte, 32)

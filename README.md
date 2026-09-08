@@ -179,7 +179,7 @@ poof clone myapp test              # creates myapp-test, deploys from "test" bra
 poof clone myapp staging --env --all  # same, plus copies all env vars
 ```
 
-The clone inherits the source project's repo, image, port, subpath, and folder. The domain is automatically set to `<name>-<suffix>.<root-domain>`, and the branch is set to the suffix. GitHub Actions workflow is set up automatically.
+The clone inherits the source project's repo, image, port, and folder. The domain is automatically set to `<name>-<suffix>.<root-domain>`, and the branch is set to the suffix. GitHub Actions workflow is set up automatically.
 
 Copy env vars selectively:
 
@@ -244,7 +244,7 @@ poof snapshot myapp   # optional: preserve the container for forensics
 poof resume myapp     # exact previous state restored
 ```
 
-**Pause** does two things: every route on the project's domain (including subpath routes; the custom Caddy snippet is withheld too) responds 503, and the container is **stopped** — not removed — so a compromised workload can't keep making outbound calls, and its writable layer survives for investigation. The registration (repo, port, domain, env vars, snippet) stays untouched. `poof status` and `poof list` show `paused` as a distinct status.
+**Pause** does two things: every route on the project's domain responds 503 (the custom Caddy snippet is withheld too), and the container is **stopped** — not removed — so a compromised workload can't keep making outbound calls, and its writable layer survives for investigation. The registration (repo, port, domain, env vars, snippet) stays untouched. `poof status` and `poof list` show `paused` as a distinct status.
 
 **Deploys while paused are staged**: the new container is created (image pulled, config applied) but not started, and the deployment is recorded as `staged`. This lets you apply a fix *before* going back online — the fix is what starts when you resume. Staged deployments become rollback candidates only after they've successfully started once.
 
@@ -308,25 +308,6 @@ Both projects share the same repo but redeploy independently when their respecti
 poof add web --folder web/ --static --spa --build   # SPA frontend
 poof add api --folder api/ --port 3000              # backend container
 poof spell proxy web/api api                        # frontend /api/* → backend, no CORS
-```
-
-## Subpath routing
-
-By default, projects are only reachable at their subdomain (`myapp.yourdomain.com`). Subpath routing additionally makes a project reachable at `yourdomain.com/myapp/*`, in one of two modes:
-
-- **`redirect`** — `yourdomain.com/myapp/*` issues a 301 redirect to `myapp.yourdomain.com/*`.
-- **`proxy`** — requests are transparently proxied to the container. The app must handle being served from a subpath.
-
-```sh
-poof add myapp --subpath=redirect
-poof configure myapp --subpath=proxy
-poof deploy myapp   # redeploy required for routing changes to take effect
-```
-
-Set the server-wide default in `poof.toml`:
-
-```toml
-subpath_default = "redirect"   # disabled | redirect | proxy (default: disabled)
 ```
 
 ## Volumes
@@ -524,7 +505,7 @@ Snapshot images (`poof-snapshot/*`) are never touched.
 
 ## Troubleshooting & gotchas
 
-- **Container-affecting changes require a redeploy.** Env vars, volumes, networks, port, and subpath are applied at container (re)creation — after `poof configure`, `poof env set`, `poof volume add`, or `poof net add`, run `poof deploy <name>` for the change to take effect.
+- **Container-affecting changes require a redeploy.** Env vars, volumes, networks and port are applied at container (re)creation — after `poof configure`, `poof env set`, `poof volume add`, or `poof net add`, run `poof deploy <name>` for the change to take effect.
 - **DNS must NOT be proxied through Cloudflare** (or any proxy that terminates TLS) if Caddy is to obtain certificates via ACME. Set the records to DNS-only (`proxied = false`).
 - **Custom domains need their own DNS records** pointing at the server. The wildcard record only covers subdomains of the root domain.
 - **Auth or connection errors from the CLI?** Check `~/.config/poof/poof.toml` (`server`, `token`) first, then run `poof troubleshoot`. With multiple servers, make sure the right profile is active (`--profile <name>` or `POOF_PROFILE` + `--profile-env`).

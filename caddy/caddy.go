@@ -17,10 +17,9 @@ const pausedResponse = `respond "This site is temporarily unavailable." 503`
 // redirects. Only pass projects that are currently deployed (container running
 // or static files present) — plus paused projects, which get a 503 route
 // regardless of their deployment state.
-// rootDomain is used to generate subpath routing blocks on the root site.
 // poofHost (e.g. "poof.example.com") and poofPort are used to add a route
 // for the Poof API itself, which runs on the host rather than in a container.
-func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, snippets map[string]string, rootDomain, poofHost string, poofPort int, staticDir string) string {
+func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, snippets map[string]string, poofHost string, poofPort int, staticDir string) string {
 	var b strings.Builder
 
 	// Warning header.
@@ -38,9 +37,6 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 	if poofHost != "" {
 		fmt.Fprintf(&b, "%s {\n\treverse_proxy poof:%d\n}\n\n", poofHost, poofPort)
 	}
-
-	// subpathLines collects handle_path directives grouped by root domain.
-	subpathLines := map[string][]string{}
 
 	writeSnippet := func(name string) {
 		if snip, ok := snippets[name]; ok && snip != "" {
@@ -62,10 +58,6 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 		// is withheld — nothing of the project's normal routing stays exposed.
 		if p.Paused {
 			fmt.Fprintf(&b, "%s {\n\t%s\n}\n\n", p.Domain, pausedResponse)
-			if rootDomain != "" && p.Domain != rootDomain && p.Subpath != "disabled" {
-				subpathLines[rootDomain] = append(subpathLines[rootDomain],
-					fmt.Sprintf("\thandle_path /%s/* {\n\t\t%s\n\t}", p.Name, pausedResponse))
-			}
 			continue
 		}
 
@@ -90,31 +82,6 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 			writeSnippet(p.Name)
 		}
 		fmt.Fprintf(&b, "}\n\n")
-
-		if rootDomain != "" && p.Domain != rootDomain && p.Subpath != "disabled" {
-			switch p.Subpath {
-			case "redirect":
-				subpathLines[rootDomain] = append(subpathLines[rootDomain],
-					fmt.Sprintf("\thandle_path /%s/* {\n\t\tredir https://%s{uri} 301\n\t}", p.Name, p.Domain))
-			case "proxy":
-				if p.IsStatic() {
-					staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
-					block := fmt.Sprintf("\thandle_path /%s/* {\n\t\troot * %s\n", p.Name, staticRoot)
-					if p.Static == "spa" {
-						block += "\t\ttry_files {path} /index.html\n"
-					}
-					block += "\t\tfile_server\n\t}"
-					subpathLines[rootDomain] = append(subpathLines[rootDomain], block)
-				} else {
-					subpathLines[rootDomain] = append(subpathLines[rootDomain],
-						fmt.Sprintf("\thandle_path /%s/* {\n\t\treverse_proxy %s\n\t}", p.Name, p.Upstream()))
-				}
-			}
-		}
-	}
-
-	for domain, lines := range subpathLines {
-		fmt.Fprintf(&b, "%s {\n%s\n}\n\n", domain, strings.Join(lines, "\n"))
 	}
 
 	for _, r := range redirects {

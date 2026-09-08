@@ -53,7 +53,6 @@ Static sites:
 		repo, _ := cmd.Flags().GetString("repo")
 		branch, _ := cmd.Flags().GetString("branch")
 		port, _ := cmd.Flags().GetInt("port")
-		subpath, _ := cmd.Flags().GetString("subpath")
 		folder, _ := cmd.Flags().GetString("folder")
 		staticFlag, _ := cmd.Flags().GetBool("static")
 		spaFlag, _ := cmd.Flags().GetBool("spa")
@@ -140,9 +139,6 @@ Static sites:
 		if port == 0 {
 			delete(payload, "port")
 		}
-		if subpath != "" {
-			payload["subpath"] = subpath
-		}
 		if folder != "" {
 			payload["folder"] = folder
 		}
@@ -228,7 +224,6 @@ func init() {
 	addCmd.Flags().String("repo", "", "GitHub repo owner/name (default: <github-user>/<name>)")
 	addCmd.Flags().String("branch", "", fmt.Sprintf("branch to deploy (default: %s)", defaults.Branch))
 	addCmd.Flags().Int("port", 0, fmt.Sprintf("container port (default: %d)", defaults.Port))
-	addCmd.Flags().String("subpath", "", "subpath routing mode: disabled, redirect, or proxy (default: server's subpath_default)")
 	addCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (for monorepos)")
 	addCmd.Flags().String("external", "", "route to a container Poof does not manage: <container>[:<port>]")
 	addCmd.Flags().Bool("static", false, "deploy as a static site served by Caddy")

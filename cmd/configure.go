@@ -22,7 +22,6 @@ The project token is never affected — GitHub Actions integrations remain valid
 		repo, _ := cmd.Flags().GetString("repo")
 		branch, _ := cmd.Flags().GetString("branch")
 		port, _ := cmd.Flags().GetInt("port")
-		subpath, _ := cmd.Flags().GetString("subpath")
 		folder, _ := cmd.Flags().GetString("folder")
 		folderSet := cmd.Flags().Changed("folder")
 		ciVal, _ := cmd.Flags().GetString("ci")
@@ -60,9 +59,6 @@ The project token is never affected — GitHub Actions integrations remain valid
 		}
 		if port != 0 {
 			payload["port"] = port
-		}
-		if subpath != "" {
-			payload["subpath"] = subpath
 		}
 		if folderSet {
 			payload["folder"] = folder // allows clearing with --folder ""
@@ -127,7 +123,6 @@ func init() {
 	configureCmd.Flags().String("repo", "", "new GitHub repo (owner/name)")
 	configureCmd.Flags().String("branch", "", "new branch to deploy")
 	configureCmd.Flags().Int("port", 0, "new container port")
-	configureCmd.Flags().String("subpath", "", "new subpath routing mode: disabled, redirect, or proxy")
 	configureCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (use \"\" to clear)")
 	configureCmd.Flags().Bool("static", false, "convert to a static site served by Caddy")
 	configureCmd.Flags().Bool("no-static", false, "revert from static to a container project")

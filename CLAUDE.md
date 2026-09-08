@@ -36,7 +36,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 
 ## Data model (`store/store.go`)
 
-- **Project** — name, domain, image, repo, branch, port, subpath mode, folder (monorepo), static mode (`"" | static | spa`), external upstream container (`external`; `Upstream()` returns `host:port`, `IsExternal()` gates container operations), build flag, CI flag, CI mode (`managed` | `callable`), paused flag (503 routing while set; toggled only by pause/resume, never by configure).
+- **Project** — name, domain, image, repo, branch, port, folder (monorepo), static mode (`"" | static | spa`), external upstream container (`external`; `Upstream()` returns `host:port`, `IsExternal()` gates container operations), build flag, CI flag, CI mode (`managed` | `callable`), paused flag (503 routing while set; toggled only by pause/resume, never by configure).
 - **Volume** — managed (`/var/lib/poof/<project>/<container-path>`) or explicit (`host:container`).
 - **Network** — Poof-managed Docker network (`name`, `internal`) plus a `network_members` table of attachments. A member has a kind: `project`, `container` (unmanaged), `caddy`, or `poof`. Membership is desired state, re-applied by `reconcileNetworkMembers` on every sync.
 - **Redirect** — independent 301 from one domain to another.
@@ -101,7 +101,6 @@ Core commands (`add`, `configure`, `clone`, ...) only grow flags when the behavi
 | `--static` | off | Serve files via Caddy instead of running a container. |
 | `--spa` | off | Adds `try_files` fallback to `index.html` (requires `--static`). |
 | `--build` | off | Build static assets via Dockerfile, output to `/poof` (requires `--static`). |
-| `--subpath` | `disabled` | `disabled | redirect | proxy`; default settable in `poof.toml`. |
 | `--ci` | `yes` | `yes` (push-triggered), `no`, or `callable` (reusable workflow). |
 
 ## Server config (`/etc/poof/poof.toml`)
@@ -113,7 +112,6 @@ api_port         = 9000
 data_dir         = "/var/lib/poof"
 caddy_admin_url  = "http://caddy-proxy:2019"
 caddy_static_dir = "/etc/caddy/conf.d"
-subpath_default  = "disabled"                          # disabled | redirect | proxy
 ```
 
 The server also stores GitHub credentials (`github_user`, `github_token`) and the public domain — set via `poof config set` from the client.
@@ -144,13 +142,11 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 ## Routing model
 
 - Default: project lives at its subdomain (`<name>.<root-domain>`).
-- Subpath `redirect`: `<root>/<name>/*` → 301 → `<name>.<root>/*`.
-- Subpath `proxy`: `<root>/<name>/*` transparently proxied to the container (app must handle subpath).
 - Manual Caddyfiles: drop `*.Caddyfile` into `caddy_static_dir` for non-Poof services; survives reloads.
 - Per-project snippet override: `poof caddy set <name>` pushes a snippet that takes precedence over the generated route.
 - `poof redirect` rules apply at the Caddy layer, independent of any project.
 - SPA fallback: for `static=spa` projects the `try_files {path} /index.html` fallback is emitted inside a catch-all `handle` block placed after the project's snippet (never as a top-level rewrite-phase directive), so snippet `handle` routes like an `/api/*` proxy compose with `--spa`.
-- Paused projects: emitted as a bare `respond ... 503` site block (snippet withheld, subpath proxy route also 503s) regardless of container/static deploy state.
+- Paused projects: emitted as a bare `respond ... 503` site block (snippet withheld) regardless of container/static deploy state.
 
 ## CI integration
 

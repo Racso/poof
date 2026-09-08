@@ -20,7 +20,7 @@ var cloneCmd = &cobra.Command{
 	Long: `Clone a project's configuration under a new name.
 
 The new project is named <project>-<suffix> and deploys from the
-<suffix> branch. Domain, image, repo, port, subpath, and folder
+<suffix> branch. Domain, image, repo, port, and folder
 are copied from the source project (domain adjusted for the new name).
 
 Examples:

@@ -8,12 +8,12 @@ import (
 )
 
 func generate(projects []store.Project, snippets map[string]string) string {
-	return GenerateCaddyfile(projects, nil, snippets, "rac.so", "", 9000, "/etc/caddy/conf.d")
+	return GenerateCaddyfile(projects, nil, snippets, "", 9000, "/etc/caddy/conf.d")
 }
 
 func TestSPAFallbackLivesInCatchAllHandle(t *testing.T) {
 	out := generate([]store.Project{
-		{Name: "app", Domain: "app.rac.so", Static: "spa", Subpath: "disabled"},
+		{Name: "app", Domain: "app.rac.so", Static: "spa"},
 	}, nil)
 
 	if !strings.Contains(out, "\thandle {\n\t\ttry_files {path} /index.html\n\t\tfile_server\n\t}\n") {
@@ -27,7 +27,7 @@ func TestSPAFallbackLivesInCatchAllHandle(t *testing.T) {
 func TestSPASnippetHandleBlocksPrecedeFallback(t *testing.T) {
 	snippet := "handle /api/* {\n\treverse_proxy backend:3000\n}"
 	out := generate([]store.Project{
-		{Name: "app", Domain: "app.rac.so", Static: "spa", Subpath: "disabled"},
+		{Name: "app", Domain: "app.rac.so", Static: "spa"},
 	}, map[string]string{"app": snippet})
 
 	apiIdx := strings.Index(out, "handle /api/*")
@@ -42,7 +42,7 @@ func TestSPASnippetHandleBlocksPrecedeFallback(t *testing.T) {
 
 func TestPlainStaticKeepsTopLevelFileServer(t *testing.T) {
 	out := generate([]store.Project{
-		{Name: "site", Domain: "site.rac.so", Static: "static", Subpath: "disabled"},
+		{Name: "site", Domain: "site.rac.so", Static: "static"},
 	}, map[string]string{"site": "header X-Test on"})
 
 	if !strings.Contains(out, "\tfile_server\n\theader X-Test on\n") {
@@ -52,7 +52,7 @@ func TestPlainStaticKeepsTopLevelFileServer(t *testing.T) {
 
 func TestPausedProjectServes503AndHidesRouting(t *testing.T) {
 	out := generate([]store.Project{
-		{Name: "app", Domain: "app.rac.so", Port: 8080, Subpath: "disabled", Paused: true},
+		{Name: "app", Domain: "app.rac.so", Port: 8080, Paused: true},
 	}, map[string]string{"app": "handle /api/* {\n\treverse_proxy backend:3000\n}"})
 
 	if !strings.Contains(out, "app.rac.so {\n\trespond \"This site is temporarily unavailable.\" 503\n}") {
@@ -60,15 +60,5 @@ func TestPausedProjectServes503AndHidesRouting(t *testing.T) {
 	}
 	if strings.Contains(out, "reverse_proxy") {
 		t.Errorf("paused project must not expose reverse_proxy or snippet routing, got:\n%s", out)
-	}
-}
-
-func TestPausedProjectSubpathAlso503s(t *testing.T) {
-	out := generate([]store.Project{
-		{Name: "app", Domain: "app.rac.so", Port: 8080, Subpath: "proxy", Paused: true},
-	}, nil)
-
-	if !strings.Contains(out, "\thandle_path /app/* {\n\t\trespond \"This site is temporarily unavailable.\" 503\n\t}") {
-		t.Errorf("expected the subpath route to 503 while paused, got:\n%s", out)
 	}
 }
