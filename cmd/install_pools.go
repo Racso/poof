@@ -39,7 +39,7 @@ var poolCandidates = []string{
 // ensureAddressPools configures Docker's default-address-pools if they haven't
 // been set. Idempotent: if the key is already present (whatever its value) it
 // leaves the file untouched and does not restart Docker.
-func ensureAddressPools() {
+func ensureAddressPools(assumeYes bool) {
 	printStep("Checking Docker address pools")
 
 	const path = "/etc/docker/daemon.json"
@@ -67,7 +67,7 @@ func ensureAddressPools() {
 
 	// Restarting Docker restarts every container on the host. On a fresh
 	// install that's free; on a populated one it is not, so ask.
-	if n := runningContainerCount(); n > 0 {
+	if n := runningContainerCount(); n > 0 && !assumeYes {
 		fmt.Printf("  Docker's default address pools allow only 31 networks (Poof uses one per project).\n")
 		fmt.Printf("  Fixing this needs a Docker restart, which will restart %d running container(s).\n", n)
 		if !promptYN("  Configure address pools now?", true) {

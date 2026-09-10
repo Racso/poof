@@ -137,7 +137,7 @@ func runInstall(cmd *cobra.Command, args []string) {
 	// ── 4. Docker address pools + poof-net ───────────────────────────
 	// Pools first: Poof creates one network per project, and Docker's
 	// defaults run out at 31 networks total.
-	ensureAddressPools()
+	ensureAddressPools(yes)
 
 	printStep("Setting up Docker network")
 
@@ -488,10 +488,19 @@ func generateToken() string {
 
 // promptYN asks a yes/no question and returns the answer. defaultYes controls
 // what happens when the user presses Enter without typing anything.
+// promptYN asks a yes/no question on stdin. The default applies to an empty
+// line — a human pressing enter. It does NOT apply to EOF: with stdin closed
+// (`curl | sh`, cron) nobody is there to press anything, and answering "yes"
+// on their behalf is how an unattended install ends up restarting Docker.
+// No answer means no.
 func promptYN(prompt string, defaultYes bool) bool {
 	fmt.Print(prompt)
 	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
+	answer, err := reader.ReadString('\n')
+	if err != nil && strings.TrimSpace(answer) == "" {
+		fmt.Println("(no input — assuming no; pass --yes to answer yes non-interactively)")
+		return false
+	}
 	answer = strings.TrimSpace(strings.ToLower(answer))
 	if answer == "" {
 		return defaultYes
