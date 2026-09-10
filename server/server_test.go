@@ -130,12 +130,14 @@ func (m *mockContainerManager) IsRunning(name string) bool {
 	return m.running[name]
 }
 
-func (m *mockContainerManager) GC(name, image string, keep int, dryRun bool) (server.GCResult, error) {
+func (m *mockContainerManager) RunningImageIDs() map[string]bool { return map[string]bool{} }
+
+func (m *mockContainerManager) GC(name, image string, running map[string]bool, keep int, dryRun bool) (server.GCResult, error) {
 	m.gcCalls = append(m.gcCalls, mockGCCall{name, image, keep, dryRun})
 	return server.GCResult{Project: name, Removed: []string{name + ":old"}}, nil
 }
 
-func (m *mockContainerManager) SweepOrphans(refs []string, dryRun bool) (server.GCResult, error) {
+func (m *mockContainerManager) SweepOrphans(refs []string, running map[string]bool, dryRun bool) (server.GCResult, error) {
 	m.sweepCalls = append(m.sweepCalls, refs)
 	removed := append([]string(nil), refs...)
 	return server.GCResult{Project: "(orphans)", Removed: removed}, nil
@@ -2903,3 +2905,52 @@ func TestRemoveExternalProjectLeavesContainerAlone(t *testing.T) {
 		t.Errorf("delete response should state the container was untouched; got %s", rr.Body.String())
 	}
 }
+
+// --- Volume scoping (IDs are global; the {name} segment must be enforced) ---
+
+func TestVolumeOperationsAreScopedToProject(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	for _, n := range []string{"alpha", "beta"} {
+		st.CreateProject(store.Project{
+			Name: n, Domain: n + ".rac.so", Image: "img",
+			Repo: "racso/" + n, Branch: "main", Port: 80,
+		})
+	}
+
+	rr := do(t, srv, "POST", "/projects/beta/volumes",
+		map[string]string{"mount": "/host/beta:/container/data"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("add: %d — %s", rr.Code, rr.Body.String())
+	}
+	var created map[string]interface{}
+	decode(t, rr, &created)
+	id := fmt.Sprintf("%.0f", created["id"].(float64))
+
+	// Reading beta's volume through alpha must not leak it: the CLI shows the
+	// returned host path in its delete confirmation.
+	rr = do(t, srv, "GET", "/projects/alpha/volumes/"+id, nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("cross-project get: expected 404, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Deleting it through alpha must not delete beta's volume.
+	rr = do(t, srv, "DELETE", "/projects/alpha/volumes/"+id+"?data=delete", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("cross-project delete: expected 404, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	vol, err := st.GetVolume(mustAtoi64(t, id))
+	if err != nil || vol == nil {
+		t.Fatalf("beta's volume was deleted through alpha (err=%v)", err)
+	}
+}
+
+func mustAtoi64(t *testing.T, s string) int64 {
+	t.Helper()
+	var n int64
+	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+		t.Fatalf("bad id %q: %v", s, err)
+	}
+	return n
+}
+

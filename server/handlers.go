@@ -1279,6 +1279,7 @@ func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getVolume(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -1290,7 +1291,9 @@ func (s *Server) getVolume(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if vol == nil {
+	// Volume IDs are global, so the {name} segment must be enforced: without
+	// it, asking project alpha for volume 9 happily returns beta's volume.
+	if vol == nil || vol.Project != name {
 		jsonError(w, "volume not found", http.StatusNotFound)
 		return
 	}
@@ -1350,6 +1353,7 @@ func (s *Server) addVolume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeVolume(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
 	idStr := r.PathValue("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -1364,7 +1368,10 @@ func (s *Server) removeVolume(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if vol == nil {
+	// Scope the delete to the named project. Volume IDs are global, so an id
+	// that belongs to another project would otherwise be deleted here — and
+	// with ?data=delete, that project's host data removed with it.
+	if vol == nil || vol.Project != name {
 		jsonError(w, "volume not found", http.StatusNotFound)
 		return
 	}
