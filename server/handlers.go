@@ -69,6 +69,38 @@ func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"key": key, "status": "updated"})
 }
 
+// domainConflict reports a human-readable conflict when domain is already
+// served by another project or by a redirect. Caddy rejects an entire config
+// containing two site blocks with the same address, so a duplicate does not
+// break one project — it freezes routing for every project on the host.
+func (s *Server) domainConflict(domain, exceptProject string) (string, error) {
+	if domain == "" {
+		return "", nil
+	}
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range projects {
+		if p.Name == exceptProject {
+			continue
+		}
+		if strings.EqualFold(p.Domain, domain) {
+			return fmt.Sprintf("domain %s is already used by project %q", domain, p.Name), nil
+		}
+	}
+	redirects, err := s.store.ListRedirects()
+	if err != nil {
+		return "", err
+	}
+	for _, rd := range redirects {
+		if strings.EqualFold(rd.FromDomain, domain) {
+			return fmt.Sprintf("domain %s is already used by a redirect to %s", domain, rd.ToDomain), nil
+		}
+	}
+	return "", nil
+}
+
 // --- Project CRUD ---
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +276,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	conflict, err := s.domainConflict(req.Domain, "")
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conflict != "" {
+		jsonError(w, conflict, http.StatusConflict)
+		return
+	}
+
 	// Get or create a deploy token for this repo.
 	token, err := s.store.GetRepoToken(req.Repo)
 	if err != nil {
@@ -335,11 +377,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 
 	ciChanged, ciModeChanged := false, false
 	repoChanged, branchChanged, folderChanged, staticChanged, buildChanged := false, false, false, false, false
+	domainChanged := false
 
 	for key, val := range patch {
 		switch key {
 		case "domain":
 			if v, ok := val.(string); ok && v != "" {
+				domainChanged = v != p.Domain
 				p.Domain = v
 			}
 		case "image":
@@ -397,6 +441,18 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 				ciModeChanged = v != p.CIMode
 				p.CIMode = v
 			}
+		}
+	}
+
+	if domainChanged {
+		conflict, err := s.domainConflict(p.Domain, name)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if conflict != "" {
+			jsonError(w, conflict, http.StatusConflict)
+			return
 		}
 	}
 
@@ -1215,6 +1271,16 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.From == "" || req.To == "" {
 		jsonError(w, "from and to are required", http.StatusBadRequest)
+		return
+	}
+
+	conflict, err := s.domainConflict(req.From, "")
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conflict != "" {
+		jsonError(w, conflict, http.StatusConflict)
 		return
 	}
 

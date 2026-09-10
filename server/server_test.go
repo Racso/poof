@@ -2954,3 +2954,49 @@ func mustAtoi64(t *testing.T, s string) int64 {
 	return n
 }
 
+// --- Domain uniqueness (a duplicate address makes Caddy reject everything) ---
+
+func TestCreateProjectRejectsDuplicateDomain(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "shared.rac.so", Image: "img",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "other", "domain": "SHARED.rac.so", "ci": false}, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUpdateProjectRejectsDuplicateDomain(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	st.CreateProject(store.Project{Name: "api", Domain: "api.rac.so", Image: "i", Repo: "r/api", Branch: "main", Port: 80})
+
+	rr := do(t, srv, "PATCH", "/projects/api",
+		map[string]interface{}{"domain": "web.rac.so"}, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d — %s", rr.Code, rr.Body.String())
+	}
+
+	// Re-stating its own domain is not a conflict.
+	rr = do(t, srv, "PATCH", "/projects/api",
+		map[string]interface{}{"domain": "api.rac.so"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("self-domain patch: expected 200, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateRedirectRejectsProjectDomain(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+
+	rr := do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "web.rac.so", "to": "elsewhere.rac.so"}, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
