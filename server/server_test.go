@@ -3000,3 +3000,24 @@ func TestCreateRedirectRejectsProjectDomain(t *testing.T) {
 	}
 }
 
+func TestGetConfigMasksGitHubToken(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("github-token", "ghp_supersecrettoken1234")
+	st.SetSetting("github-user", "racso")
+
+	rr := do(t, srv, "GET", "/config", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get config: %d", rr.Code)
+	}
+	var cfg map[string]string
+	decode(t, rr, &cfg)
+	if strings.Contains(rr.Body.String(), "supersecret") {
+		t.Errorf("PAT leaked in response: %s", rr.Body.String())
+	}
+	if cfg["github-token"] == "" {
+		t.Errorf("masked token should still show that one is configured")
+	}
+	if cfg["github-user"] != "racso" {
+		t.Errorf("non-secret settings must pass through: %q", cfg["github-user"])
+	}
+}

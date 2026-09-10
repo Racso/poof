@@ -123,6 +123,11 @@ func maskSecret(s string) string {
 	if s == "" {
 		return "(not set)"
 	}
+	// Servers from v0.28.0 on mask the PAT themselves; masking a masked value
+	// again would just mangle it. Older servers still send it in the clear.
+	if strings.Contains(s, "…") {
+		return s
+	}
 	if len(s) <= 4 {
 		return strings.Repeat("•", len(s))
 	}

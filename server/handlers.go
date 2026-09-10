@@ -44,7 +44,28 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, settings)
+	// The GitHub PAT is write-only over the API: any token holder could
+	// otherwise read it back in plaintext and act on the whole account.
+	masked := make(map[string]string, len(settings))
+	for k, v := range settings {
+		if k == "github-token" {
+			v = maskSecret(v)
+		}
+		masked[k] = v
+	}
+	jsonOK(w, masked)
+}
+
+// maskSecret renders a stored secret as a fingerprint: enough to tell which
+// credential is configured, not enough to use it.
+func maskSecret(v string) string {
+	if v == "" {
+		return ""
+	}
+	if len(v) <= 8 {
+		return "********"
+	}
+	return v[:4] + "…" + v[len(v)-4:]
 }
 
 func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
