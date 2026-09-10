@@ -63,7 +63,7 @@ Deploy / observe:
 Config / env / volumes / redirects:
 - `poof config [set <key> [value]]` — local keys: `server`, `token`. Server keys: `domain`, `github-user`, `github-token`. With `--profile` / `--profile-env` for multi-server setups.
 - `poof env get|set|unset|copy` — copy supports `--all|--only|--except|--ask`.
-- `poof volume add|list|remove` — managed (`/app/data`) or explicit (`/host:/container`).
+- `poof volume add|list|remove` — managed (`/app/data`) or explicit (`/host:/container`). Volume IDs are global, but every volume endpoint is scoped to the project in the path: an id belonging to another project 404s rather than being read or deleted.
 - `poof net create|ls|delete|add|show|list|remove` — Poof-managed Docker networks for deliberate connectivity. `create <name> [--internal]` defines a network; `add <network> [member...] [--caddy] [--poof]` attaches members; `show <network>` lists them; `list <project>` shows a project's networks; `remove <network> [member...]` detaches. `delete` refuses while anything is attached and leaves the underlying Docker network in place.
   - **Members** (`store.NetworkMember`, table `network_members`) have a kind: `project` (container attached at every deploy), `container` (a container Poof doesn't manage — Compose, hand-run), `caddy`, or `poof` (the daemon, for members that call its API internally instead of via the public URL). An unrecognized name is recorded as `container`; projects take precedence.
   - **Membership is desired state, reconciled** — `reconcileNetworkMembers` runs inside `syncCaddy()` (so on every mutation) and re-attaches anything missing. This is what makes it stronger than `docker network connect`: Caddy and the daemon have no deploy of their own, so without reconciliation an attachment would silently vanish when they are recreated. Additive only — never detaches, so hand-wired containers are left alone.
@@ -114,7 +114,7 @@ caddy_admin_url  = "http://caddy-proxy:2019"
 caddy_static_dir = "/etc/caddy/conf.d"
 ```
 
-The server also stores GitHub credentials (`github_user`, `github_token`) and the public domain — set via `poof config set` from the client.
+The server also stores GitHub credentials (`github_user`, `github_token`) and the public domain — set via `poof config set` from the client. The PAT is **write-only over the API**: `GET /config` returns a fingerprint (`ghp_…1234`), never the value, so an API token is not a path to the GitHub account.
 
 ## Client config (`~/.config/poof/poof.toml`)
 
@@ -147,6 +147,7 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 - `poof redirect` rules apply at the Caddy layer, independent of any project.
 - SPA fallback: for `static=spa` projects the `try_files {path} /index.html` fallback is emitted inside a catch-all `handle` block placed after the project's snippet (never as a top-level rewrite-phase directive), so snippet `handle` routes like an `/api/*` proxy compose with `--spa`.
 - Paused projects: emitted as a bare `respond ... 503` site block (snippet withheld) regardless of container/static deploy state.
+- **Domains are unique across projects and redirects** — enforced with a 409 at `add`, `configure` and `redirect add` (`domainConflict` in `server/handlers.go`). Caddy rejects a *whole* config containing two site blocks with the same address, so a duplicate does not break one project, it freezes routing for every project on the host.
 
 ## CI integration
 
@@ -170,6 +171,8 @@ Docker's layer store is shared host-wide, so `docker rmi` / `docker image prune`
 - **One GC worker, not a goroutine per deploy.** Deploys call `requestAutoGC()`, a non-blocking send on a 1-buffered channel; `gcWorker` waits for a 30s deploy-free window before sweeping, then drains any request the sweep already covered. A push to main deploys test then prod seconds apart from the same image — the quiet period collapses those into one sweep *after* both land, rather than firing one into the gap between them.
 
 Single daemon, single process, so an in-process gate is the whole story — no queue to persist.
+
+The set of images backing running containers is resolved **once per sweep** (`docker.RunningImageIDs`, one `docker ps` + one batched `docker inspect`) and passed into `GC`/`SweepOrphans`. It used to be recomputed inside the per-project loop, one `docker inspect` per running container per project.
 
 ## Pending ideas (not yet implemented)
 
