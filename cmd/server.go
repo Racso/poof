@@ -111,12 +111,16 @@ func (dockerAdapter) Snapshot(name, dataDir string) (server.SnapshotResult, erro
 }
 func (dockerAdapter) IsRunning(name string) bool                  { return docker.IsRunning(name) }
 func (dockerAdapter) Logs(name string, lines int) (string, error) { return docker.Logs(name, lines) }
-func (dockerAdapter) GC(name, image string, keep int, dryRun bool) (server.GCResult, error) {
-	r, err := docker.GC(name, image, keep, dryRun)
+func (dockerAdapter) RunningImageIDs() map[string]bool {
+	return docker.RunningImageIDs()
+}
+
+func (dockerAdapter) GC(name, image string, running map[string]bool, keep int, dryRun bool) (server.GCResult, error) {
+	r, err := docker.GC(name, image, running, keep, dryRun)
 	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
 }
-func (dockerAdapter) SweepOrphans(refs []string, dryRun bool) (server.GCResult, error) {
-	r, err := docker.SweepOrphans(refs, dryRun)
+func (dockerAdapter) SweepOrphans(refs []string, running map[string]bool, dryRun bool) (server.GCResult, error) {
+	r, err := docker.SweepOrphans(refs, running, dryRun)
 	return server.GCResult{Project: r.Project, Removed: r.Removed, Kept: r.Kept, Failed: r.Failed}, err
 }
 func (dockerAdapter) PruneDangling() error            { return docker.PruneDangling() }

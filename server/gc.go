@@ -104,6 +104,10 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Computed once for the whole sweep: the set is host-wide, and calling it
+	// per project meant one docker inspect per running container per project.
+	running := s.container.RunningImageIDs()
+
 	var results []GCResult
 	for _, p := range projects {
 		if p.IsStatic() {
@@ -114,7 +118,7 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 				results = append(results, res)
 			}
 		} else if p.Image != "" {
-			res, err := s.container.GC(p.Name, p.Image, keep, req.DryRun)
+			res, err := s.container.GC(p.Name, p.Image, running, keep, req.DryRun)
 			if err != nil {
 				log.Printf("gc %s failed: %v", p.Name, err)
 				res.Project = p.Name
@@ -128,7 +132,7 @@ func (s *Server) triggerGC(w http.ResponseWriter, r *http.Request) {
 		if orphanRefs, err := s.store.ListOrphanDeploymentImages(); err != nil {
 			log.Printf("gc orphan query: %v", err)
 		} else if len(orphanRefs) > 0 {
-			res, err := s.container.SweepOrphans(orphanRefs, req.DryRun)
+			res, err := s.container.SweepOrphans(orphanRefs, running, req.DryRun)
 			if err != nil {
 				log.Printf("gc orphan sweep: %v", err)
 			} else {
@@ -282,6 +286,8 @@ func (s *Server) runAutoGC() {
 	}
 	keep := cfg.Keep
 
+	running := s.container.RunningImageIDs()
+
 	var anyRan bool
 	for _, p := range projects {
 		if p.IsStatic() {
@@ -296,7 +302,7 @@ func (s *Server) runAutoGC() {
 					p.Name, len(res.Removed), len(res.Failed))
 			}
 		} else if p.Image != "" {
-			res, err := s.container.GC(p.Name, p.Image, keep, false)
+			res, err := s.container.GC(p.Name, p.Image, running, keep, false)
 			if err != nil {
 				log.Printf("auto-gc %s: %v", p.Name, err)
 				continue
@@ -313,7 +319,7 @@ func (s *Server) runAutoGC() {
 	if orphanRefs, err := s.store.ListOrphanDeploymentImages(); err != nil {
 		log.Printf("auto-gc orphan query: %v", err)
 	} else if len(orphanRefs) > 0 {
-		res, err := s.container.SweepOrphans(orphanRefs, false)
+		res, err := s.container.SweepOrphans(orphanRefs, running, false)
 		if err != nil {
 			log.Printf("auto-gc orphan sweep: %v", err)
 		} else {

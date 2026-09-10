@@ -34,8 +34,9 @@ type ContainerManager interface {
 	Snapshot(projectName, dataDir string) (SnapshotResult, error)
 	IsRunning(projectName string) bool
 	Logs(projectName string, lines int) (string, error)
-	GC(projectName, image string, keep int, dryRun bool) (GCResult, error)
-	SweepOrphans(refs []string, dryRun bool) (GCResult, error)
+	GC(projectName, image string, running map[string]bool, keep int, dryRun bool) (GCResult, error)
+	SweepOrphans(refs []string, running map[string]bool, dryRun bool) (GCResult, error)
+	RunningImageIDs() map[string]bool
 	PruneDangling() error
 	ImagesDiskUsage() (int64, error)
 	EnsureNetwork(name string, internal bool) error

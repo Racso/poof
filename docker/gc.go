@@ -131,7 +131,11 @@ func selectForRemoval(images []LocalImage, running map[string]bool, keep int) (t
 // GC removes old images for a project according to the given retention rules.
 // See selectForRemoval for the filtering semantics. dryRun=true skips the
 // docker rmi calls but still reports what would have been removed.
-func GC(projectName, image string, keep int, dryRun bool) (GCResult, error) {
+//
+// running is the set of image IDs backing running containers, from
+// RunningImageIDs. It is a parameter rather than an internal call because a
+// sweep runs GC once per project and the set is the same for all of them.
+func GC(projectName, image string, running map[string]bool, keep int, dryRun bool) (GCResult, error) {
 	res := GCResult{Project: projectName}
 	if keep <= 0 {
 		return res, nil
@@ -146,7 +150,7 @@ func GC(projectName, image string, keep int, dryRun bool) (GCResult, error) {
 	// single image repo is often deployed by more than one project (a test and
 	// a prod copy of the same app), and untagging the image another project is
 	// running leaves it displayed as a bare image id.
-	toDelete, toKeep := selectForRemoval(images, runningImageIDs(), keep)
+	toDelete, toKeep := selectForRemoval(images, running, keep)
 
 	for _, img := range toKeep {
 		res.Kept = append(res.Kept, img.Reference)
@@ -244,8 +248,11 @@ func parseHumanSize(s string) (int64, error) {
 	return int64(num * mult), nil
 }
 
-// runningImageIDs returns the set of image IDs used by all running containers.
-func runningImageIDs() map[string]bool {
+// RunningImageIDs returns the set of image IDs used by all running containers.
+// Both containers are inspected in a single docker call: a sweep needs this
+// set once, and the previous container-at-a-time loop spawned one process per
+// running container on every project it visited.
+func RunningImageIDs() map[string]bool {
 	out, err := exec.Command(
 		"docker", "ps", "-q",
 	).Output()
@@ -253,18 +260,26 @@ func runningImageIDs() map[string]bool {
 		return nil
 	}
 
-	ids := make(map[string]bool)
+	var cids []string
 	for _, cid := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if cid == "" {
-			continue
+		if cid != "" {
+			cids = append(cids, cid)
 		}
-		imgOut, err := exec.Command(
-			"docker", "inspect", "-f", "{{.Image}}", cid,
-		).Output()
-		if err != nil {
-			continue
+	}
+	if len(cids) == 0 {
+		return map[string]bool{}
+	}
+
+	args := append([]string{"inspect", "-f", "{{.Image}}"}, cids...)
+	// A missing container (stopped between ps and inspect) makes docker exit
+	// non-zero while still printing the rest, so use whatever came out.
+	imgOut, _ := exec.Command("docker", args...).Output()
+
+	ids := make(map[string]bool, len(cids))
+	for _, id := range strings.Split(strings.TrimSpace(string(imgOut)), "\n") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids[id] = true
 		}
-		ids[strings.TrimSpace(string(imgOut))] = true
 	}
 	return ids
 }
@@ -283,13 +298,11 @@ func imageID(ref string) string {
 // SweepOrphans removes image references that are present locally but not used
 // by any running container. Designed for cleaning up images from deleted or
 // static-converted projects. dryRun=true reports what would be removed.
-func SweepOrphans(refs []string, dryRun bool) (GCResult, error) {
+func SweepOrphans(refs []string, running map[string]bool, dryRun bool) (GCResult, error) {
 	res := GCResult{Project: "(orphans)"}
 	if len(refs) == 0 {
 		return res, nil
 	}
-
-	running := runningImageIDs()
 
 	for _, ref := range refs {
 		id := imageID(ref)
