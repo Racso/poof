@@ -151,6 +151,10 @@ func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion
 // caddyAdapter delegates server.CaddySyncer to the caddy package.
 type caddyAdapter struct{}
 
+func (caddyAdapter) Validate(adminURL, caddyfile string) error {
+	return caddy.Validate(adminURL, caddyfile)
+}
+
 func (caddyAdapter) Reload(adminURL, caddyfile string) error {
 	return caddy.Reload(adminURL, caddyfile)
 }

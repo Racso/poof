@@ -2,6 +2,8 @@ package caddy
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,6 +91,47 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 	}
 
 	return b.String()
+}
+
+// ErrValidateUnavailable means the admin API could not be reached, so the
+// config was neither accepted nor rejected — as opposed to Caddy answering
+// that it is invalid. Callers should not treat it as a verdict: refusing to
+// store a snippet because Caddy is down would block the very edit that fixes
+// a host whose Caddy is down.
+var ErrValidateUnavailable = errors.New("caddy admin API unreachable")
+
+// Validate asks Caddy whether a Caddyfile is acceptable WITHOUT applying it,
+// via the admin API's /adapt endpoint. Caddy validates and applies a config as
+// a whole: one bad snippet makes it reject everything, which would leave live
+// routing frozen at the last good config for every site on the host. Adapting
+// first turns that into a plain error on the command that caused it.
+func Validate(adminURL, caddyfile string) error {
+	url := strings.TrimRight(adminURL, "/") + "/adapt"
+	resp, err := http.Post(url, "text/caddyfile", bytes.NewBufferString(caddyfile))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrValidateUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("caddy rejected the config: %s", adaptMessage(body, resp.Status))
+	}
+	return nil
+}
+
+// adaptMessage pulls the human-readable complaint out of Caddy's JSON error
+// body ({"error": "..."}), falling back to the raw response.
+func adaptMessage(body []byte, status string) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && e.Error != "" {
+		return e.Error
+	}
+	if t := strings.TrimSpace(string(body)); t != "" {
+		return t
+	}
+	return status
 }
 
 // Reload posts the generated Caddyfile to the Caddy admin API for a

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/racso/poof/caddy"
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/server"
@@ -284,11 +285,30 @@ func (m *mockStaticDeployer) GC(_ string, project string, versions []server.Stat
 type mockCaddySyncer struct {
 	reloadCalls   int
 	lastCaddyfile string
+	reloadErr     error
+	// rejectContaining makes Validate fail for any config containing this
+	// string, standing in for Caddy's /adapt verdict.
+	rejectContaining string
+	validateCalls    int
+	lastValidated    string
+	validateErr      error
 }
 
 func (m *mockCaddySyncer) Reload(_, caddyfile string) error {
 	m.reloadCalls++
 	m.lastCaddyfile = caddyfile
+	return m.reloadErr
+}
+
+func (m *mockCaddySyncer) Validate(_, caddyfile string) error {
+	m.validateCalls++
+	m.lastValidated = caddyfile
+	if m.validateErr != nil {
+		return m.validateErr
+	}
+	if m.rejectContaining != "" && strings.Contains(caddyfile, m.rejectContaining) {
+		return fmt.Errorf("caddy rejected the config: unrecognized directive: nonsense")
+	}
 	return nil
 }
 
@@ -3019,5 +3039,113 @@ func TestGetConfigMasksGitHubToken(t *testing.T) {
 	}
 	if cfg["github-user"] != "racso" {
 		t.Errorf("non-secret settings must pass through: %q", cfg["github-user"])
+	}
+}
+
+// --- Caddy sync failures must be reported, not logged and swallowed ---
+
+func TestSnippetRejectedByCaddyIsNotStored(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.rejectContaining = "nonsense"
+
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "nonsense directive", "force": true}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a snippet Caddy refuses, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if mocks.caddy.validateCalls == 0 {
+		t.Error("snippet was never adapt-checked")
+	}
+
+	stored, _ := st.GetCaddySnippet("web")
+	if stored != "" {
+		t.Errorf("rejected snippet was stored anyway: %q", stored)
+	}
+}
+
+func TestValidSnippetIsStoredAndSynced(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.rejectContaining = "nonsense"
+
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "encode gzip", "force": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — %s", rr.Code, rr.Body.String())
+	}
+	stored, _ := st.GetCaddySnippet("web")
+	if stored != "encode gzip" {
+		t.Errorf("snippet not stored: %q", stored)
+	}
+	// The candidate config must contain the proposed snippet, not the old one.
+	if !strings.Contains(mocks.caddy.lastValidated, "encode gzip") {
+		t.Error("validated config did not include the candidate snippet")
+	}
+}
+
+func TestFailedSyncIsReportedToTheCaller(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.reloadErr = fmt.Errorf("status 400: duplicate site address")
+
+	rr := do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "old.rac.so", "to": "web.rac.so"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected the redirect to be stored: %d — %s", rr.Code, rr.Body.String())
+	}
+	if h := rr.Header().Get(server.RoutingErrorHeader); h == "" {
+		t.Fatal("no routing error header on a failed sync — the failure is invisible")
+	} else if !strings.Contains(h, "duplicate site address") {
+		t.Errorf("header does not carry Caddy's reason: %q", h)
+	}
+}
+
+func TestSuccessfulSyncReportsNothing(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+
+	rr := do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "old.rac.so", "to": "web.rac.so"}, globalToken)
+	if h := rr.Header().Get(server.RoutingErrorHeader); h != "" {
+		t.Errorf("routing error reported on a healthy sync: %q", h)
+	}
+}
+
+func TestFailedSyncAlsoLandsInTheBody(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.reloadErr = fmt.Errorf("connection refused")
+
+	rr := do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"port": 8080}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var resp map[string]interface{}
+	decode(t, rr, &resp)
+	if re, _ := resp["routing_error"].(string); !strings.Contains(re, "connection refused") {
+		t.Errorf("routing_error missing from body: %v", resp["routing_error"])
+	}
+}
+
+func TestSnippetStoredWhenCaddyIsUnreachable(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.validateErr = fmt.Errorf("%w: dial tcp: connection refused", caddy.ErrValidateUnavailable)
+	mocks.caddy.reloadErr = fmt.Errorf("connection refused")
+
+	// Caddy being down must not block the edit that fixes it — but the failed
+	// sync still has to be reported.
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "encode gzip", "force": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if stored, _ := st.GetCaddySnippet("web"); stored != "encode gzip" {
+		t.Errorf("snippet not stored: %q", stored)
+	}
+	if rr.Header().Get(server.RoutingErrorHeader) == "" {
+		t.Error("failed sync was not reported")
 	}
 }

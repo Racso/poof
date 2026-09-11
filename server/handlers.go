@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -364,9 +365,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.ensureProjectNetwork(&p); err != nil {
 			log.Printf("warning: network setup for external project %s: %v", p.Name, err)
 		}
-		if err := s.syncCaddy(); err != nil {
-			log.Printf("warning: caddy sync after creating %s: %v", p.Name, err)
-		}
+		s.syncRouting(w, fmt.Sprintf("creating external project %s", p.Name))
 		log.Printf("external project created: %s → %s", p.Name, p.Upstream())
 		w.WriteHeader(http.StatusCreated)
 		jsonOK(w, p)
@@ -514,9 +513,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after update failed: %v", err)
-	}
+	s.syncRouting(w, "updating project "+name)
 
 	jsonOK(w, p)
 }
@@ -590,9 +587,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after delete failed: %v", err)
-	}
+	s.syncRouting(w, "removing project "+name)
 
 	resp := map[string]string{"status": "deleted"}
 	if p.IsExternal() {
@@ -872,9 +867,7 @@ func (s *Server) deployStaticProject(w http.ResponseWriter, r *http.Request) {
 	s.store.UpdateDeploymentStatus(depID, "success")
 	log.Printf("static deployed: %s (v%d)", name, depID)
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after static deploy failed: %v", err)
-	}
+	s.syncRouting(w, "deploying static project "+name)
 
 	jsonOK(w, map[string]interface{}{
 		"status": "deployed",
@@ -906,9 +899,7 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, fmt.Sprintf("rollback failed: %v", err), http.StatusInternalServerError)
 			return
 		}
-		if err := s.syncCaddy(); err != nil {
-			log.Printf("warning: caddy sync after rollback failed: %v", err)
-		}
+		s.syncRouting(w, "rolling back "+name)
 		jsonOK(w, map[string]interface{}{
 			"status": "rolled back",
 			"domain": p.Domain,
@@ -1007,9 +998,7 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after resume failed: %v", err)
-	}
+	s.syncRouting(w, "resuming "+name)
 
 	if startErr != nil {
 		jsonError(w, fmt.Sprintf("resumed, but the container failed to start: %v", startErr), http.StatusInternalServerError)
@@ -1143,9 +1132,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	s.store.UpdateDeploymentStatus(depID, "success")
 	log.Printf("deployed %s → %s", p.Name, image)
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after deploy failed: %v", err)
-	}
+	s.syncRouting(w, "deploying "+p.Name)
 
 	s.requestAutoGC()
 
@@ -1315,9 +1302,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy redirects file could not be written: %v", err)
-	}
+	s.syncRouting(w, fmt.Sprintf("adding redirect %s → %s", req.From, req.To))
 
 	log.Printf("redirect created: %s → %s", req.From, req.To)
 	w.WriteHeader(http.StatusCreated)
@@ -1342,9 +1327,7 @@ func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: redirect deleted but caddy sync failed: %v", err)
-	}
+	s.syncRouting(w, "deleting redirect")
 
 	log.Printf("redirect deleted: id=%d", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
@@ -1884,15 +1867,26 @@ func (s *Server) setCaddySnippet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Adapt-check before storing. A snippet that Caddy refuses would otherwise
+	// be persisted and re-sent on every later sync, freezing routing for the
+	// whole host until someone found it by hand.
+	if err := s.validateCaddyfileWith(name, raw); err != nil {
+		if !errors.Is(err, caddy.ErrValidateUnavailable) {
+			jsonError(w, fmt.Sprintf("snippet rejected, nothing was saved — %v", err), http.StatusBadRequest)
+			return
+		}
+		// Unreachable is not a verdict — store it and let the sync below
+		// report what actually happens.
+		log.Printf("warning: could not pre-check the snippet for %s: %v", name, err)
+	}
+
 	if err := s.store.SetCaddySnippet(name, raw); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("caddy snippet updated: %s", name)
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after snippet update failed: %v", err)
-	}
+	s.syncRouting(w, "updating the caddy snippet for "+name)
 
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -1916,9 +1910,7 @@ func (s *Server) deleteCaddySnippet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("caddy snippet deleted: %s", name)
-	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: caddy sync after snippet delete failed: %v", err)
-	}
+	s.syncRouting(w, "deleting the caddy snippet for "+name)
 
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -1931,12 +1923,62 @@ func (s *Server) syncCaddy() error {
 	// this is what makes their attachments self-healing.
 	s.reconcileNetworkMembers()
 
-	projects, err := s.store.ListProjects()
+	caddyfile, err := s.buildCaddyfile(nil, "")
 	if err != nil {
 		return err
 	}
+	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
+}
+
+// syncRouting pushes the new config and reports a failure to the caller rather
+// than only to the log. Caddy applies a config atomically, so a rejected sync
+// does not degrade one route — it leaves every site on the host serving the
+// last config Caddy accepted, and every later sync re-sends the same rejected
+// file. Returning 200 with no sign of that is how a fleet-wide routing freeze
+// goes unnoticed for days.
+//
+// The stored change is kept: the database is the desired state, and rolling it
+// back would leave the operator with neither the change nor an explanation.
+func (s *Server) syncRouting(w http.ResponseWriter, what string) {
+	if err := s.syncCaddy(); err != nil {
+		msg := fmt.Sprintf("%s: %v — the change was saved but Caddy did NOT accept the new config, "+
+			"so live routing for every project on this host is still the last config it accepted. "+
+			"Fix the cause and re-run the command (see 'poof server-logs').", what, err)
+		log.Printf("ERROR: routing sync failed — %s", msg)
+		w.Header().Set(RoutingErrorHeader, strings.Join(strings.Fields(msg), " "))
+	}
+}
+
+// validateCaddyfileWith checks the config Poof would generate if project name
+// had the given snippet, without applying it. Snippets are fragments that live
+// inside a site block, so they are only meaningful in a full config.
+func (s *Server) validateCaddyfileWith(name, snippet string) error {
+	// forceRoute the project: a snippet is usually set before the first deploy
+	// (or while the project is stopped), and a project that isn't routed
+	// contributes no site block — so without this the candidate snippet would
+	// not appear in the config being checked, and nothing would be validated.
+	caddyfile, err := s.buildCaddyfile(map[string]string{name: snippet}, name)
+	if err != nil {
+		return err
+	}
+	return s.caddy.Validate(s.cfg.CaddyAdminURL, caddyfile)
+}
+
+// buildCaddyfile renders the full Caddyfile from current state. Entries in
+// overrides replace the stored snippet for that project (an empty value
+// removes it), which is what lets a candidate snippet be checked before it is
+// stored.
+func (s *Server) buildCaddyfile(overrides map[string]string, forceRoute string) (string, error) {
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		return "", err
+	}
 	var routed []store.Project
 	for _, p := range projects {
+		if p.Name == forceRoute {
+			routed = append(routed, p)
+			continue
+		}
 		// Paused projects are always routed — they get a 503 block even if
 		// their container is stopped or static files are gone.
 		if p.Paused {
@@ -1959,14 +2001,20 @@ func (s *Server) syncCaddy() error {
 	}
 	redirects, err := s.store.ListRedirects()
 	if err != nil {
-		return err
+		return "", err
 	}
 	snippets, err := s.store.GetAllCaddySnippets()
 	if err != nil {
-		return err
+		return "", err
 	}
-	caddyfile := caddy.GenerateCaddyfile(routed, redirects, snippets, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir)
-	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
+	for name, snip := range overrides {
+		if snip == "" {
+			delete(snippets, name)
+			continue
+		}
+		snippets[name] = snip
+	}
+	return caddy.GenerateCaddyfile(routed, redirects, snippets, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir), nil
 }
 
 // --- Helpers ---

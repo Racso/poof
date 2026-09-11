@@ -95,6 +95,8 @@ type StaticDeployer interface {
 // CaddySyncer abstracts Caddy configuration reload.
 type CaddySyncer interface {
 	Reload(adminURL, caddyfile string) error
+	// Validate reports whether Caddy would accept a config, without applying it.
+	Validate(adminURL, caddyfile string) error
 }
 
 type Server struct {
@@ -308,7 +310,8 @@ func (s *Server) Run() error {
 	log.Printf("poof server starting — commit=%s committed=%s addr=%s", version.Commit, version.CommitTime, addr)
 
 	if err := s.syncCaddy(); err != nil {
-		log.Printf("warning: initial caddy sync failed: %v", err)
+		log.Printf("ERROR: initial caddy sync failed: %v — Caddy is serving whatever config it "+
+			"already had; no project routing from this database is live until a sync succeeds", err)
 	}
 
 	go s.gcWorker()
@@ -366,7 +369,26 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
+// RoutingErrorHeader carries a failed Caddy sync out of a request that
+// otherwise succeeded. The body gets the same text when it is a map (see
+// jsonOK) so nobody has to read the daemon log to find out routing is stale.
+const RoutingErrorHeader = "X-Poof-Routing-Error"
+
 func jsonOK(w http.ResponseWriter, data interface{}) {
+	// A routing failure is part of the answer, not a footnote in the log: the
+	// stored change landed but the live config did not, and that is invisible
+	// from a 200 alone.
+	if re := w.Header().Get(RoutingErrorHeader); re != "" {
+		// Re-encode through a map so the field lands on struct payloads too.
+		// Only on the failure path, so the normal one keeps a single encode.
+		if raw, err := json.Marshal(data); err == nil {
+			var obj map[string]interface{}
+			if json.Unmarshal(raw, &obj) == nil && obj != nil {
+				obj["routing_error"] = re
+				data = obj
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
 }

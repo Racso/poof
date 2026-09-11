@@ -399,6 +399,8 @@ poof caddy delete <name>   # remove the snippet (Poof's default route returns)
 poof caddy list            # list projects that have a custom snippet
 ```
 
+A snippet is checked before it is stored: Poof! renders the config it would produce and asks Caddy to adapt it, so a syntax error comes back as an error on the command instead of a stored snippet that breaks the next reload. If Caddy itself is unreachable the snippet is stored anyway — you may be editing precisely because routing is down.
+
 Typical uses: a `/api/*` reverse_proxy to a sibling backend, a `try_files` directive for clean URLs on a static site, a `header` rule for CORS or caching. For the most common patterns, **prefer a Spell** (next section) — they generate the same snippets but you don't have to write the Caddy yourself.
 
 ### Manual Caddyfiles (for non-Poof services)

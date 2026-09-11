@@ -29,6 +29,38 @@ func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+	// A routing failure does not stop the command it happened on — the stored
+	// change is real — but it must not exit 0 either: scripts and CI would read
+	// success from a host whose live routing is stale.
+	if routingFailed {
+		os.Exit(1)
+	}
+}
+
+// routingErrorHeader is set by the server when a change was saved but Caddy
+// refused the resulting config.
+const routingErrorHeader = "X-Poof-Routing-Error"
+
+var routingFailed bool
+
+// reportRoutingError prints a Caddy sync failure where it cannot be missed.
+// The command's own output stays on stdout and still reads as success, because
+// the requested change did land in the database — what failed is publishing it.
+func reportRoutingError(resp *http.Response) {
+	msg := resp.Header.Get(routingErrorHeader)
+	if msg == "" {
+		return
+	}
+	routingFailed = true
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  ╭──────────────────────────────────────────────────────────────╮")
+	fmt.Fprintln(os.Stderr, "  │  ROUTING NOT APPLIED — CADDY REJECTED THE NEW CONFIGURATION  │")
+	fmt.Fprintln(os.Stderr, "  ╰──────────────────────────────────────────────────────────────╯")
+	fmt.Fprintf(os.Stderr, "  %s\n", msg)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Every project on this host keeps serving the last config Caddy")
+	fmt.Fprintln(os.Stderr, "  accepted until this is fixed.")
+	fmt.Fprintln(os.Stderr, "")
 }
 
 func init() {
@@ -115,6 +147,8 @@ func apiGet(path string, out interface{}) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	reportRoutingError(resp)
+
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		var e map[string]string
@@ -175,6 +209,8 @@ func apiRequest(method, path string, payload interface{}, out interface{}) error
 		return fmt.Errorf("could not reach Poof! server at %s\nRun `%s` for help", serverURL(), troubleshootHint())
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	reportRoutingError(resp)
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
