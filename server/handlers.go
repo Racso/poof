@@ -1829,6 +1829,10 @@ func (s *Server) setCaddySnippet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
 		Force   bool   `json:"force"`
+		// SkipValidate bypasses the adapt check entirely — the escape hatch for
+		// an operator who knows Caddy cannot answer and wants the snippet
+		// stored anyway.
+		SkipValidate bool `json:"skip_validate"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		jsonError(w, "invalid JSON", http.StatusBadRequest)
@@ -1870,14 +1874,23 @@ func (s *Server) setCaddySnippet(w http.ResponseWriter, r *http.Request) {
 	// Adapt-check before storing. A snippet that Caddy refuses would otherwise
 	// be persisted and re-sent on every later sync, freezing routing for the
 	// whole host until someone found it by hand.
-	if err := s.validateCaddyfileWith(name, raw); err != nil {
-		if !errors.Is(err, caddy.ErrValidateUnavailable) {
+	if !req.SkipValidate {
+		if err := s.validateCaddyfileWith(name, raw); err != nil {
+			if errors.Is(err, caddy.ErrValidateUnavailable) {
+				// Unreachable is not a pass. An unverifiable snippet that gets
+				// stored is exactly the silent failure this check exists to
+				// prevent — the next sync would push it blind.
+				jsonError(w, fmt.Sprintf(
+					"could not verify the snippet: %v — nothing was saved. "+
+						"Check that Caddy is running, or re-run with --no-validate to store it unchecked.", err),
+					http.StatusServiceUnavailable)
+				return
+			}
 			jsonError(w, fmt.Sprintf("snippet rejected, nothing was saved — %v", err), http.StatusBadRequest)
 			return
 		}
-		// Unreachable is not a verdict — store it and let the sync below
-		// report what actually happens.
-		log.Printf("warning: could not pre-check the snippet for %s: %v", name, err)
+	} else {
+		log.Printf("caddy snippet for %s stored without validation (--no-validate)", name)
 	}
 
 	if err := s.store.SetCaddySnippet(name, raw); err != nil {

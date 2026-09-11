@@ -3129,23 +3129,62 @@ func TestFailedSyncAlsoLandsInTheBody(t *testing.T) {
 	}
 }
 
-func TestSnippetStoredWhenCaddyIsUnreachable(t *testing.T) {
+func TestSnippetRefusedWhenCaddyIsUnreachable(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.validateErr = fmt.Errorf("%w: dial tcp: connection refused", caddy.ErrValidateUnavailable)
+
+	// Unverifiable is not verified: storing it would push an unchecked snippet
+	// on the next sync, which is the failure mode the check exists to prevent.
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "encode gzip", "force": true}, globalToken)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "--no-validate") {
+		t.Errorf("error should name the escape hatch: %s", rr.Body.String())
+	}
+	if stored, _ := st.GetCaddySnippet("web"); stored != "" {
+		t.Errorf("unverified snippet was stored: %q", stored)
+	}
+}
+
+func TestSnippetNoValidateSkipsTheCheck(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
 	mocks.caddy.validateErr = fmt.Errorf("%w: dial tcp: connection refused", caddy.ErrValidateUnavailable)
 	mocks.caddy.reloadErr = fmt.Errorf("connection refused")
 
-	// Caddy being down must not block the edit that fixes it — but the failed
-	// sync still has to be reported.
 	rr := do(t, srv, "PUT", "/projects/web/caddy",
-		map[string]interface{}{"content": "encode gzip", "force": true}, globalToken)
+		map[string]interface{}{"content": "encode gzip", "force": true, "skip_validate": true}, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if mocks.caddy.validateCalls != 0 {
+		t.Error("--no-validate still called Validate")
 	}
 	if stored, _ := st.GetCaddySnippet("web"); stored != "encode gzip" {
 		t.Errorf("snippet not stored: %q", stored)
 	}
+	// Skipping the pre-check does not silence the sync report.
 	if rr.Header().Get(server.RoutingErrorHeader) == "" {
 		t.Error("failed sync was not reported")
+	}
+}
+
+func TestSnippetNoValidateStillRefusesNothingElse(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.caddy.rejectContaining = "nonsense"
+
+	// --no-validate is an explicit "I know what I am doing": a snippet Caddy
+	// would reject is stored, and the sync reports the damage.
+	rr := do(t, srv, "PUT", "/projects/web/caddy",
+		map[string]interface{}{"content": "nonsense directive", "force": true, "skip_validate": true}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if stored, _ := st.GetCaddySnippet("web"); stored != "nonsense directive" {
+		t.Errorf("snippet not stored: %q", stored)
 	}
 }

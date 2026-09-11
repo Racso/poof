@@ -60,7 +60,10 @@ var caddyGetCmd = &cobra.Command{
 	},
 }
 
-var caddySetForce bool
+var (
+	caddySetForce      bool
+	caddySetNoValidate bool
+)
 
 var caddySetCmd = &cobra.Command{
 	Use:   "set <name>",
@@ -76,8 +79,9 @@ var caddySetCmd = &cobra.Command{
 		}
 
 		payload := map[string]interface{}{
-			"content": string(data),
-			"force":   caddySetForce,
+			"content":       string(data),
+			"force":         caddySetForce,
+			"skip_validate": caddySetNoValidate,
 		}
 
 		if err := apiPut("/projects/"+name+"/caddy", payload, nil); err != nil {
@@ -88,6 +92,9 @@ var caddySetCmd = &cobra.Command{
 		_ = os.Remove(path)
 
 		fmt.Printf("✓ caddy snippet updated for %q\n", name)
+		if caddySetNoValidate {
+			fmt.Println("  (stored without validation — Caddy never checked it)")
+		}
 	},
 }
 
@@ -122,4 +129,6 @@ func init() {
 	caddyCmd.AddCommand(caddyDeleteCmd)
 
 	caddySetCmd.Flags().BoolVar(&caddySetForce, "force", false, "skip concurrency check and push regardless")
+	caddySetCmd.Flags().BoolVar(&caddySetNoValidate, "no-validate", false,
+		"store the snippet without asking Caddy to check it first")
 }
