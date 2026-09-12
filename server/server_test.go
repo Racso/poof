@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -3187,4 +3188,123 @@ func TestSnippetNoValidateStillRefusesNothingElse(t *testing.T) {
 	if stored, _ := st.GetCaddySnippet("web"); stored != "nonsense directive" {
 		t.Errorf("snippet not stored: %q", stored)
 	}
+}
+
+// --- External upstreams as reconciled network members ---
+
+// An external project's upstream is the one attachment nothing else would ever
+// re-apply: Poof never deploys that container, so `docker compose down && up`
+// recreates it detached and the project 502s until someone notices. Recording
+// the attachment puts it under reconciliation like every other member.
+func TestExternalUpstreamSurvivesContainerRecreation(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "my-compose-app:3000"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	m, _ := st.GetNetworkMember("poof-app-ws", "my-compose-app", store.MemberContainer)
+	if m == nil {
+		members, _ := st.ListAllNetworkMembers()
+		t.Fatalf("upstream should be recorded as a member of poof-app-ws, got %v", members)
+	}
+
+	// Compose recreates the container: it exists, but on none of our networks.
+	mocks.container.connectCalls = nil
+	mocks.container.containerNets = map[string][]string{"my-compose-app": {"compose_default"}}
+
+	// Any mutation syncs routing, and every sync reconciles membership.
+	do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "old.rac.so", "to": "new.rac.so"}, globalToken)
+
+	if !containsLink(mocks.container.connectCalls, "poof-app-ws", "my-compose-app") {
+		t.Errorf("reconciliation should have re-attached the upstream, got %v", mocks.container.connectCalls)
+	}
+}
+
+// Projects registered before memberships were recorded must heal too — without
+// a schema migration, and without the operator re-running anything.
+func TestExternalMembershipBackfilled(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"legacy-app": true}
+	st.CreateProject(store.Project{
+		Name: "old", Domain: "old.rac.so", Port: 80, External: "legacy-app",
+	})
+
+	do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "a.rac.so", "to": "b.rac.so"}, globalToken)
+
+	if m, _ := st.GetNetworkMember("poof-app-old", "legacy-app", store.MemberContainer); m == nil {
+		t.Fatal("existing external project should have had its membership backfilled")
+	}
+	if !containsLink(mocks.container.connectCalls, "poof-app-old", "legacy-app") {
+		t.Errorf("backfilled member should be attached, got %v", mocks.container.connectCalls)
+	}
+}
+
+// The per-app network goes away with the project, so its members must go too:
+// a surviving row would have reconciliation recreate the network forever.
+func TestRemovingExternalProjectClearsMembership(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "my-compose-app:3000"}, globalToken)
+
+	rr := do(t, srv, "DELETE", "/projects/ws", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	if members, _ := st.ListNetworkMembers("poof-app-ws"); len(members) != 0 {
+		t.Errorf("memberships should be gone with the project, got %v", members)
+	}
+	// And a later sync must not resurrect the network from a stale row.
+	mocks.container.networksEnsured = nil
+	do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "a.rac.so", "to": "b.rac.so"}, globalToken)
+	if slices.Contains(mocks.container.networksEnsured, "poof-app-ws") {
+		t.Errorf("poof-app-ws should not be recreated after removal, got %v", mocks.container.networksEnsured)
+	}
+}
+
+// A project's own per-app network is a legitimate attachment point even though
+// it is not in the networks table: it is where a `poof spell proxy` target has
+// to live for Caddy — already attached there — to reach it.
+func TestAddMemberToProjectAppNetwork(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+
+	rr := do(t, srv, "POST", "/networks/poof-app-web/members",
+		map[string]interface{}{"members": []string{"my-compose-app"}}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if m, _ := st.GetNetworkMember("poof-app-web", "my-compose-app", store.MemberContainer); m == nil {
+		t.Fatal("attachment should have been recorded")
+	}
+	if !containsLink(mocks.container.connectCalls, "poof-app-web", "my-compose-app") {
+		t.Errorf("attachment should be applied immediately, got %v", mocks.container.connectCalls)
+	}
+}
+
+func TestAddMemberToAppNetworkOfStaticOrUnknownProject(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+	st.CreateProject(store.Project{Name: "docs", Domain: "docs.rac.so", Static: "static"})
+
+	for _, network := range []string{"poof-app-docs", "poof-app-ghost", "poof-app-"} {
+		rr := do(t, srv, "POST", "/networks/"+network+"/members",
+			map[string]interface{}{"members": []string{"my-compose-app"}}, globalToken)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d — %s", network, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func containsLink(calls []mockNetLink, network, container string) bool {
+	return slices.Contains(calls, mockNetLink{network, container})
 }

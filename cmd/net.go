@@ -24,9 +24,9 @@ Typical flow:
   poof net add backend api worker        # attach both projects at once
   poof net show backend                  # see what is attached
 
-Routing a domain to a container Poof does not manage:
-  poof net create edge-myapp
-  poof net add edge-myapp my-container --caddy`,
+Attaching Caddy (--caddy) makes members reachable from Caddy; it does not
+publish a route. To give a container Poof does not manage a domain, use
+'poof add <name> --external <container>[:<port>]', which does both.`,
 }
 
 var netCreateCmd = &cobra.Command{
@@ -138,13 +138,18 @@ A member is a Poof project or the name of a container Poof does not manage
 and re-applies it — so it survives the container being recreated, unlike a
 one-off 'docker network connect'.
 
-  --caddy   attach Caddy, so it can route to members of this network
+  --caddy   attach Caddy, so it can reach members of this network. This is
+            reachability only: it writes nothing into the Caddy config. To
+            give a container a domain, use 'poof add --external' instead.
   --poof    attach the Poof daemon, for members that call its API internally
+
+A project's own network, poof-app-<project>, is a valid network here: that is
+where an unmanaged container has to be for Caddy to reach it as a proxy target.
 
 Examples:
   poof net create backend --internal
   poof net add backend api worker          # two projects, one command
-  poof net add edge-indigo my-app --caddy  # unmanaged container + Caddy
+  poof net add poof-app-site my-container  # proxy target for 'site'
   poof net add admin my-tool --poof        # container that drives the Poof API`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {

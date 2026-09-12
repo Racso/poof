@@ -570,6 +570,13 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteNetworkMembersForProject(name); err != nil {
 		log.Printf("warning: removing network memberships for %s: %v", name, err)
 	}
+	// The per-app network is torn down with the project, so anything attached
+	// to it goes too — an external project's upstream, or a container invited
+	// in as a `poof spell proxy` target. Left behind, those rows would have
+	// reconciliation recreate the network on the very next sync.
+	if err := s.store.DeleteNetworkMembersForNetwork(appNetName(name)); err != nil {
+		log.Printf("warning: removing members of %s: %v", appNetName(name), err)
+	}
 
 	if err := s.store.DeleteProject(name); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -1615,7 +1622,12 @@ func (s *Server) addNetworkMembers(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if def == nil {
+	// A project's own per-app network is a valid attachment point even though
+	// it is not in the `networks` table: it is created at deploy time, and it
+	// is exactly where a hand-managed upstream must live for Caddy — already
+	// attached there — to reach it. Recording membership instead of leaving it
+	// to `docker network connect` is the whole point: it survives a recreate.
+	if def == nil && s.appNetworkOwner(network) == nil {
 		jsonError(w, fmt.Sprintf("network %q does not exist; create it with 'poof net create %s'", network, network), http.StatusBadRequest)
 		return
 	}

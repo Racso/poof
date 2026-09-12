@@ -85,3 +85,25 @@ func mustContain(t *testing.T, body, want string) {
 		t.Errorf("rendered snippet missing %q\n%s", want, body)
 	}
 }
+
+func TestRawContainerHost(t *testing.T) {
+	cases := []struct {
+		in   string
+		host string
+		ok   bool
+	}{
+		// A raw target names a container Poof does not route to yet.
+		{"indigo-app-racso:3000", "indigo-app-racso", true},
+		{"poof-dragonhub:80", "poof-dragonhub", true},
+		// A bare project name: Caddy is already on that project's network.
+		{"dragonhub-engine", "", false},
+		{":3000", "", false},
+		{"", "", false},
+	}
+	for _, c := range cases {
+		host, ok := rawContainerHost(c.in)
+		if host != c.host || ok != c.ok {
+			t.Errorf("rawContainerHost(%q) = (%q,%v), want (%q,%v)", c.in, host, ok, c.host, c.ok)
+		}
+	}
+}

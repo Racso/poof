@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 
 	"github.com/racso/poof/store"
 )
@@ -60,11 +61,57 @@ func (s *Server) ensureProjectNetwork(p *store.Project) (string, error) {
 		}
 	}
 	if p.IsExternal() {
+		// Record the attachment as desired state before making it. The
+		// container is not ours: nothing re-attaches it when Compose recreates
+		// it, so a bare ConnectNetwork here would be the one attachment in the
+		// system that never heals — and the project would 502 forever after a
+		// `compose down && up`. The row puts it under reconcileNetworkMembers.
+		if _, err := s.store.AddNetworkMember(net, p.External, store.MemberContainer); err != nil {
+			return "", fmt.Errorf("record %s as a member of %s: %w", p.External, net, err)
+		}
 		if err := s.container.ConnectNetwork(net, p.External); err != nil {
 			return "", fmt.Errorf("attach %s to %s: %w", p.External, net, err)
 		}
 	}
 	return net, nil
+}
+
+// appNetworkOwner returns the project a "poof-app-<name>" network belongs to,
+// or nil when the name is not a per-app network of an existing project.
+//
+// Per-app networks are created at deploy time and are deliberately absent from
+// the `networks` table, but they are still legitimate attachment points: they
+// are exactly where a hand-managed upstream has to live for Caddy to reach it.
+func (s *Server) appNetworkOwner(network string) *store.Project {
+	name, ok := strings.CutPrefix(network, "poof-app-")
+	if !ok || name == "" {
+		return nil
+	}
+	p, err := s.store.GetProject(name)
+	if err != nil || p == nil || p.IsStatic() {
+		// A static project has no container and no per-app network.
+		return nil
+	}
+	return p
+}
+
+// ensureExternalMemberships backfills the membership row for every external
+// project. New registrations record it in ensureProjectNetwork; this covers
+// projects registered before that existed, without a schema migration.
+func (s *Server) ensureExternalMemberships() {
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		log.Printf("warning: listing projects for external membership backfill: %v", err)
+		return
+	}
+	for _, p := range projects {
+		if !p.IsExternal() {
+			continue
+		}
+		if _, err := s.store.AddNetworkMember(appNetName(p.Name), p.External, store.MemberContainer); err != nil {
+			log.Printf("warning: recording %s as a member of %s: %v", p.External, appNetName(p.Name), err)
+		}
+	}
 }
 
 // reconcileNetworkMembers brings every Poof-managed network's actual Docker
@@ -82,6 +129,8 @@ func (s *Server) ensureProjectNetwork(p *store.Project) (string, error) {
 // a container someone wired up by hand is left alone. Best-effort by design —
 // a single unreachable member must not block the rest.
 func (s *Server) reconcileNetworkMembers() {
+	s.ensureExternalMemberships()
+
 	members, err := s.store.ListAllNetworkMembers()
 	if err != nil {
 		log.Printf("warning: listing network members: %v", err)

@@ -44,9 +44,10 @@ Source forms:
 
 Target forms:
   <project>            Poof project — container and port are looked up by name
-  <container>:<port>   any container on a network Caddy is attached to — for a
-                       hand-managed container, connect it to the source project's
-                       network first: docker network connect poof-app-<source> <container>
+  <container>:<port>   any container, including one Poof does not manage. It is
+                       attached to the source project's network for you, and the
+                       attachment is recorded — so it survives the container
+                       being recreated by Compose or by hand.
 
 By default, the source path is stripped before the request is forwarded
 (so the backend doesn't have to know it's mounted under /api). Pass
@@ -70,8 +71,12 @@ func runSpellProxy(cmd *cobra.Command, args []string) {
 	}
 
 	// Verify source project exists.
-	var proj map[string]interface{}
-	if err := apiGet("/projects/"+sourceProject, &proj); err != nil {
+	var source struct {
+		Project struct {
+			Static string `json:"static"`
+		} `json:"project"`
+	}
+	if err := apiGet("/projects/"+sourceProject, &source); err != nil {
 		fatal("source project: %v", err)
 	}
 
@@ -111,6 +116,48 @@ func runSpellProxy(cmd *cobra.Command, args []string) {
 		fmt.Printf("✓ %s%s now proxies to %s (strip_prefix=%t)\n",
 			sourceProject, sourcePath, targetUpstream, stripPrefix)
 	}
+
+	// A snippet only names an upstream; it does not make it reachable. When the
+	// target is a raw container, Caddy can dial it only if the two share a
+	// network — so attach it to the source project's net and record the
+	// attachment, which is what makes it survive a `compose down && up`.
+	if host, ok := rawContainerHost(args[1]); ok {
+		attachProxyTarget(sourceProject, host, source.Project.Static != "")
+	}
+}
+
+// rawContainerHost extracts the container name from a "<container>:<port>"
+// target. A bare project name returns false — Poof already keeps Caddy on that
+// project's network.
+func rawContainerHost(target string) (string, bool) {
+	host, _, found := strings.Cut(target, ":")
+	if !found || host == "" {
+		return "", false
+	}
+	return host, true
+}
+
+// attachProxyTarget records the target container as a member of the source
+// project's per-app network. Failures are reported but not fatal: the snippet
+// is already stored, and the operator can still wire the network by hand.
+func attachProxyTarget(sourceProject, host string, sourceIsStatic bool) {
+	if sourceIsStatic {
+		fmt.Printf("\n  Note: %s is a static project, so it has no network of its own.\n"+
+			"  Give Caddy a way to reach %s:\n"+
+			"    poof net create edge-%s\n"+
+			"    poof net add edge-%s %s --caddy\n",
+			sourceProject, host, sourceProject, sourceProject, host)
+		return
+	}
+	network := "poof-app-" + sourceProject
+	payload := map[string]interface{}{"members": []string{host}}
+	if err := apiPost("/networks/"+network+"/members", payload, nil); err != nil {
+		fmt.Printf("\n  Warning: could not attach %s to %s: %v\n"+
+			"  The route is stored but Caddy may not be able to reach the upstream.\n"+
+			"  Retry with: poof net add %s %s\n", host, network, err, network, host)
+		return
+	}
+	fmt.Printf("  attached %s to %s (recorded, so it survives a recreate)\n", host, network)
 }
 
 // parseSpellSource splits "<project>" or "<project>/<path>" into
