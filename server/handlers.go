@@ -138,15 +138,24 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	var result []projectStatus
 	for _, p := range projects {
-		running := false
-		if p.IsStatic() {
-			running = s.static.IsDeployed(s.cfg.DataDir, p.Name)
-		} else {
-			running = s.container.IsRunning(p.Name)
-		}
-		result = append(result, projectStatus{p, running})
+		result = append(result, projectStatus{p, s.projectRunning(p)})
 	}
 	jsonOK(w, result)
+}
+
+// projectRunning reports whether a project is up. An external project's
+// container is not Poof's: there is no state to report, and inspecting a
+// container named poof-<name> would only ever answer "stopped", which reads as
+// a broken project rather than as "not mine".
+func (s *Server) projectRunning(p store.Project) bool {
+	switch {
+	case p.IsExternal():
+		return false
+	case p.IsStatic():
+		return s.static.IsDeployed(s.cfg.DataDir, p.Name)
+	default:
+		return s.container.IsRunning(p.Name)
+	}
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
@@ -163,18 +172,11 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 
 	last, _ := s.store.LastDeployment(name)
 
-	running := false
-	if p.IsStatic() {
-		running = s.static.IsDeployed(s.cfg.DataDir, name)
-	} else {
-		running = s.container.IsRunning(name)
-	}
-
 	snippet, _ := s.store.GetCaddySnippet(name)
 
 	jsonOK(w, map[string]interface{}{
 		"project":           p,
-		"running":           running,
+		"running":           s.projectRunning(*p),
 		"deployment":        last,
 		"has_caddy_snippet": snippet != "",
 	})

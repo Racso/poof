@@ -20,8 +20,8 @@ var listCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("%-20s %-35s %-8s %s\n", "NAME", "DOMAIN", "STATUS", "REPO")
-		fmt.Printf("%-20s %-35s %-8s %s\n", "----", "------", "------", "----")
+		fmt.Printf("%-20s %-35s %-9s %s\n", "NAME", "DOMAIN", "STATUS", "REPO")
+		fmt.Printf("%-20s %-35s %-9s %s\n", "----", "------", "------", "----")
 		for _, p := range projects {
 			name, _ := p["name"].(string)
 			domain, _ := p["domain"].(string)
@@ -33,6 +33,12 @@ var listCmd = &cobra.Command{
 			if running {
 				status = "running"
 			}
+			// Poof does not manage an external project's container, so it has
+			// no running state to report — saying "stopped" was a guess, and
+			// always the wrong one.
+			if external, _ := p["external"].(string); external != "" {
+				status = "external"
+			}
 			if p["paused"] == true {
 				status = "paused"
 			}
@@ -40,7 +46,7 @@ var listCmd = &cobra.Command{
 			if folder != "" {
 				repoCol += " (/" + folder + ")"
 			}
-			fmt.Printf("%-20s %-35s %-8s %s\n", name, domain, status, repoCol)
+			fmt.Printf("%-20s %-35s %-9s %s\n", name, domain, status, repoCol)
 		}
 	},
 }

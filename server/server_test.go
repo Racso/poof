@@ -3347,3 +3347,24 @@ func TestRemovingExternalProjectDetachesUpstream(t *testing.T) {
 		t.Errorf("network should have been removed, got %v", mocks.container.networksRemoved)
 	}
 }
+
+// Poof does not own an external project's container, so it must not report a
+// running state for it — an inspect of poof-<name> only ever says "stopped",
+// which reads as a broken project rather than as "not mine".
+func TestExternalProjectReportsNoRunningState(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+	mocks.container.running = map[string]bool{"ws": true, "my-compose-app": true}
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "my-compose-app:3000"}, globalToken)
+
+	for _, path := range []string{"/projects", "/projects/ws"} {
+		rr := do(t, srv, "GET", path, nil, globalToken)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: %d — %s", path, rr.Code, rr.Body.String())
+		}
+		if strings.Contains(rr.Body.String(), `"running":true`) {
+			t.Errorf("%s should not claim the external project is running: %s", path, rr.Body.String())
+		}
+	}
+}

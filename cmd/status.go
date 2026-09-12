@@ -26,8 +26,31 @@ var statusCmd = &cobra.Command{
 		if running {
 			status = "running"
 		}
+		external, _ := p["external"].(string)
+		if external != "" {
+			status = "external"
+		}
 		if p["paused"] == true {
 			status = "paused"
+		}
+
+		// An external project has no image, repo, branch, CI or deployments:
+		// Poof owns its domain and nothing else. Print what exists, and stop.
+		if external != "" {
+			upstream := external
+			if port, _ := p["port"].(float64); port != 0 {
+				upstream = fmt.Sprintf("%s:%.0f", external, port)
+			}
+			fmt.Printf("name:      %s\n", p["name"])
+			fmt.Printf("status:    %s\n", status)
+			fmt.Printf("domain:    %s\n", p["domain"])
+			fmt.Printf("routes to: %s (container not managed by Poof)\n", upstream)
+			if hasCaddy, _ := result["has_caddy_snippet"].(bool); hasCaddy {
+				fmt.Printf("caddy:     custom\n")
+			} else {
+				fmt.Printf("caddy:     default\n")
+			}
+			return
 		}
 
 		fmt.Printf("name:    %s\n", p["name"])
