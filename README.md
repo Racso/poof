@@ -338,6 +338,8 @@ poof add ws --external my-compose-app:3000
 
 Poof! owns the domain, the TLS and the routing; the container stays yours. The attachment to the route's network is recorded like any other network member, so it is re-applied if you recreate the container (`docker compose down && up`) — the route doesn't rot. There's no image, repo, branch or CI, and `deploy` / `rollback` / `snapshot` refuse — there's nothing of Poof!'s to deploy. `poof remove` takes down the route and the network it created, and leaves the container running.
 
+`poof list` shows these with the status `external`, and `poof status` prints the domain and the upstream — Poof doesn't own the container, so it reports no running state for it.
+
 The port defaults to `80`. Registration fails if the container doesn't exist, so a typo is caught immediately rather than showing up later as a 502; a *stopped* container is fine.
 
 ## Networks
