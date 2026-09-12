@@ -3308,3 +3308,42 @@ func TestAddMemberToAppNetworkOfStaticOrUnknownProject(t *testing.T) {
 func containsLink(calls []mockNetLink, network, container string) bool {
 	return slices.Contains(calls, mockNetLink{network, container})
 }
+
+// Attaching to a per-app network is useless if you can't then see it.
+func TestShowMembersOfProjectAppNetwork(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	do(t, srv, "POST", "/networks/poof-app-web/members",
+		map[string]interface{}{"members": []string{"my-compose-app"}}, globalToken)
+
+	rr := do(t, srv, "GET", "/networks/poof-app-web/members", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "my-compose-app") {
+		t.Errorf("member should be listed, got %s", rr.Body.String())
+	}
+	if rr := do(t, srv, "GET", "/networks/poof-app-ghost/members", nil, globalToken); rr.Code != http.StatusNotFound {
+		t.Errorf("unknown app network should 404, got %d", rr.Code)
+	}
+}
+
+// Poof made the attachment, so Poof undoes it: an upstream left wired to a
+// deleted project's network would also keep that network undeletable.
+func TestRemovingExternalProjectDetachesUpstream(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{"my-compose-app": true}
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "ws", "external": "my-compose-app:3000"}, globalToken)
+
+	mocks.container.disconnectCalls = nil
+	do(t, srv, "DELETE", "/projects/ws", nil, globalToken)
+
+	if !slices.Contains(mocks.container.disconnectCalls, mockNetLink{"poof-app-ws", "my-compose-app"}) {
+		t.Errorf("upstream should be detached from the dead project's network, got %v", mocks.container.disconnectCalls)
+	}
+	if !slices.Contains(mocks.container.networksRemoved, "poof-app-ws") {
+		t.Errorf("network should have been removed, got %v", mocks.container.networksRemoved)
+	}
+}

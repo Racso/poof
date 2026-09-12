@@ -213,14 +213,32 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
-// teardownAppNetwork detaches Caddy from the project's per-app network and
-// removes it. Best-effort: a network kept alive by hand-attached containers
-// is left in place with a warning.
+// teardownAppNetwork detaches Caddy and every recorded member from the
+// project's per-app network and removes it. Best-effort: a network kept alive
+// by hand-attached containers is left in place with a warning.
+//
+// Recorded members are detached because Poof attached them: an external
+// project's upstream, or a container invited in as a proxy target. The
+// container itself is left running and otherwise untouched — but leaving it
+// wired to a dead project's network would also keep that network undeletable.
 func (s *Server) teardownAppNetwork(project string) {
 	net := appNetName(project)
 	if caddy := s.caddyContainerName(); caddy != "" {
 		if err := s.container.DisconnectNetwork(net, caddy); err != nil {
 			log.Printf("warning: detaching caddy from %s: %v", net, err)
+		}
+	}
+	members, err := s.store.ListNetworkMembers(net)
+	if err != nil {
+		log.Printf("warning: listing members of %s: %v", net, err)
+	}
+	for _, m := range members {
+		container, ok := s.resolveMemberContainer(m)
+		if !ok {
+			continue
+		}
+		if err := s.container.DisconnectNetwork(net, container); err != nil {
+			log.Printf("warning: detaching %s from %s: %v", container, net, err)
 		}
 	}
 	if err := s.container.RemoveNetwork(net); err != nil {

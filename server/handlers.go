@@ -1761,7 +1761,10 @@ func (s *Server) listNetworkMembers(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if def == nil {
+	// Per-app networks are attachment points but are not in the `networks`
+	// table, so inspecting one has to work too — otherwise the attachment
+	// `poof net add poof-app-x ...` just made would be invisible.
+	if def == nil && s.appNetworkOwner(network) == nil {
 		jsonError(w, "network not found", http.StatusNotFound)
 		return
 	}
