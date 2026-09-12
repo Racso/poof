@@ -336,7 +336,7 @@ poof add ws --external my-compose-app:3000
 # live at ws.yourdomain.com, no deploys involved
 ```
 
-Poof! owns the domain, the TLS and the routing; the container stays yours. There's no image, repo, branch or CI, and `deploy` / `rollback` / `snapshot` refuse — there's nothing of Poof!'s to deploy. `poof remove` takes down the route and the network it created, and leaves the container running.
+Poof! owns the domain, the TLS and the routing; the container stays yours. The attachment to the route's network is recorded like any other network member, so it is re-applied if you recreate the container (`docker compose down && up`) — the route doesn't rot. There's no image, repo, branch or CI, and `deploy` / `rollback` / `snapshot` refuse — there's nothing of Poof!'s to deploy. `poof remove` takes down the route and the network it created, and leaves the container running.
 
 The port defaults to `80`. Registration fails if the container doesn't exist, so a typo is caught immediately rather than showing up later as a 502; a *stopped* container is fine.
 
@@ -347,24 +347,26 @@ Every project's container runs on its **own** Docker network (`poof-app-<name>`)
 ```sh
 poof net create backend --internal   # private network, no external connectivity
 poof net ls
-poof net add api backend             # attach project 'api'
-poof net add worker backend          # attach project 'worker'
+poof net add backend api worker      # attach both projects
 poof deploy api && poof deploy worker # redeploy to apply
 ```
 
 `poof-net` itself is off limits: it carries Caddy and the Poof! daemon and nothing else, and Poof! refuses to add members to it. Every project gets its own network automatically; if you want several things on one shared network, create it and attach what it needs.
 
-A network can hold more than projects. `--caddy` attaches the Caddy container (so it can route to members), `--poof` attaches the Poof! daemon (for members that call its API internally), and any name Poof! doesn't recognise as a project is treated as a container you manage yourself — from Compose, or started by hand:
+A network can hold more than projects. `--caddy` attaches the Caddy container, `--poof` attaches the Poof! daemon (for members that call its API internally), and any name Poof! doesn't recognise as a project is treated as a container you manage yourself — from Compose, or started by hand:
 
 ```sh
-# Route a domain to a container Poof! doesn't manage
-poof net create edge-myapp
-poof net add edge-myapp my-compose-container --caddy
+poof net create shared
+poof net add shared api my-compose-container  # a project and an unmanaged container
 
-poof net show edge-myapp     # what's attached
+poof net show shared         # what's attached
 poof net list api            # which networks a project is on
-poof net remove edge-myapp my-compose-container
+poof net remove shared my-compose-container
 ```
+
+> **`--caddy` is reachability, not routing.** It puts Caddy on the network so it *can* dial the members; it writes nothing into the Caddy config, so no domain points anywhere until something publishes a route. To give a container Poof! doesn't manage a domain, use [`poof add --external`](#external-projects) — that does both, in one command. `--caddy` is for the case where you publish the route yourself with `poof caddy set`.
+
+A project's own network (`poof-app-<project>`) is a valid target too: attaching an unmanaged container there is how it becomes reachable as a `poof spell proxy` upstream. `poof spell proxy` does it for you when the target is a `<container>:<port>`.
 
 Poof! records every attachment as desired state and **re-applies it**, so membership survives containers being recreated — unlike a one-off `docker network connect`, which is lost the moment that happens. Attaching takes effect immediately; no redeploy needed.
 
