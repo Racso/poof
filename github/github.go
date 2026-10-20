@@ -88,8 +88,23 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           IMAGE=POOF_IMAGE_BASE:${{ github.sha }}
-          docker build -t $IMAGE --label co.racso.poof.managed=true POOF_BUILD_ARGS
+          TAGS=(-t "$IMAGE")
+          LABELS=(--label co.racso.poof.managed=true
+                  --label "org.opencontainers.image.revision=${{ github.sha }}"
+                  --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}")
+          # Branch builds only (not PRs or git tags): an immutable branch label, and a
+          # moving :<branch> tag (docker/metadata-action convention) with characters
+          # invalid in a tag replaced by '-', capped at the 128-char tag limit.
+          if [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            BRANCH_TAG="${BRANCH//[^A-Za-z0-9_.-]/-}"
+            BRANCH_IMAGE=POOF_IMAGE_BASE:${BRANCH_TAG:0:128}
+            TAGS+=(-t "$BRANCH_IMAGE")
+            LABELS+=(--label "co.racso.poof.branch=$BRANCH")
+          fi
+          docker build "${TAGS[@]}" "${LABELS[@]}" POOF_BUILD_ARGS
           docker push $IMAGE
+          if [[ -n "${BRANCH_IMAGE:-}" ]]; then docker push "$BRANCH_IMAGE"; fi
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Deploy via Poof!

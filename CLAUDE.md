@@ -159,6 +159,16 @@ When a GitHub PAT is configured, `poof add` / `poof refresh`:
 2. Commits `.github/workflows/poof.yml` (template in `defaults/`) **to the project's configured branch** — push triggers only fire for workflow files present on the pushed branch, so committing to the default branch would leave non-default-branch projects (e.g. clones) without CI. If the branch doesn't exist on GitHub yet, the commit fails with a hint to push the branch and run `poof refresh`.
 3. The workflow builds + pushes to GHCR on `push` to the configured branch (and only on changes to `--folder` if set), then `POST`s to the server's deploy endpoint.
 
+Image tags and labels (container workflow, `github/github.go`):
+- `:<full commit sha>`: immutable; the only tag Poof deploys and records.
+- `:<branch>`: moving; the `docker/metadata-action` convention, with characters invalid in a tag replaced by `-` (`feature/x` → `feature-x`). For pull-based consumers that follow a branch instead of being told an image.
+- `org.opencontainers.image.revision=<sha>`: maps a digest (e.g. the one behind `:<branch>`) to its commit in one config read, on any registry, without resolving every sha tag.
+- `org.opencontainers.image.source=<repo URL>`: GHCR links the package to the repo from it.
+- `co.racso.poof.branch=<raw branch name>`: immutable record of the branch built (the tag moves; this doesn't).
+- `co.racso.poof.managed=true`, as before.
+
+The branch tag and label exist only for branch builds (`GITHUB_REF` under `refs/heads/`). A run from a PR or a git tag gets neither: an absent label means "no branch", an empty one would read as a value. Existing repos pick all of this up on `poof refresh`.
+
 CI modes: `managed` (default; standalone push-triggered workflow) or `callable` (`on: workflow_call` reusable workflow invoked from a user-owned outer workflow that wraps tests/lint/matrix builds).
 
 ## Garbage collection
