@@ -3368,3 +3368,30 @@ func TestExternalProjectReportsNoRunningState(t *testing.T) {
 		}
 	}
 }
+
+// `--ci no` on a repo's last CI project deletes its deploy token; turning CI
+// back on must mint a new one, not publish an empty POOF_TOKEN.
+func TestUpdateProjectReenablingCIMintsRepoToken(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "gh-pat-xxx")
+
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80, CI: false,
+	})
+
+	rr := do(t, srv, "PATCH", "/projects/web",
+		map[string]interface{}{"ci": true, "ci_mode": "callable"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	tok, _ := st.GetRepoToken("racso/web")
+	if tok == "" {
+		t.Fatal("expected a repo token to be minted")
+	}
+	if len(mocks.repo.refreshCalls) != 1 || mocks.repo.refreshCalls[0].RepoToken != tok {
+		t.Fatalf("expected RefreshProjectCI with the minted token, got %+v", mocks.repo.refreshCalls)
+	}
+}

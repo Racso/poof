@@ -506,6 +506,13 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 			repoName = p.Repo
 		}
 		repoToken, _ := s.store.GetRepoToken(p.Repo)
+		if p.CI && repoToken == "" {
+			// Turning CI back on after `--ci no` removed the repo's last
+			// CI project: without this, an empty POOF_TOKEN is written.
+			if repoToken, err = s.ensureRepoToken(p.Repo); err != nil {
+				log.Printf("warning: minting deploy token for %s failed: %v", p.Repo, err)
+			}
+		}
 		ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
 		if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
 			log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
@@ -779,8 +786,11 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 
 	repoToken, _ := s.store.GetRepoToken(p.Repo)
 	if p.CI && repoToken == "" {
-		jsonError(w, "no deploy token found for repo "+p.Repo, http.StatusPreconditionFailed)
-		return
+		var err error
+		if repoToken, err = s.ensureRepoToken(p.Repo); err != nil {
+			jsonError(w, "failed to mint deploy token for repo "+p.Repo+": "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	client := s.ghFactory(s.settingGitHubToken())
@@ -2048,6 +2058,22 @@ func (s *Server) buildCaddyfile(overrides map[string]string, forceRoute string) 
 }
 
 // --- Helpers ---
+
+// ensureRepoToken returns the repo's deploy token, minting and storing one if
+// it has none.
+func (s *Server) ensureRepoToken(repo string) (string, error) {
+	token, err := s.store.GetRepoToken(repo)
+	if err != nil || token != "" {
+		return token, err
+	}
+	if token, err = generateToken(); err != nil {
+		return "", err
+	}
+	if err := s.store.SetRepoToken(repo, token); err != nil {
+		return "", err
+	}
+	return token, nil
+}
 
 func generateToken() (string, error) {
 	b := make([]byte, 32)
