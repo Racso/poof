@@ -1955,8 +1955,13 @@ func (s *Server) deleteCaddySnippet(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
-// syncCaddy regenerates the full Caddyfile from the current database state and
-// pushes it to the Caddy admin API for a zero-downtime reload.
+// syncCaddy regenerates the full Caddyfile from the current database state,
+// writes it to the file Caddy starts from, and pushes it to the admin API for a
+// zero-downtime reload. Live config and file never diverge, so neither a Caddy
+// restart nor a manual `caddy reload` can drop the routes.
+//
+// It validates before writing: a rejected config on disk would not just fail
+// this reload, it would keep Caddy from starting on its next restart.
 func (s *Server) syncCaddy() error {
 	// Network membership is desired state; re-apply it here because this runs
 	// on every mutation. Caddy and the daemon have no deploy of their own, so
@@ -1966,6 +1971,12 @@ func (s *Server) syncCaddy() error {
 	caddyfile, err := s.buildCaddyfile(nil, "")
 	if err != nil {
 		return err
+	}
+	if err := s.caddy.Validate(s.cfg.CaddyAdminURL, caddyfile); err != nil {
+		return err
+	}
+	if err := caddy.WriteFile(s.cfg.CaddyfilePath(), caddyfile); err != nil {
+		return fmt.Errorf("writing %s: %w", s.cfg.CaddyfilePath(), err)
 	}
 	return s.caddy.Reload(s.cfg.CaddyAdminURL, caddyfile)
 }

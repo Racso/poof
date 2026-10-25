@@ -25,6 +25,19 @@ func (c *ServerConfig) DBPath() string {
 	return filepath.Join(c.DataDir, "poof.db")
 }
 
+func (c *ServerConfig) CaddyfilePath() string {
+	return CaddyfilePath(c.DataDir)
+}
+
+// CaddyfilePath is the file Caddy starts from and Poof rewrites on every
+// routing sync, so a Caddy restart or a manual `caddy reload` comes back to the
+// routes Poof last applied. It sits in a directory of its own because Caddy
+// must mount the directory, not the file: Poof replaces the file by rename, and
+// a single-file bind mount keeps pointing at the replaced inode.
+func CaddyfilePath(dataDir string) string {
+	return filepath.Join(dataDir, "caddy", "Caddyfile")
+}
+
 // PublicHost returns just the host[:port] portion of PublicURL.
 func (c *ServerConfig) PublicHost() string {
 	u, err := url.Parse(c.PublicURL)

@@ -1,6 +1,8 @@
 package caddy
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,5 +62,23 @@ func TestPausedProjectServes503AndHidesRouting(t *testing.T) {
 	}
 	if strings.Contains(out, "reverse_proxy") {
 		t.Errorf("paused project must not expose reverse_proxy or snippet routing, got:\n%s", out)
+	}
+}
+
+func TestWriteFileReplacesTheCaddyfileAndLeavesNoTempFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caddy", "Caddyfile")
+	if err := WriteFile(path, "first"); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	if err := WriteFile(path, "second"); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil || string(written) != "second" {
+		t.Fatalf("expected the second config, got %q (%v)", written, err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if len(entries) != 1 {
+		t.Errorf("expected only the Caddyfile in its directory, found %d entries", len(entries))
 	}
 }

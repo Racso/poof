@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/racso/poof/store"
@@ -132,6 +134,35 @@ func adaptMessage(body []byte, status string) string {
 		return t
 	}
 	return status
+}
+
+// WriteFile replaces the Caddyfile at path atomically: Caddy may read it at any
+// moment (a restart), and a torn file would keep it from starting at all.
+func WriteFile(path, caddyfile string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(dir, ".Caddyfile-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(temp.Name()) }()
+	if err := writeAndClose(temp, caddyfile); err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), path)
+}
+
+func writeAndClose(file *os.File, content string) error {
+	_, writeErr := file.WriteString(content)
+	if writeErr == nil {
+		writeErr = file.Chmod(0644)
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	return errors.Join(writeErr, file.Close())
 }
 
 // Reload posts the generated Caddyfile to the Caddy admin API for a

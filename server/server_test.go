@@ -290,8 +290,7 @@ type mockCaddySyncer struct {
 	// rejectContaining makes Validate fail for any config containing this
 	// string, standing in for Caddy's /adapt verdict.
 	rejectContaining string
-	validateCalls    int
-	lastValidated    string
+	validated        []string
 	validateErr      error
 }
 
@@ -302,8 +301,7 @@ func (m *mockCaddySyncer) Reload(_, caddyfile string) error {
 }
 
 func (m *mockCaddySyncer) Validate(_, caddyfile string) error {
-	m.validateCalls++
-	m.lastValidated = caddyfile
+	m.validated = append(m.validated, caddyfile)
 	if m.validateErr != nil {
 		return m.validateErr
 	}
@@ -320,6 +318,8 @@ type testMocks struct {
 	container *mockContainerManager
 	static    *mockStaticDeployer
 	caddy     *mockCaddySyncer
+	// The Caddyfile the server persists on every sync.
+	caddyfilePath string
 }
 
 // --- Test helpers ---
@@ -340,6 +340,7 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 	t.Cleanup(func() { st.Close() })
 
 	cfg := &config.ServerConfig{
+		DataDir:       t.TempDir(),
 		APIPort:       9000,
 		PublicURL:     "https://poof.rac.so",
 		Token:         "global-test-token",
@@ -352,6 +353,7 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 		static:    &mockStaticDeployer{},
 		caddy:     &mockCaddySyncer{},
 	}
+	mocks.caddyfilePath = cfg.CaddyfilePath()
 	srv := server.New(cfg, st, func(token string) server.RepoManager {
 		return mocks.repo
 	}, mocks.container, mocks.static, mocks.caddy)
@@ -3055,7 +3057,7 @@ func TestSnippetRejectedByCaddyIsNotStored(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for a snippet Caddy refuses, got %d — %s", rr.Code, rr.Body.String())
 	}
-	if mocks.caddy.validateCalls == 0 {
+	if len(mocks.caddy.validated) == 0 {
 		t.Error("snippet was never adapt-checked")
 	}
 
@@ -3080,8 +3082,47 @@ func TestValidSnippetIsStoredAndSynced(t *testing.T) {
 		t.Errorf("snippet not stored: %q", stored)
 	}
 	// The candidate config must contain the proposed snippet, not the old one.
-	if !strings.Contains(mocks.caddy.lastValidated, "encode gzip") {
+	if len(mocks.caddy.validated) == 0 || !strings.Contains(mocks.caddy.validated[0], "encode gzip") {
 		t.Error("validated config did not include the candidate snippet")
+	}
+}
+
+// --- The Caddyfile on disk is the config Caddy runs ---
+
+func TestSyncPersistsTheConfigItApplies(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+
+	rr := do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "old.rac.so", "to": "new.rac.so"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	written, err := os.ReadFile(mocks.caddyfilePath)
+	if err != nil {
+		t.Fatalf("sync did not persist the Caddyfile: %v", err)
+	}
+	if string(written) != mocks.caddy.lastCaddyfile {
+		t.Error("the persisted Caddyfile differs from the one pushed to Caddy")
+	}
+	if !strings.Contains(string(written), "old.rac.so") {
+		t.Error("the persisted Caddyfile is missing the new redirect")
+	}
+}
+
+func TestRejectedConfigIsNeitherPersistedNorApplied(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	mocks.caddy.rejectContaining = "nonsense"
+
+	rr := do(t, srv, "POST", "/redirects",
+		map[string]string{"from": "nonsense.rac.so", "to": "new.rac.so"}, globalToken)
+	if rr.Header().Get(server.RoutingErrorHeader) == "" {
+		t.Error("a rejected sync was not reported")
+	}
+	if _, err := os.Stat(mocks.caddyfilePath); !os.IsNotExist(err) {
+		t.Errorf("a rejected config reached the file Caddy starts from (stat: %v)", err)
+	}
+	if mocks.caddy.reloadCalls != 0 {
+		t.Error("a rejected config was pushed to Caddy")
 	}
 }
 
@@ -3161,8 +3202,9 @@ func TestSnippetNoValidateSkipsTheCheck(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d — %s", rr.Code, rr.Body.String())
 	}
-	if mocks.caddy.validateCalls != 0 {
-		t.Error("--no-validate still called Validate")
+	// The sync validates its own config; the snippet pre-check must not add a second call.
+	if len(mocks.caddy.validated) != 1 {
+		t.Errorf("--no-validate still ran the snippet pre-check: %d validations", len(mocks.caddy.validated))
 	}
 	if stored, _ := st.GetCaddySnippet("web"); stored != "encode gzip" {
 		t.Errorf("snippet not stored: %q", stored)

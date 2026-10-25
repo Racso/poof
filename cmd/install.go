@@ -9,8 +9,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/racso/poof/config"
 	"github.com/spf13/cobra"
 )
+
+// The daemon's data directory, mounted at the same path in the Poof container
+// so paths it writes are valid on the host and in Caddy's mounts.
+const poofDataDir = "/var/lib/poof"
+
+// bootstrapCaddyfile is what Caddy serves until the daemon's first sync
+// replaces it with the full generated config.
+const bootstrapCaddyfile = "{\n\tadmin 0.0.0.0:2019\n}\nimport /etc/caddy/conf.d/*.Caddyfile\n"
 
 var installCmd = &cobra.Command{
 	Use:   "install",
@@ -104,11 +113,17 @@ func runInstall(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	caddyfilePath := config.CaddyfilePath(poofDataDir)
+	if err := ensureCaddyfile(caddyfilePath); err != nil {
+		printFail(fmt.Sprintf("Failed to write %s: %v", caddyfilePath, err))
+		os.Exit(1)
+	}
+
 	// ── 3. Existing Caddy container ──────────────────────────────────
 	if skipCaddySetup {
 		printStep(fmt.Sprintf("Found existing container %q on ports 80/443", caddyContainer))
 
-		issues := validateCaddyContainer(caddyContainer)
+		issues := validateCaddyContainer(caddyContainer, caddyfilePath)
 		if len(issues) > 0 {
 			printFail(fmt.Sprintf("Container %q needs changes to work with Poof!", caddyContainer))
 			fmt.Fprintln(os.Stderr, "")
@@ -156,17 +171,12 @@ func runInstall(cmd *cobra.Command, args []string) {
 	if !skipCaddySetup {
 		printStep("Starting Caddy")
 
-		// Create a minimal Caddyfile with admin API enabled.
-		caddyfileDir := "/etc/caddy/conf.d"
-		os.MkdirAll(caddyfileDir, 0755)
-
-		caddyfilePath := "/opt/caddy/Caddyfile"
-		os.MkdirAll(filepath.Dir(caddyfilePath), 0755)
-		caddyfileContent := "{\n\tadmin 0.0.0.0:2019\n}\nimport /etc/caddy/conf.d/*.Caddyfile\n"
-		if err := os.WriteFile(caddyfilePath, []byte(caddyfileContent), 0644); err != nil {
-			printFail(fmt.Sprintf("Failed to write Caddyfile: %v", err))
+		snippetDir := "/etc/caddy/conf.d"
+		if err := os.MkdirAll(snippetDir, 0755); err != nil {
+			printFail(fmt.Sprintf("Failed to create %s: %v", snippetDir, err))
 			os.Exit(1)
 		}
+		caddyfileDir := filepath.Dir(caddyfilePath)
 
 		// Create static dir for Poof.
 		os.MkdirAll("/var/lib/poof/static", 0755)
@@ -178,10 +188,11 @@ func runInstall(cmd *cobra.Command, args []string) {
 			"-p", "80:80",
 			"-p", "443:443",
 			"-v", "caddy_data:/data",
-			"-v", caddyfilePath+":/etc/caddy/Caddyfile:ro",
 			"-v", caddyfileDir+":"+caddyfileDir+":ro",
+			"-v", snippetDir+":"+snippetDir+":ro",
 			"-v", "/var/lib/poof/static:/var/lib/poof/static:ro",
 			"caddy:alpine",
+			"caddy", "run", "--config", caddyfilePath, "--adapter", "caddyfile",
 		).CombinedOutput()
 		if err != nil {
 			printFail("Failed to start Caddy container")
@@ -282,8 +293,6 @@ func runInstall(cmd *cobra.Command, args []string) {
 	// ── 9. Start Poof! container ─────────────────────────────────────
 	printStep("Starting Poof!")
 
-	os.MkdirAll("/var/lib/poof", 0755)
-
 	// Remove existing container if stopped.
 	exec.Command("docker", "rm", "-f", "poof").Run()
 
@@ -293,7 +302,7 @@ func runInstall(cmd *cobra.Command, args []string) {
 		"--network", "poof-net",
 		"-p", "127.0.0.1:9000:9000",
 		"-v", "/etc/poof/poof.toml:/etc/poof/poof.toml:ro",
-		"-v", "/var/lib/poof:/var/lib/poof",
+		"-v", poofDataDir+":"+poofDataDir,
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"poof:latest",
 	).CombinedOutput()
@@ -421,7 +430,7 @@ func stopCommand(proc string) string {
 
 // validateCaddyContainer checks whether an existing Caddy container is usable
 // by Poof and returns a list of issues (empty = all good).
-func validateCaddyContainer(name string) []string {
+func validateCaddyContainer(name, caddyfilePath string) []string {
 	var issues []string
 
 	// Check if it's on poof-net.
@@ -455,6 +464,17 @@ func validateCaddyContainer(name string) []string {
 	if !strings.Contains(string(mountOut), "/var/lib/poof/static") {
 		issues = append(issues, "Missing volume mount: -v /var/lib/poof/static:/var/lib/poof/static:ro")
 	}
+	caddyfileDir := filepath.Dir(caddyfilePath)
+	if !strings.Contains(string(mountOut), caddyfileDir) {
+		issues = append(issues, fmt.Sprintf("Missing volume mount: -v %s:%s:ro", caddyfileDir, caddyfileDir))
+	}
+
+	// Poof keeps the full config in its Caddyfile; a Caddy that starts from any
+	// other file drops every route on restart.
+	argsOut, _ := exec.Command("docker", "inspect", "--format", `{{join .Args " "}}`, name).Output()
+	if !strings.Contains(string(argsOut), "--config "+caddyfilePath) {
+		issues = append(issues, fmt.Sprintf("Caddy must start from Poof's Caddyfile. Run it with: caddy run --config %s --adapter caddyfile", caddyfilePath))
+	}
 
 	// Check admin API is reachable.
 	adminOut, err := exec.Command(
@@ -465,6 +485,18 @@ func validateCaddyContainer(name string) []string {
 	}
 
 	return issues
+}
+
+// ensureCaddyfile writes the bootstrap config only when no Caddyfile exists:
+// on a reinstall the file already holds the routes the daemon last applied.
+func ensureCaddyfile(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(bootstrapCaddyfile), 0644)
 }
 
 // networkExists checks if a Docker network exists.
