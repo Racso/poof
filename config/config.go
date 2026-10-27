@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -36,6 +37,25 @@ func (c *ServerConfig) CaddyfilePath() string {
 // a single-file bind mount keeps pointing at the replaced inode.
 func CaddyfilePath(dataDir string) string {
 	return filepath.Join(dataDir, "caddy", "Caddyfile")
+}
+
+// CaddyConfigDir is where Poof's Caddy directory is mounted inside the Caddy
+// container. The image's default command and the documented
+// `docker exec -w /etc/caddy <container> caddy reload` both read
+// CaddyConfigDir/Caddyfile; anywhere else, that file is the image's welcome
+// page, and reloading it drops every route.
+const CaddyConfigDir = "/etc/caddy"
+
+// SnippetMountPoint is the empty directory Poof keeps beside its Caddyfile so
+// that a snippet directory nested under CaddyConfigDir (the default,
+// /etc/caddy/conf.d) can be mounted: Docker cannot create a mount point inside
+// a read-only mount. ok is false when the snippet directory is elsewhere.
+func SnippetMountPoint(dataDir, staticDir string) (path string, ok bool) {
+	relative, err := filepath.Rel(CaddyConfigDir, staticDir)
+	if err != nil || relative == "." || strings.HasPrefix(relative, "..") {
+		return "", false
+	}
+	return filepath.Join(filepath.Dir(CaddyfilePath(dataDir)), relative), true
 }
 
 // PublicHost returns just the host[:port] portion of PublicURL.

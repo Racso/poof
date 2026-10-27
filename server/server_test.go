@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -340,11 +341,12 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 	t.Cleanup(func() { st.Close() })
 
 	cfg := &config.ServerConfig{
-		DataDir:       t.TempDir(),
-		APIPort:       9000,
-		PublicURL:     "https://poof.rac.so",
-		Token:         "global-test-token",
-		CaddyAdminURL: "http://caddy-proxy:2019",
+		DataDir:        t.TempDir(),
+		CaddyStaticDir: "/etc/caddy/conf.d",
+		APIPort:        9000,
+		PublicURL:      "https://poof.rac.so",
+		Token:          "global-test-token",
+		CaddyAdminURL:  "http://caddy-proxy:2019",
 	}
 
 	mocks := &testMocks{
@@ -3106,6 +3108,11 @@ func TestSyncPersistsTheConfigItApplies(t *testing.T) {
 	}
 	if !strings.Contains(string(written), "old.rac.so") {
 		t.Error("the persisted Caddyfile is missing the new redirect")
+	}
+	// Caddy mounts this directory at /etc/caddy, read-only, with the snippet
+	// directory nested inside it: the mount point must already exist.
+	if info, err := os.Stat(filepath.Join(filepath.Dir(mocks.caddyfilePath), "conf.d")); err != nil || !info.IsDir() {
+		t.Errorf("the snippet mount point was not created (%v)", err)
 	}
 }
 

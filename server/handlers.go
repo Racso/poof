@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/racso/poof/caddy"
+	"github.com/racso/poof/config"
 	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/store"
 )
@@ -1974,6 +1975,11 @@ func (s *Server) syncCaddy() error {
 	}
 	if err := s.caddy.Validate(s.cfg.CaddyAdminURL, caddyfile); err != nil {
 		return err
+	}
+	if mountPoint, ok := config.SnippetMountPoint(s.cfg.DataDir, s.cfg.CaddyStaticDir); ok {
+		if err := os.MkdirAll(mountPoint, 0755); err != nil {
+			return fmt.Errorf("creating snippet mount point %s: %w", mountPoint, err)
+		}
 	}
 	if err := caddy.WriteFile(s.cfg.CaddyfilePath(), caddyfile); err != nil {
 		return fmt.Errorf("writing %s: %w", s.cfg.CaddyfilePath(), err)
