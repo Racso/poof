@@ -17,6 +17,11 @@ import (
 // pausedResponse is served on every route of a paused project.
 const pausedResponse = `respond "This site is temporarily unavailable." 503`
 
+// hiddenDotfiles answers 404 for any path with a segment starting with a dot
+// (/.github/..., /a/.env), on every static site. /.well-known/ is the one dot
+// path that is part of the web (app links, security.txt), so it stays served.
+const hiddenDotfiles = "@poofDotfiles {\n\t\tpath_regexp /\\.\n\t\tnot path /.well-known/*\n\t}\n\thandle @poofDotfiles {\n\t\trespond 404\n\t}"
+
 // GenerateCaddyfile builds a complete Caddyfile from the given projects and
 // redirects. Only pass projects that are currently deployed (container running
 // or static files present) — plus paused projects, which get a 503 route
@@ -68,6 +73,13 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 		if p.IsStatic() {
 			staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
 			fmt.Fprintf(&b, "%s {\n\troot * %s\n", p.Domain, staticRoot)
+			// A static site is a repo checkout, so it carries .github/, a
+			// .gitignore, maybe a stray .env: none of it is part of the site.
+			// A handle block, not a top-level respond: Caddy orders handle
+			// before respond, so the SPA fallback and snippet handles would
+			// otherwise serve these first. Emitted before the snippet, it is
+			// the first handle and wins.
+			fmt.Fprintf(&b, "\t%s\n", hiddenDotfiles)
 			if p.Static == "spa" {
 				// The SPA fallback lives in a catch-all handle placed after the
 				// custom snippet: a top-level try_files would run in Caddy's

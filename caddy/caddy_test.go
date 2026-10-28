@@ -82,3 +82,31 @@ func TestWriteFileReplacesTheCaddyfileAndLeavesNoTempFiles(t *testing.T) {
 		t.Errorf("expected only the Caddyfile in its directory, found %d entries", len(entries))
 	}
 }
+
+func TestStaticSitesHideDotfilesBeforeAnyOtherHandle(t *testing.T) {
+	for _, mode := range []string{"static", "spa"} {
+		out := generate([]store.Project{
+			{Name: "site", Domain: "site.rac.so", Static: mode},
+		}, map[string]string{"site": "handle /api/* {\n\treverse_proxy backend:3000\n}"})
+
+		hide := strings.Index(out, "\t@poofDotfiles {\n\t\tpath_regexp /\\.\n\t\tnot path /.well-known/*\n\t}\n\thandle @poofDotfiles {\n\t\trespond 404\n\t}\n")
+		if hide == -1 {
+			t.Fatalf("%s: expected the dotfile 404 handle, got:\n%s", mode, out)
+		}
+		if api := strings.Index(out, "handle /api/*"); api < hide {
+			t.Errorf("%s: dotfile handle must precede snippet handles, got:\n%s", mode, out)
+		}
+		if spa := strings.Index(out, "try_files {path} /index.html"); spa != -1 && spa < hide {
+			t.Errorf("%s: dotfile handle must precede the SPA fallback, got:\n%s", mode, out)
+		}
+	}
+}
+
+func TestContainerProjectsDoNotHideDotfiles(t *testing.T) {
+	out := generate([]store.Project{
+		{Name: "app", Domain: "app.rac.so", Port: 8080},
+	}, nil)
+	if strings.Contains(out, "@poofDotfiles") {
+		t.Errorf("a container project owns its own paths (e.g. /.well-known), got:\n%s", out)
+	}
+}

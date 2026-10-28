@@ -265,6 +265,8 @@ poof add mysite --static --spa --build      # build first via Dockerfile, then s
 
 **`--static`** turns off the container path. On each deploy, Poof! fetches the repo at the configured branch, extracts the files, and points Caddy at the new directory. Old versions are kept on disk subject to the GC policy.
 
+Paths with a segment starting with a dot (`/.github/…`, `/.gitignore`, `/x/.env`) answer **404** on every static site, since the files come from a repo checkout; `/.well-known/` is exempt and served normally.
+
 **`--spa`** adds a `try_files {path} /index.html` fallback so client-side routes fall back to `index.html`. Required for React/Vue/Svelte SPAs. The fallback is generated inside a catch-all `handle` block placed after your custom Caddy snippet, so `handle` routes in the snippet (an `/api/*` reverse_proxy, a WebSocket route) take precedence and compose cleanly with `--spa`.
 
 **`--build`** runs a Dockerfile in the repo to *produce* the static files (useful when the source needs a build step — Vite, Astro, etc.). The Dockerfile must output to `/poof`; everything in `/poof` is what gets served. Combine with `--static` (and optionally `--spa`).
