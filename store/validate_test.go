@@ -48,3 +48,37 @@ func TestValidateProjectNameRejectsLeadingDot(t *testing.T) {
 		t.Errorf("error should name the offending container, got: %v", err)
 	}
 }
+
+func TestValidateWildcardZone(t *testing.T) {
+	for _, z := range []string{"rac.so", "by.rac.so", "example.co.uk", "my-zone.io"} {
+		if err := store.ValidateWildcardZone(z); err != nil {
+			t.Errorf("ValidateWildcardZone(%q) = %v, want nil", z, err)
+		}
+	}
+	for _, z := range []string{"", "com", "*.rac.so", "rac..so", "-bad.rac.so", "a b.so", "rac.so/x"} {
+		if err := store.ValidateWildcardZone(z); err == nil {
+			t.Errorf("ValidateWildcardZone(%q) = nil, want an error", z)
+		}
+	}
+}
+
+func TestValidateDNSProviderAndEnvNameRefuseCaddyfileSyntax(t *testing.T) {
+	// Both are written into the Caddyfile verbatim; anything that could close
+	// a block or start a new directive must be refused.
+	for _, p := range []string{"", "cloud flare", "cf}", "Cloudflare", "cf\n"} {
+		if err := store.ValidateDNSProvider(p); err == nil {
+			t.Errorf("ValidateDNSProvider(%q) = nil, want an error", p)
+		}
+	}
+	if err := store.ValidateDNSProvider("cloudflare"); err != nil {
+		t.Errorf("ValidateDNSProvider(cloudflare) = %v", err)
+	}
+	for _, e := range []string{"", "1TOKEN", "CF}", "CF TOKEN", "CF.TOKEN"} {
+		if err := store.ValidateEnvName(e); err == nil {
+			t.Errorf("ValidateEnvName(%q) = nil, want an error", e)
+		}
+	}
+	if err := store.ValidateEnvName("CLOUDFLARE_API_TOKEN"); err != nil {
+		t.Errorf("ValidateEnvName(CLOUDFLARE_API_TOKEN) = %v", err)
+	}
+}

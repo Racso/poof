@@ -66,6 +66,66 @@ func validateDNSLabel(label string) error {
 	return nil
 }
 
+// ValidateWildcardZone reports whether zone can be served by a *.<zone>
+// certificate. It must be a hostname of at least two labels: a wildcard
+// directly under a top-level domain ("*.com") is refused by every CA.
+func ValidateWildcardZone(zone string) error {
+	if zone == "" {
+		return fmt.Errorf("zone cannot be empty")
+	}
+	if strings.Contains(zone, "*") {
+		return fmt.Errorf("zone %q must not contain '*': pass the zone itself (e.g. rac.so), the wildcard is implied", zone)
+	}
+	if len(zone) > 253 {
+		return fmt.Errorf("zone %q is too long", zone)
+	}
+	labels := strings.Split(zone, ".")
+	if len(labels) < 2 {
+		return fmt.Errorf("zone %q needs at least two labels (e.g. example.com)", zone)
+	}
+	for _, label := range labels {
+		if err := validateDNSLabel(label); err != nil {
+			return fmt.Errorf("zone %q %w", zone, err)
+		}
+	}
+	return nil
+}
+
+// ValidateDNSProvider checks the name of a Caddy DNS provider module
+// (dns.providers.<name>). It is written into the Caddyfile verbatim, so only
+// the characters module names use are accepted.
+func ValidateDNSProvider(name string) error {
+	if name == "" {
+		return fmt.Errorf("DNS provider cannot be empty")
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_' {
+			return fmt.Errorf("DNS provider %q may only contain lowercase letters, digits and underscores", name)
+		}
+	}
+	return nil
+}
+
+// ValidateEnvName checks an environment variable name. It is written into the
+// Caddyfile as {env.<name>}, so anything beyond a conventional variable name
+// could change the meaning of the config.
+func ValidateEnvName(name string) error {
+	if name == "" {
+		return fmt.Errorf("environment variable name cannot be empty")
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !isAlphanumeric(c) && c != '_' {
+			return fmt.Errorf("environment variable name %q may only contain letters, digits and underscores", name)
+		}
+	}
+	if name[0] >= '0' && name[0] <= '9' {
+		return fmt.Errorf("environment variable name %q must not start with a digit", name)
+	}
+	return nil
+}
+
 func isAlphanumeric(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

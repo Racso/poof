@@ -1353,6 +1353,103 @@ func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
+// --- Wildcard certificates ---
+
+func (s *Server) listWildcardCertificates(w http.ResponseWriter, r *http.Request) {
+	certs, err := s.store.ListWildcardCertificates()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if certs == nil {
+		certs = []store.WildcardCertificate{}
+	}
+	jsonOK(w, certs)
+}
+
+type createWildcardCertificateRequest struct {
+	Zone        string `json:"zone"`
+	DNSProvider string `json:"dns_provider"`
+	TokenEnv    string `json:"token_env"`
+}
+
+func (s *Server) createWildcardCertificate(w http.ResponseWriter, r *http.Request) {
+	var req createWildcardCertificateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	zone := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(req.Zone)), ".")
+	if err := store.ValidateWildcardZone(zone); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := store.ValidateDNSProvider(req.DNSProvider); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := store.ValidateEnvName(req.TokenEnv); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	existing, err := s.store.GetWildcardCertificate(zone)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if existing != nil {
+		jsonError(w, fmt.Sprintf("%s already has a wildcard certificate", zone), http.StatusConflict)
+		return
+	}
+
+	// Adapt-check before storing. Registering a zone rewrites the routing of
+	// every site under it at once, so a body that is not valid inside the
+	// wildcard block (a snippet with a site-level directive such as tls or
+	// log) must be refused here: stored, it would freeze routing host-wide.
+	candidate := store.WildcardCertificate{Zone: zone, DNSProvider: req.DNSProvider, TokenEnv: req.TokenEnv}
+	if err := s.validateCaddyfileWithWildcard(candidate); err != nil {
+		if errors.Is(err, caddy.ErrValidateUnavailable) {
+			jsonError(w, fmt.Sprintf("could not verify the config (%v); nothing was saved. Check that Caddy is running.", err),
+				http.StatusServiceUnavailable)
+			return
+		}
+		jsonError(w, fmt.Sprintf("wildcard certificate rejected, nothing was saved: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	cert, err := s.store.CreateWildcardCertificate(zone, req.DNSProvider, req.TokenEnv)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.syncRouting(w, "adding the wildcard certificate for "+zone)
+
+	log.Printf("wildcard certificate added: *.%s (dns %s, token %s)", zone, req.DNSProvider, req.TokenEnv)
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, cert)
+}
+
+func (s *Server) deleteWildcardCertificate(w http.ResponseWriter, r *http.Request) {
+	zone := strings.ToLower(r.PathValue("zone"))
+
+	found, err := s.store.DeleteWildcardCertificate(zone)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		jsonError(w, "wildcard certificate not found", http.StatusNotFound)
+		return
+	}
+
+	s.syncRouting(w, "deleting the wildcard certificate for "+zone)
+
+	log.Printf("wildcard certificate deleted: *.%s", zone)
+	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
 // --- Volumes ---
 
 func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
@@ -1969,7 +2066,7 @@ func (s *Server) syncCaddy() error {
 	// this is what makes their attachments self-healing.
 	s.reconcileNetworkMembers()
 
-	caddyfile, err := s.buildCaddyfile(nil, "")
+	caddyfile, err := s.buildCaddyfile(nil, "", nil)
 	if err != nil {
 		return err
 	}
@@ -2014,7 +2111,19 @@ func (s *Server) validateCaddyfileWith(name, snippet string) error {
 	// (or while the project is stopped), and a project that isn't routed
 	// contributes no site block — so without this the candidate snippet would
 	// not appear in the config being checked, and nothing would be validated.
-	caddyfile, err := s.buildCaddyfile(map[string]string{name: snippet}, name)
+	caddyfile, err := s.buildCaddyfile(map[string]string{name: snippet}, name, nil)
+	if err != nil {
+		return err
+	}
+	return s.caddy.Validate(s.cfg.CaddyAdminURL, caddyfile)
+}
+
+// validateCaddyfileWithWildcard checks the config Poof would generate if the
+// given zone were registered, without applying it. Registering a zone moves
+// every site under it into one wildcard block, so this is what proves each of
+// their bodies (snippets included) is still valid there.
+func (s *Server) validateCaddyfileWithWildcard(w store.WildcardCertificate) error {
+	caddyfile, err := s.buildCaddyfile(nil, "", &w)
 	if err != nil {
 		return err
 	}
@@ -2024,8 +2133,9 @@ func (s *Server) validateCaddyfileWith(name, snippet string) error {
 // buildCaddyfile renders the full Caddyfile from current state. Entries in
 // overrides replace the stored snippet for that project (an empty value
 // removes it), which is what lets a candidate snippet be checked before it is
-// stored.
-func (s *Server) buildCaddyfile(overrides map[string]string, forceRoute string) (string, error) {
+// stored. A non-nil extraWildcard is rendered as if it were registered, for
+// the same reason.
+func (s *Server) buildCaddyfile(overrides map[string]string, forceRoute string, extraWildcard *store.WildcardCertificate) (string, error) {
 	projects, err := s.store.ListProjects()
 	if err != nil {
 		return "", err
@@ -2071,7 +2181,14 @@ func (s *Server) buildCaddyfile(overrides map[string]string, forceRoute string) 
 		}
 		snippets[name] = snip
 	}
-	return caddy.GenerateCaddyfile(routed, redirects, snippets, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir), nil
+	wildcards, err := s.store.ListWildcardCertificates()
+	if err != nil {
+		return "", err
+	}
+	if extraWildcard != nil {
+		wildcards = append(wildcards, *extraWildcard)
+	}
+	return caddy.GenerateCaddyfile(routed, redirects, wildcards, snippets, s.cfg.PublicHost(), s.cfg.APIPort, s.cfg.CaddyStaticDir), nil
 }
 
 // --- Helpers ---

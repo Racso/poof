@@ -201,6 +201,11 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /redirects", s.auth(s.createRedirect))
 	mux.HandleFunc("DELETE /redirects/{id}", s.auth(s.deleteRedirect))
 
+	// Wildcard certificates
+	mux.HandleFunc("GET /wildcard-certificates", s.auth(s.listWildcardCertificates))
+	mux.HandleFunc("POST /wildcard-certificates", s.auth(s.createWildcardCertificate))
+	mux.HandleFunc("DELETE /wildcard-certificates/{zone}", s.auth(s.deleteWildcardCertificate))
+
 	// Server settings
 	mux.HandleFunc("GET /config", s.auth(s.getConfig))
 	mux.HandleFunc("PATCH /config/{key}", s.auth(s.setConfig))

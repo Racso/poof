@@ -159,6 +159,10 @@ poof version                         print client version
 poof volume add <name> <mount>       add a volume mount to a project
 poof volume list <name>              list volume mounts for a project
 poof volume remove <name> <id>       remove a volume mount from a project
+poof wildcard-certificate add <zone> [--dns cloudflare] [--token-env CLOUDFLARE_API_TOKEN]
+                                     serve a zone's subdomains under one *.<zone> certificate
+poof wildcard-certificate delete <zone> [--yes]   give its sites certificates of their own again
+poof wildcard-certificate list       list zones served by a wildcard certificate
 ```
 
 Global flags (all client commands):
@@ -389,6 +393,26 @@ poof redirect add www.mysite.com mysite.com
 poof redirect list
 poof redirect delete 1
 ```
+
+## Wildcard certificates
+
+By default Caddy obtains one certificate per domain, and every certificate is published in public [Certificate Transparency](https://certificate.transparency.dev/) logs: anyone can list every hostname you have ever served (`crt.sh` → `%.yourdomain.com`). Registering a zone serves all its direct subdomains under a single `*.<zone>` certificate instead, so new projects never put their names in those logs:
+
+```sh
+poof wildcard-certificate add yourdomain.com
+poof wildcard-certificate list
+poof wildcard-certificate delete yourdomain.com
+```
+
+- **Grouping is automatic.** Every project, redirect and the Poof! API itself whose domain is exactly one label below the zone (`app.yourdomain.com`) is routed under the zone's wildcard, from the moment the zone is registered. There is no per-project opt-out.
+- **One label only**, because that is what a wildcard certificate covers: the zone itself (`yourdomain.com`) and deeper names (`docs.team.yourdomain.com`) keep certificates of their own. Register `team.yourdomain.com` as a zone too to cover the latter.
+- **It needs the DNS-01 challenge.** Caddy must be built with the DNS provider's module (`--dns`, default `cloudflare`), and the provider's API token must be set in the Caddy container's environment (`--token-env`, default `CLOUDFLARE_API_TOKEN`), with permission to edit the zone's DNS. Poof! cannot check the token: a missing or under-scoped one leaves every site under the zone without a valid certificate.
+- **Names already logged stay public.** This prevents future leaks only; a certificate issued before the zone was registered is in the logs for good.
+- **Unknown names get a 404.** With a wildcard, any name under the zone has valid TLS, so names nothing is registered for answer 404.
+- **Registration is checked first.** Every site moves into one wildcard block, so the resulting config is validated with Caddy before the zone is stored. A snippet that cannot live inside it (site-level directives such as `tls` or `log`) makes registration fail, and nothing is saved.
+- **Deleting a zone** gives each of its sites a certificate of its own again, which publishes all their names. It asks for confirmation (`--yes` to skip).
+
+Explicit site blocks in manual Caddyfiles (`/etc/caddy/conf.d`) take precedence over the wildcard and keep their own certificates.
 
 ## Caddy
 

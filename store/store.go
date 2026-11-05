@@ -88,6 +88,22 @@ type Redirect struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// WildcardCertificate registers a zone (e.g. "rac.so") whose direct
+// subdomains are all served under one *.<zone> certificate instead of one
+// certificate per host. Every certificate is published in Certificate
+// Transparency logs, so per-host certificates make the full list of a zone's
+// hostnames public; a single wildcard publishes only the zone.
+//
+// A wildcard can only be obtained through the ACME DNS-01 challenge, so the
+// zone carries the Caddy DNS provider module to use and the name of the
+// environment variable, inside the Caddy container, that holds its API token.
+type WildcardCertificate struct {
+	Zone        string    `json:"zone"`
+	DNSProvider string    `json:"dns_provider"`
+	TokenEnv    string    `json:"token_env"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type Deployment struct {
 	ID         int64     `json:"id"`
 	ProjectID  int64     `json:"project_id"`
@@ -211,6 +227,13 @@ func (s *Store) migrate() error {
 			project TEXT PRIMARY KEY,
 			content TEXT NOT NULL,
 			FOREIGN KEY (project) REFERENCES projects(name) ON DELETE CASCADE
+		);
+
+		CREATE TABLE IF NOT EXISTS wildcard_certificates (
+			zone         TEXT PRIMARY KEY,
+			dns_provider TEXT NOT NULL,
+			token_env    TEXT NOT NULL,
+			created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 	`)
 	if err != nil {
@@ -740,6 +763,62 @@ func (s *Store) DeleteRedirect(id int64) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM redirects WHERE id = ?`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete redirect: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// --- Wildcard certificates ---
+
+func (s *Store) CreateWildcardCertificate(zone, dnsProvider, tokenEnv string) (*WildcardCertificate, error) {
+	_, err := s.db.Exec(
+		`INSERT INTO wildcard_certificates (zone, dns_provider, token_env) VALUES (?, ?, ?)`,
+		zone, dnsProvider, tokenEnv,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create wildcard certificate: %w", err)
+	}
+	return s.GetWildcardCertificate(zone)
+}
+
+func (s *Store) GetWildcardCertificate(zone string) (*WildcardCertificate, error) {
+	c := &WildcardCertificate{}
+	err := s.db.QueryRow(
+		`SELECT zone, dns_provider, token_env, created_at FROM wildcard_certificates WHERE zone = ?`, zone,
+	).Scan(&c.Zone, &c.DNSProvider, &c.TokenEnv, &c.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get wildcard certificate: %w", err)
+	}
+	return c, nil
+}
+
+func (s *Store) ListWildcardCertificates() ([]WildcardCertificate, error) {
+	rows, err := s.db.Query(
+		`SELECT zone, dns_provider, token_env, created_at FROM wildcard_certificates ORDER BY zone`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list wildcard certificates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var certs []WildcardCertificate
+	for rows.Next() {
+		var c WildcardCertificate
+		if err := rows.Scan(&c.Zone, &c.DNSProvider, &c.TokenEnv, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		certs = append(certs, c)
+	}
+	return certs, rows.Err()
+}
+
+func (s *Store) DeleteWildcardCertificate(zone string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM wildcard_certificates WHERE zone = ?`, zone)
+	if err != nil {
+		return false, fmt.Errorf("delete wildcard certificate: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil

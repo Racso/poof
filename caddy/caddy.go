@@ -22,13 +22,24 @@ const pausedResponse = `respond "This site is temporarily unavailable." 503`
 // path that is part of the web (app links, security.txt), so it stays served.
 const hiddenDotfiles = "@poofDotfiles {\n\t\tpath_regexp /\\.\n\t\tnot path /.well-known/*\n\t}\n\thandle @poofDotfiles {\n\t\trespond 404\n\t}"
 
+// site is one routed domain: its address and its body, rendered as the lines
+// of a top-level site block (one tab deep, each ending in a newline).
+type site struct {
+	domain string
+	body   string
+}
+
 // GenerateCaddyfile builds a complete Caddyfile from the given projects and
 // redirects. Only pass projects that are currently deployed (container running
 // or static files present) — plus paused projects, which get a 503 route
 // regardless of their deployment state.
 // poofHost (e.g. "poof.example.com") and poofPort are used to add a route
 // for the Poof API itself, which runs on the host rather than in a container.
-func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, snippets map[string]string, poofHost string, poofPort int, staticDir string) string {
+//
+// A domain exactly one label below a zone in wildcards is not given a site
+// block of its own: it is routed inside that zone's *.<zone> block, so it is
+// served by the zone's wildcard certificate and never gets one naming it.
+func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, wildcards []store.WildcardCertificate, snippets map[string]string, poofHost string, poofPort int, staticDir string) string {
 	var b strings.Builder
 
 	// Warning header.
@@ -42,19 +53,11 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 	// an empty (or missing) directory is fine — Caddy won't error.
 	fmt.Fprintf(&b, "import %s/*.Caddyfile\n\n", staticDir)
 
+	var sites []site
+
 	// Poof's own API — runs as a container on poof-net, reachable by name.
 	if poofHost != "" {
-		fmt.Fprintf(&b, "%s {\n\treverse_proxy poof:%d\n}\n\n", poofHost, poofPort)
-	}
-
-	writeSnippet := func(name string) {
-		if snip, ok := snippets[name]; ok && snip != "" {
-			for _, line := range strings.Split(snip, "\n") {
-				if line != "" {
-					fmt.Fprintf(&b, "\t%s\n", line)
-				}
-			}
-		}
+		sites = append(sites, site{poofHost, fmt.Sprintf("\treverse_proxy poof:%d\n", poofPort)})
 	}
 
 	for _, p := range projects {
@@ -62,48 +65,122 @@ func GenerateCaddyfile(projects []store.Project, redirects []store.Redirect, sni
 		if poofHost != "" && p.Domain == poofHost {
 			continue
 		}
-
-		// A paused project answers 503 on every route and its custom snippet
-		// is withheld — nothing of the project's normal routing stays exposed.
-		if p.Paused {
-			fmt.Fprintf(&b, "%s {\n\t%s\n}\n\n", p.Domain, pausedResponse)
-			continue
-		}
-
-		if p.IsStatic() {
-			staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
-			fmt.Fprintf(&b, "%s {\n\troot * %s\n", p.Domain, staticRoot)
-			// A static site is a repo checkout, so it carries .github/, a
-			// .gitignore, maybe a stray .env: none of it is part of the site.
-			// A handle block, not a top-level respond: Caddy orders handle
-			// before respond, so the SPA fallback and snippet handles would
-			// otherwise serve these first. Emitted before the snippet, it is
-			// the first handle and wins.
-			fmt.Fprintf(&b, "\t%s\n", hiddenDotfiles)
-			if p.Static == "spa" {
-				// The SPA fallback lives in a catch-all handle placed after the
-				// custom snippet: a top-level try_files would run in Caddy's
-				// rewrite phase, BEFORE any handle block in the snippet, and
-				// rewrite e.g. /api/* to /index.html. Caddy evaluates handle
-				// blocks in order of appearance (first match wins), so snippet
-				// routes take precedence and everything else falls through here.
-				writeSnippet(p.Name)
-				fmt.Fprintf(&b, "\thandle {\n\t\ttry_files {path} /index.html\n\t\tfile_server\n\t}\n")
-			} else {
-				fmt.Fprintf(&b, "\tfile_server\n")
-				writeSnippet(p.Name)
-			}
-		} else {
-			fmt.Fprintf(&b, "%s {\n\treverse_proxy %s\n", p.Domain, p.Upstream())
-			writeSnippet(p.Name)
-		}
-		fmt.Fprintf(&b, "}\n\n")
+		sites = append(sites, site{p.Domain, projectBody(p, snippets[p.Name])})
 	}
 
 	for _, r := range redirects {
-		fmt.Fprintf(&b, "%s {\n\tredir https://%s{uri} 301\n}\n\n", r.FromDomain, r.ToDomain)
+		sites = append(sites, site{r.FromDomain, fmt.Sprintf("\tredir https://%s{uri} 301\n", r.ToDomain)})
 	}
 
+	grouped := make(map[string][]site)
+	for _, s := range sites {
+		if zone := wildcardZoneFor(s.domain, wildcards); zone != "" {
+			grouped[zone] = append(grouped[zone], s)
+			continue
+		}
+		fmt.Fprintf(&b, "%s {\n%s}\n\n", s.domain, s.body)
+	}
+
+	for _, w := range wildcards {
+		writeWildcardBlock(&b, w, grouped[w.Zone])
+	}
+
+	return b.String()
+}
+
+// wildcardZoneFor returns the zone whose wildcard certificate covers domain,
+// or "" if none does. A wildcard matches exactly one label: *.rac.so covers
+// app.rac.so but neither rac.so itself nor docs.by.rac.so: that is the rule
+// for certificates, so it is the rule for grouping too.
+func wildcardZoneFor(domain string, wildcards []store.WildcardCertificate) string {
+	domain = strings.ToLower(domain)
+	for _, w := range wildcards {
+		label, ok := strings.CutSuffix(domain, "."+w.Zone)
+		if ok && label != "" && !strings.Contains(label, ".") {
+			return w.Zone
+		}
+	}
+	return ""
+}
+
+// writeWildcardBlock emits one *.<zone> site block holding every grouped site
+// of the zone, each behind a host matcher.
+//
+// Each site's body moves inside its own handle unchanged, one level deeper.
+// Nothing in it needs rewriting: named matchers a body defines (the static
+// dotfile matcher, a snippet's own) are scoped to the handle that contains
+// them, so two sites defining the same name do not collide, and a catch-all
+// handle inside a body (the SPA fallback) stays confined to its host.
+//
+// The block is emitted even when the zone has no sites yet: the wildcard is
+// then obtained up front, so a zone's DNS-01 setup is proven at registration
+// and a new project's first request does not wait on issuance.
+func writeWildcardBlock(b *strings.Builder, w store.WildcardCertificate, sites []site) {
+	fmt.Fprintf(b, "*.%s {\n", w.Zone)
+	fmt.Fprintf(b, "\ttls {\n\t\tdns %s {env.%s}\n\t}\n", w.DNSProvider, w.TokenEnv)
+	for _, s := range sites {
+		label := strings.TrimSuffix(strings.ToLower(s.domain), "."+w.Zone)
+		fmt.Fprintf(b, "\n\t@site_%s host %s\n", label, s.domain)
+		fmt.Fprintf(b, "\thandle @site_%s {\n", label)
+		for _, line := range strings.Split(strings.TrimSuffix(s.body, "\n"), "\n") {
+			fmt.Fprintf(b, "\t%s\n", line)
+		}
+		fmt.Fprintf(b, "\t}\n")
+	}
+	// A wildcard certificate makes every name under the zone resolve with
+	// valid TLS, including names nothing is registered for. Without this they
+	// would fall through every handle and get an empty 200.
+	fmt.Fprintf(b, "\n\thandle {\n\t\trespond 404\n\t}\n")
+	fmt.Fprintf(b, "}\n\n")
+}
+
+// projectBody renders a project's site block body.
+func projectBody(p store.Project, snippet string) string {
+	var b strings.Builder
+
+	writeSnippet := func() {
+		for _, line := range strings.Split(snippet, "\n") {
+			if line != "" {
+				fmt.Fprintf(&b, "\t%s\n", line)
+			}
+		}
+	}
+
+	// A paused project answers 503 on every route and its custom snippet
+	// is withheld — nothing of the project's normal routing stays exposed.
+	if p.Paused {
+		fmt.Fprintf(&b, "\t%s\n", pausedResponse)
+		return b.String()
+	}
+
+	if p.IsStatic() {
+		staticRoot := fmt.Sprintf("/var/lib/poof/static/%s/current", p.Name)
+		fmt.Fprintf(&b, "\troot * %s\n", staticRoot)
+		// A static site is a repo checkout, so it carries .github/, a
+		// .gitignore, maybe a stray .env: none of it is part of the site.
+		// A handle block, not a top-level respond: Caddy orders handle
+		// before respond, so the SPA fallback and snippet handles would
+		// otherwise serve these first. Emitted before the snippet, it is
+		// the first handle and wins.
+		fmt.Fprintf(&b, "\t%s\n", hiddenDotfiles)
+		if p.Static == "spa" {
+			// The SPA fallback lives in a catch-all handle placed after the
+			// custom snippet: a top-level try_files would run in Caddy's
+			// rewrite phase, BEFORE any handle block in the snippet, and
+			// rewrite e.g. /api/* to /index.html. Caddy evaluates handle
+			// blocks in order of appearance (first match wins), so snippet
+			// routes take precedence and everything else falls through here.
+			writeSnippet()
+			fmt.Fprintf(&b, "\thandle {\n\t\ttry_files {path} /index.html\n\t\tfile_server\n\t}\n")
+		} else {
+			fmt.Fprintf(&b, "\tfile_server\n")
+			writeSnippet()
+		}
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "\treverse_proxy %s\n", p.Upstream())
+	writeSnippet()
 	return b.String()
 }
 

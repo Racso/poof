@@ -3444,3 +3444,117 @@ func TestUpdateProjectReenablingCIMintsRepoToken(t *testing.T) {
 		t.Fatalf("expected RefreshProjectCI with the minted token, got %+v", mocks.repo.refreshCalls)
 	}
 }
+
+func addWildcard(t *testing.T, srv *server.Server, zone string) *httptest.ResponseRecorder {
+	t.Helper()
+	return do(t, srv, "POST", "/wildcard-certificates",
+		map[string]string{"zone": zone, "dns_provider": "cloudflare", "token_env": "CLOUDFLARE_API_TOKEN"}, globalToken)
+}
+
+func TestWildcardCertificateGroupsRoutedSites(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.container.running = map[string]bool{"web": true}
+
+	rr := addWildcard(t, srv, "Rac.So.")
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if c, _ := st.GetWildcardCertificate("rac.so"); c == nil {
+		t.Fatal("zone not stored under its normalized name")
+	}
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "*.rac.so {") ||
+		!strings.Contains(mocks.caddy.lastCaddyfile, "@site_web host web.rac.so") {
+		t.Errorf("applied config does not group web.rac.so:\n%s", mocks.caddy.lastCaddyfile)
+	}
+
+	rr = do(t, srv, "GET", "/wildcard-certificates", nil, globalToken)
+	var certs []map[string]interface{}
+	decode(t, rr, &certs)
+	if len(certs) != 1 || certs[0]["zone"] != "rac.so" {
+		t.Errorf("unexpected list: %v", certs)
+	}
+}
+
+func TestWildcardCertificateRefusedWhenAGroupedSnippetIsInvalid(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.container.running = map[string]bool{"web": true}
+	st.SetCaddySnippet("web", "nonsense")
+	mocks.caddy.rejectContaining = "*.rac.so {"
+
+	// The candidate config is what proves every grouped body is still valid
+	// inside the wildcard block. Rejected, nothing may be stored: the next
+	// sync would push it and freeze routing for every site on the host.
+	rr := addWildcard(t, srv, "rac.so")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if c, _ := st.GetWildcardCertificate("rac.so"); c != nil {
+		t.Error("a rejected zone was stored")
+	}
+	if mocks.caddy.reloadCalls != 0 {
+		t.Error("a rejected zone was applied")
+	}
+}
+
+func TestWildcardCertificateRefusedWhenCaddyIsUnreachable(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.caddy.validateErr = fmt.Errorf("%w: dial tcp: connection refused", caddy.ErrValidateUnavailable)
+
+	rr := addWildcard(t, srv, "rac.so")
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if c, _ := st.GetWildcardCertificate("rac.so"); c != nil {
+		t.Error("an unverified zone was stored")
+	}
+}
+
+func TestWildcardCertificateValidatesInput(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	cases := []map[string]string{
+		{"zone": "*.rac.so", "dns_provider": "cloudflare", "token_env": "CF"},
+		{"zone": "com", "dns_provider": "cloudflare", "token_env": "CF"},
+		{"zone": "rac.so", "dns_provider": "cf}", "token_env": "CF"},
+		{"zone": "rac.so", "dns_provider": "cloudflare", "token_env": "CF}"},
+	}
+	for _, c := range cases {
+		rr := do(t, srv, "POST", "/wildcard-certificates", c, globalToken)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("%v: expected 400, got %d: %s", c, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func TestWildcardCertificateRefusesADuplicateZone(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	addWildcard(t, srv, "rac.so")
+
+	rr := addWildcard(t, srv, "rac.so")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDeleteWildcardCertificateUngroupsSites(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "r/web", Branch: "main", Port: 80})
+	mocks.container.running = map[string]bool{"web": true}
+	addWildcard(t, srv, "rac.so")
+
+	rr := do(t, srv, "DELETE", "/wildcard-certificates/rac.so", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(mocks.caddy.lastCaddyfile, "*.rac.so") ||
+		!strings.Contains(mocks.caddy.lastCaddyfile, "\nweb.rac.so {") {
+		t.Errorf("expected web.rac.so back in a block of its own:\n%s", mocks.caddy.lastCaddyfile)
+	}
+
+	rr = do(t, srv, "DELETE", "/wildcard-certificates/rac.so", nil, globalToken)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for an unknown zone, got %d", rr.Code)
+	}
+}

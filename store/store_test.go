@@ -776,3 +776,33 @@ func TestMigrateLegacyGCPoliciesGlobalDisabled(t *testing.T) {
 		t.Errorf("expected gc disabled after migration, got %+v", got)
 	}
 }
+
+func TestWildcardCertificateCRUD(t *testing.T) {
+	st := newTestStore(t)
+
+	if _, err := st.CreateWildcardCertificate("rac.so", "cloudflare", "CF"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := st.CreateWildcardCertificate("rac.so", "cloudflare", "CF"); err == nil {
+		t.Error("a zone registered twice must be refused")
+	}
+	st.CreateWildcardCertificate("by.rac.so", "cloudflare", "CF2")
+
+	certs, err := st.ListWildcardCertificates()
+	if err != nil || len(certs) != 2 {
+		t.Fatalf("list: %v, %d certs", err, len(certs))
+	}
+	if certs[0].Zone != "by.rac.so" || certs[1].Zone != "rac.so" || certs[0].TokenEnv != "CF2" {
+		t.Errorf("unexpected list: %+v", certs)
+	}
+
+	if found, _ := st.DeleteWildcardCertificate("rac.so"); !found {
+		t.Error("delete reported not found")
+	}
+	if found, _ := st.DeleteWildcardCertificate("rac.so"); found {
+		t.Error("second delete reported found")
+	}
+	if c, _ := st.GetWildcardCertificate("rac.so"); c != nil {
+		t.Errorf("deleted zone still present: %+v", c)
+	}
+}
