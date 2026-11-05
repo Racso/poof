@@ -3558,3 +3558,84 @@ func TestDeleteWildcardCertificateUngroupsSites(t *testing.T) {
 		t.Errorf("expected 404 for an unknown zone, got %d", rr.Code)
 	}
 }
+
+// An IP upstream is a service on another machine (a private network between
+// hosts). There is no container to look up or attach, only a route.
+func TestCreateExternalProjectWithRemoteUpstream(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.container.existing = map[string]bool{} // nothing local exists
+
+	rr := do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "warden", "external": "10.0.0.3:8901"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d: %s", rr.Code, rr.Body.String())
+	}
+	p, _ := st.GetProject("warden")
+	if p == nil || !p.HasRemoteUpstream() || p.Upstream() != "10.0.0.3:8901" {
+		t.Fatalf("expected a remote external project at 10.0.0.3:8901, got %+v", p)
+	}
+	if len(mocks.container.networksEnsured) != 0 || len(mocks.container.connectCalls) != 0 {
+		t.Errorf("a remote upstream needs no Docker network, got ensured=%v connected=%v",
+			mocks.container.networksEnsured, mocks.container.connectCalls)
+	}
+	if members, _ := st.ListNetworkMembers("poof-app-warden"); len(members) != 0 {
+		t.Errorf("an IP must not be recorded as a network member, got %v", members)
+	}
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "reverse_proxy 10.0.0.3:8901") {
+		t.Errorf("caddyfile should proxy to the remote upstream, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+}
+
+func TestRemoteUpstreamIsGroupedUnderAWildcard(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	addWildcard(t, srv, "rac.so")
+
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "warden", "external": "10.0.0.3:8901"}, globalToken)
+
+	if !strings.Contains(mocks.caddy.lastCaddyfile, "\t@site_warden host warden.rac.so\n\thandle @site_warden {\n\t\treverse_proxy 10.0.0.3:8901\n\t}\n") {
+		t.Errorf("expected warden.rac.so routed inside the wildcard block, got:\n%s", mocks.caddy.lastCaddyfile)
+	}
+}
+
+func TestRemoveRemoteUpstreamProjectTouchesNoNetwork(t *testing.T) {
+	srv, _, mocks := newTestServer(t)
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "warden", "external": "10.0.0.3:8901"}, globalToken)
+
+	rr := do(t, srv, "DELETE", "/projects/warden", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("delete: %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.container.disconnectCalls) != 0 || len(mocks.container.networksRemoved) != 0 || len(mocks.container.stopCalls) != 0 {
+		t.Errorf("removing a remote upstream must touch no container or network, got disconnect=%v removed=%v stop=%v",
+			mocks.container.disconnectCalls, mocks.container.networksRemoved, mocks.container.stopCalls)
+	}
+	if !strings.Contains(rr.Body.String(), "10.0.0.3:8901") {
+		t.Errorf("delete response should name the untouched upstream; got %s", rr.Body.String())
+	}
+}
+
+func TestRemoteUpstreamRefusesContainerOperations(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	do(t, srv, "POST", "/projects",
+		map[string]interface{}{"name": "warden", "external": "10.0.0.3:8901"}, globalToken)
+
+	rr := do(t, srv, "POST", "/projects/warden/deploy", map[string]interface{}{}, globalToken)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "another machine") {
+		t.Errorf("expected a refusal naming the remote upstream, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRemoteUpstreamIsNotBackfilledAsANetworkMember(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "warden", Domain: "warden.rac.so", External: "10.0.0.3", Port: 8901})
+
+	// Any routing mutation runs the reconcile, which backfills memberships.
+	addWildcard(t, srv, "rac.so")
+
+	if members, _ := st.ListNetworkMembers("poof-app-warden"); len(members) != 0 {
+		t.Errorf("an IP must not be backfilled as a container member, got %v", members)
+	}
+}

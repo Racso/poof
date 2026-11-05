@@ -51,6 +51,11 @@ func (s *Server) caddyContainerName() string {
 // For an external project the upstream container is attached too: Poof never
 // deploys it, so this is the only point at which it can be wired in.
 func (s *Server) ensureProjectNetwork(p *store.Project) (string, error) {
+	// A remote upstream is reached over the host's own network; a per-app
+	// Docker network would connect Caddy to nothing.
+	if p.HasRemoteUpstream() {
+		return "", nil
+	}
 	net := appNetName(p.Name)
 	if err := s.container.EnsureNetwork(net, false); err != nil {
 		return "", err
@@ -105,7 +110,7 @@ func (s *Server) ensureExternalMemberships() {
 		return
 	}
 	for _, p := range projects {
-		if !p.IsExternal() {
+		if !p.IsExternal() || p.HasRemoteUpstream() {
 			continue
 		}
 		if _, err := s.store.AddNetworkMember(appNetName(p.Name), p.External, store.MemberContainer); err != nil {

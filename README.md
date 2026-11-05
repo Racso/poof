@@ -348,6 +348,14 @@ Poof! owns the domain, the TLS and the routing; the container stays yours. The a
 
 The port defaults to `80`. Registration fails if the container doesn't exist, so a typo is caught immediately rather than showing up later as a 502; a *stopped* container is fine.
 
+The upstream can also be a service on **another machine**, given by IP address (for example over a private network between servers):
+
+```sh
+poof add warden --external 10.0.0.3:8901
+```
+
+There is no container to check or network to attach, so Poof! only owns the route: the address is not verified at registration (Caddy reports a 502 if nothing answers), and `poof remove` takes down the route alone. Like any project, it is grouped under a registered wildcard certificate, which makes this the way to put a route to another host under the wildcard instead of hand-writing a Caddyfile for it.
+
 ## Networks
 
 Every project's container runs on its **own** Docker network (`poof-app-<name>`), shared only with Caddy for routing — projects are isolated from each other by default, so a compromised container has no lateral reach. Attaching an **extra** network lets several projects talk to each other privately — e.g. an API and its worker sharing a backend database that's never exposed publicly.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -236,7 +237,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		// otherwise surface much later as a 502 with no obvious cause, and a
 		// typo is by far the likeliest explanation. Existing is enough — a
 		// stopped container still proves the name is real.
-		if !s.container.ContainerExists(host) {
+		// An IP address is a service on another machine (store
+		// Project.HasRemoteUpstream): there is no container to look up, so
+		// the check does not apply and Caddy reports reachability itself.
+		if net.ParseIP(host) == nil && !s.container.ContainerExists(host) {
 			jsonError(w, fmt.Sprintf(
 				"container %q not found — check the name (it must already exist; it may be stopped)", host),
 				http.StatusBadRequest)
@@ -544,6 +548,9 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p.IsStatic():
 		s.static.Remove(s.cfg.DataDir, name)
+	case p.HasRemoteUpstream():
+		// Nothing but the route was ever Poof's: no container, no network.
+		log.Printf("external project removed: %s (remote upstream %s left untouched)", name, p.Upstream())
 	case p.IsExternal():
 		// The upstream container belongs to whoever created it. Remove the
 		// route and the network Poof made; leave the container running.
@@ -607,7 +614,9 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	s.syncRouting(w, "removing project "+name)
 
 	resp := map[string]string{"status": "deleted"}
-	if p.IsExternal() {
+	if p.HasRemoteUpstream() {
+		resp["note"] = fmt.Sprintf("removed the route; the service at %s was left untouched (Poof does not manage it)", p.Upstream())
+	} else if p.IsExternal() {
 		// Say plainly what was and wasn't destroyed — the container is not ours.
 		resp["note"] = fmt.Sprintf(
 			"removed the route and network; container %q was left running (Poof does not manage it)",
@@ -2238,6 +2247,12 @@ func parseExternalTarget(target string) (host string, port int, err error) {
 // an external project. Poof owns the domain and the routing for these, never
 // the container — so deploying, rolling back or snapshotting is meaningless.
 func externalRefusal(p *store.Project) string {
+	if p.HasRemoteUpstream() {
+		return fmt.Sprintf(
+			"%q is an external project: it routes to %s, a service on another machine that Poof does not manage. "+
+				"Deploy, rollback and snapshot only apply to containers Poof owns.",
+			p.Name, p.Upstream())
+	}
 	return fmt.Sprintf(
 		"%q is an external project: it routes to container %q, which Poof does not manage. "+
 			"Deploy, rollback and snapshot only apply to containers Poof owns.",

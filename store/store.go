@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"time"
 
@@ -48,6 +49,14 @@ type Project struct {
 // manage, instead of deploying one of its own. External projects have no
 // image, repo, or CI: Poof owns the domain and the routing, nothing else.
 func (p Project) IsExternal() bool { return p.External != "" }
+
+// HasRemoteUpstream reports whether an external project's upstream is an IP
+// address rather than a container name: a service on another machine, reached
+// over the network (e.g. a private network between hosts). There is no
+// container to inspect or attach to a Docker network, so Poof only routes it.
+func (p Project) HasRemoteUpstream() bool {
+	return p.IsExternal() && net.ParseIP(p.External) != nil
+}
 
 // Upstream is the host:port Caddy proxies to — the project's own container
 // normally, or the named external container when set.

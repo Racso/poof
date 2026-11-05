@@ -225,7 +225,7 @@ func init() {
 	addCmd.Flags().String("branch", "", fmt.Sprintf("branch to deploy (default: %s)", defaults.Branch))
 	addCmd.Flags().Int("port", 0, fmt.Sprintf("container port (default: %d)", defaults.Port))
 	addCmd.Flags().String("folder", "", "repo subfolder containing the Dockerfile (for monorepos)")
-	addCmd.Flags().String("external", "", "route to a container Poof does not manage: <container>[:<port>]")
+	addCmd.Flags().String("external", "", "route to a container Poof does not manage, <container>[:<port>], or to a service on another machine, <ip>[:<port>]")
 	addCmd.Flags().Bool("static", false, "deploy as a static site served by Caddy")
 	addCmd.Flags().Bool("spa", false, "enable SPA mode with try_files fallback (requires --static)")
 	addCmd.Flags().Bool("build", false, "use Dockerfile to build static files (requires --static)")
