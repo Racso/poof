@@ -57,7 +57,7 @@ func TestPausedProjectServes503AndHidesRouting(t *testing.T) {
 		{Name: "app", Domain: "app.rac.so", Port: 8080, Paused: true},
 	}, map[string]string{"app": "handle /api/* {\n\treverse_proxy backend:3000\n}"})
 
-	if !strings.Contains(out, "app.rac.so {\n\trespond \"This site is temporarily unavailable.\" 503\n}") {
+	if !strings.Contains(out, "app.rac.so {\n\tlog\n\trespond \"This site is temporarily unavailable.\" 503\n}") {
 		t.Errorf("expected a 503 block for the paused project, got:\n%s", out)
 	}
 	if strings.Contains(out, "reverse_proxy") {
@@ -143,7 +143,7 @@ func TestWildcardGroupsOnlyDirectSubdomains(t *testing.T) {
 func TestWildcardBlockObtainsTheWildcardOverDNS01(t *testing.T) {
 	out := generateWithWildcards([]store.Project{{Name: "app", Domain: "app.rac.so", Port: 80}}, nil, racsoWildcard, nil, "")
 
-	if !strings.Contains(out, "*.rac.so {\n\ttls {\n\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\t}\n") {
+	if !strings.Contains(out, "*.rac.so {\n\tlog\n\ttls {\n\t\tdns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\t}\n") {
 		t.Errorf("expected *.rac.so block with a DNS-01 tls directive, got:\n%s", out)
 	}
 }
@@ -240,5 +240,25 @@ func TestWildcardMatchesDomainsCaseInsensitively(t *testing.T) {
 
 	if !strings.Contains(out, "\t@site_app host App.Rac.So\n") {
 		t.Errorf("expected a mixed-case domain grouped under its zone, got:\n%s", out)
+	}
+}
+
+func TestEverySiteBlockLogsAccess(t *testing.T) {
+	out := GenerateCaddyfile([]store.Project{
+		{Name: "app", Domain: "app.rac.so"},
+		{Name: "apex", Domain: "rac.so"},
+	}, nil, []store.WildcardCertificate{{Zone: "rac.so", DNSProvider: "cloudflare", TokenEnv: "T"}}, nil, "", 9000, "/etc/caddy/conf.d")
+
+	if !strings.Contains(out, "rac.so {\n\tlog\n") {
+		t.Errorf("standalone site block must log, got:\n%s", out)
+	}
+	if !strings.Contains(out, "*.rac.so {\n\tlog\n") {
+		t.Errorf("wildcard block must log at its top level, so unregistered names are logged too, got:\n%s", out)
+	}
+	if !strings.Contains(out, "output file "+accessLogFile) || !strings.Contains(out, "include http.log.access") {
+		t.Errorf("global options must route access logs to the file, got:\n%s", out)
+	}
+	if !strings.Contains(out, "log default {\n\t\texclude http.log.access\n\t}") {
+		t.Errorf("default logger must exclude access logs, got:\n%s", out)
 	}
 }

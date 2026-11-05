@@ -426,6 +426,10 @@ Explicit site blocks in manual Caddyfiles (`/etc/caddy/conf.d`) take precedence 
 
 Caddy fronts every project — it terminates TLS (auto-renewed via ACME), routes hostnames to the right container, and handles `poof redirect` rules. Poof! regenerates the active Caddy config after every project change. You can extend that config without editing it directly, in two ways: per-project snippets (preferred) and manual drop-in files (for services Poof! doesn't manage).
 
+### Access logs
+
+Every site block Poof! generates logs its requests as JSON lines to `/data/logs/access.log` inside the Caddy container (Caddy's persistent volume), rolled at 50 MiB with 5 files kept. A wildcard zone logs at the block level, so requests for names nothing is registered for (the 404 catch-all) are recorded too: that is where scanners show up. Access logs are kept out of `docker logs`, which carries only Caddy's own events. Manual drop-in files are not covered; add a `log` line to them if you want their traffic in the same file.
+
 ### Per-project snippets (preferred)
 
 Attach a custom Caddy snippet to a project. The snippet is merged into the project's site block, so it runs alongside (or instead of) the route Poof! generates.
