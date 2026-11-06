@@ -119,7 +119,7 @@ poof clone <name> <suffix>           clone project as <name>-<suffix> on branch 
 poof config                          show client and server configuration
 poof config set <key> [value]        set a client or server configuration value
 poof configure <name> [flags]        update project configuration (token is preserved)
-poof deploy <name>                   trigger manual redeploy
+poof deploy <name>                   redeploy latest image / static version (--from <dir> uploads a folder)
 poof env copy <src> <dst> <mode>     copy env vars (--all, --only, --except, --ask)
 poof env get <name>                  list env var keys (comma-separated, values never shown)
 poof env set <name> KEY=VALUE        set env vars
@@ -267,7 +267,16 @@ poof add mysite --static --spa              # SPA: add try_files fallback to /in
 poof add mysite --static --spa --build      # build first via Dockerfile, then serve
 ```
 
-**`--static`** turns off the container path. On each deploy, Poof! fetches the repo at the configured branch, extracts the files, and points Caddy at the new directory. Old versions are kept on disk subject to the GC policy.
+**`--static`** turns off the container path. New versions come from CI: on each push to the configured branch, the generated workflow tars the checkout (or, with `--build`, the `/poof` output of the Dockerfile) and uploads it; Poof! extracts it into a new version directory and points Caddy at it. Old versions are kept on disk subject to the GC policy.
+
+`poof deploy mysite` never uploads anything. It re-points the site at its latest successful version still on disk, and fails if there is none. To publish a local folder by hand, name it:
+
+```sh
+poof deploy mysite --from ./dist             # refuses unless ./dist/index.html exists
+poof deploy mysite --from ./files --no-index # a site without an index.html
+```
+
+`--from` prints the folder, file count and size before uploading, and never sends `.git`. There is no default folder: running it from the wrong directory is how a repo's source ends up served as a website.
 
 Paths with a segment starting with a dot (`/.github/…`, `/.gitignore`, `/x/.env`) answer **404** on every static site, since the files come from a repo checkout; `/.well-known/` is exempt and served normally.
 
@@ -291,7 +300,7 @@ Convert an existing project to static:
 
 ```sh
 poof configure mysite --static --spa
-poof deploy mysite           # stops the old container, serves files instead
+git push                     # configure stopped the container; CI uploads the first version
 ```
 
 Revert back to a container:

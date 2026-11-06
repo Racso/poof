@@ -233,6 +233,7 @@ type mockStaticDeployer struct {
 	removeCalls   []string
 	deployed      map[string]bool
 	gcCalls       []mockStaticGCCall
+	missing       map[int64]bool // version ids whose directory is gone
 }
 
 type mockStaticGCCall struct {
@@ -258,6 +259,9 @@ func (m *mockStaticDeployer) Deploy(dataDir, project string, depID int64, _ io.R
 }
 
 func (m *mockStaticDeployer) Rollback(dataDir, project string, depID int64) error {
+	if m.missing[depID] {
+		return fmt.Errorf("version v%d not found on disk", depID)
+	}
 	m.rollbackCalls = append(m.rollbackCalls, mockStaticRollbackCall{dataDir, project, depID})
 	return nil
 }
@@ -1392,6 +1396,63 @@ func TestDeleteProjectStopsContainer(t *testing.T) {
 
 	if len(mocks.container.stopCalls) != 1 || mocks.container.stopCalls[0] != "web" {
 		t.Errorf("expected container.Stop(web), got %v", mocks.container.stopCalls)
+	}
+}
+
+func TestStaticDeployRedeploysLatestVersionOnDisk(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site", Branch: "main", Static: "static",
+	})
+	v1, _ := st.RecordDeployment("site", "static", "success")
+	v2, _ := st.RecordDeployment("site", "static", "success")
+	st.RecordDeployment("site", "static", "failed")
+	mocks.static.missing = map[int64]bool{v2: true}
+
+	rr := do(t, srv, "POST", "/projects/site/deploy", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.static.rollbackCalls) != 1 || mocks.static.rollbackCalls[0].DepID != v1 {
+		t.Errorf("expected re-point to v%d (newest success on disk), got %v", v1, mocks.static.rollbackCalls)
+	}
+	if len(mocks.static.deployCalls) != 0 {
+		t.Errorf("a plain static deploy must not upload, got %v", mocks.static.deployCalls)
+	}
+}
+
+func TestStaticDeployWithoutVersionsFailsClearly(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site", Branch: "main", Static: "static",
+	})
+	st.RecordDeployment("site", "static", "failed")
+
+	rr := do(t, srv, "POST", "/projects/site/deploy", nil, globalToken)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "--from") {
+		t.Errorf("error should point at --from, got %s", rr.Body.String())
+	}
+	if len(mocks.static.rollbackCalls) != 0 {
+		t.Errorf("expected no re-point, got %v", mocks.static.rollbackCalls)
+	}
+}
+
+func TestStaticDeployRejectsImage(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site", Branch: "main", Static: "static",
+	})
+	st.RecordDeployment("site", "static", "success")
+
+	rr := do(t, srv, "POST", "/projects/site/deploy", map[string]string{"image": "x:1"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.static.rollbackCalls) != 0 {
+		t.Errorf("expected no re-point, got %v", mocks.static.rollbackCalls)
 	}
 }
 

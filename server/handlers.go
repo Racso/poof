@@ -842,7 +842,7 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p.IsStatic() {
-		jsonError(w, "this is a static project — use POST /projects/"+name+"/deploy/static", http.StatusBadRequest)
+		s.redeployStatic(w, p, r)
 		return
 	}
 	if p.IsExternal() {
@@ -862,6 +862,55 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.runDeploy(w, p, req.Image)
+}
+
+// redeployStatic is a plain deploy of a static project: it re-points the site
+// at the newest successful version still on disk. It never takes files from
+// the caller; uploads go through deploy/static, which CI uses and the CLI only
+// reaches through an explicit --from. A version whose directory is gone (GC'd
+// or deleted by hand) is skipped, since it cannot be served.
+func (s *Server) redeployStatic(w http.ResponseWriter, p *store.Project, r *http.Request) {
+	var req deployRequest
+	if json.NewDecoder(r.Body).Decode(&req) == nil && req.Image != "" {
+		jsonError(w, "image does not apply to a static project: a static deploy redeploys its latest version", http.StatusBadRequest)
+		return
+	}
+
+	s.gate.enterDeploy()
+	defer s.gate.leaveDeploy()
+
+	deps, err := s.store.ListDeployments(p.Name, 0)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Newest first by id: deployed_at has one-second resolution.
+	sort.Slice(deps, func(i, j int) bool { return deps[i].ID > deps[j].ID })
+	var lastErr error
+	for _, d := range deps {
+		if d.Status != "success" {
+			continue
+		}
+		if err := s.static.Rollback(s.cfg.DataDir, p.Name, d.ID); err != nil {
+			log.Printf("static redeploy %s: skipping v%d: %v", p.Name, d.ID, err)
+			lastErr = err
+			continue
+		}
+		log.Printf("static redeployed: %s (v%d)", p.Name, d.ID)
+		s.syncRouting(w, "redeploying static project "+p.Name)
+		jsonOK(w, map[string]interface{}{
+			"status":  "deployed",
+			"domain":  p.Domain,
+			"version": d.ID,
+		})
+		return
+	}
+
+	msg := fmt.Sprintf("%s has no successful static deploy to redeploy: push to %q so CI builds and uploads it, or upload a folder with `poof deploy %s --from <dir>`", p.Name, p.Branch, p.Name)
+	if lastErr != nil {
+		msg = fmt.Sprintf("%s has no successful static deploy left on disk (last error: %v): push to %q so CI builds and uploads it, or upload a folder with `poof deploy %s --from <dir>`", p.Name, lastErr, p.Branch, p.Name)
+	}
+	jsonError(w, msg, http.StatusConflict)
 }
 
 func (s *Server) deployStaticProject(w http.ResponseWriter, r *http.Request) {
