@@ -138,6 +138,9 @@ func (staticAdapter) Rollback(dataDir, project string, depID int64) error {
 func (staticAdapter) IsDeployed(dataDir, project string) bool {
 	return static.IsDeployed(dataDir, project)
 }
+func (staticAdapter) HasVersion(dataDir, project string, depID int64) bool {
+	return static.HasVersion(dataDir, project, depID)
+}
 func (staticAdapter) Remove(dataDir, project string) { static.Remove(dataDir, project) }
 func (staticAdapter) GC(dataDir, project string, versions []server.StaticVersion, keep int, dryRun bool) (server.GCResult, error) {
 	sv := make([]static.VersionInfo, len(versions))

@@ -88,6 +88,7 @@ type StaticDeployer interface {
 	Deploy(dataDir, project string, depID int64, tarball io.Reader) error
 	Rollback(dataDir, project string, depID int64) error
 	IsDeployed(dataDir, project string) bool
+	HasVersion(dataDir, project string, depID int64) bool
 	Remove(dataDir, project string)
 	GC(dataDir, project string, versions []StaticVersion, keep int, dryRun bool) (GCResult, error)
 }

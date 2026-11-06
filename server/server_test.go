@@ -266,6 +266,10 @@ func (m *mockStaticDeployer) Rollback(dataDir, project string, depID int64) erro
 	return nil
 }
 
+func (m *mockStaticDeployer) HasVersion(_, _ string, depID int64) bool {
+	return !m.missing[depID]
+}
+
 func (m *mockStaticDeployer) IsDeployed(_, project string) bool {
 	if m.deployed == nil {
 		return false
@@ -1418,6 +1422,45 @@ func TestStaticDeployRedeploysLatestVersionOnDisk(t *testing.T) {
 	}
 	if len(mocks.static.deployCalls) != 0 {
 		t.Errorf("a plain static deploy must not upload, got %v", mocks.static.deployCalls)
+	}
+}
+
+func TestStaticRollbackSkipsVersionsMissingOnDisk(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site", Branch: "main", Static: "static",
+	})
+	v1, _ := st.RecordDeployment("site", "static", "success")
+	v2, _ := st.RecordDeployment("site", "static", "success")
+	v3, _ := st.RecordDeployment("site", "static", "success")
+	v4, _ := st.RecordDeployment("site", "static", "success")
+	// Live is v3; v4 and v2 were deleted by hand.
+	mocks.static.missing = map[int64]bool{v4: true, v2: true}
+
+	rr := do(t, srv, "POST", "/projects/site/rollback", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("rollback: %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.static.rollbackCalls) != 1 || mocks.static.rollbackCalls[0].DepID != v1 {
+		t.Errorf("expected rollback v%d -> v%d, got %v", v3, v1, mocks.static.rollbackCalls)
+	}
+}
+
+func TestStaticRollbackRefusesWithOneVersionOnDisk(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "site", Domain: "site.rac.so", Repo: "racso/site", Branch: "main", Static: "static",
+	})
+	v1, _ := st.RecordDeployment("site", "static", "success")
+	st.RecordDeployment("site", "static", "success")
+	mocks.static.missing = map[int64]bool{v1: true}
+
+	rr := do(t, srv, "POST", "/projects/site/rollback", nil, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.static.rollbackCalls) != 0 {
+		t.Errorf("expected no re-point, got %v", mocks.static.rollbackCalls)
 	}
 }
 

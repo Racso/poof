@@ -94,6 +94,12 @@ func Rollback(dataDir, project string, depID int64) error {
 	return nil
 }
 
+// HasVersion reports whether a version's directory is still on disk.
+func HasVersion(dataDir, project string, depID int64) bool {
+	fi, err := os.Stat(filepath.Join(projectDir(dataDir, project), "versions", fmt.Sprintf("v%d", depID)))
+	return err == nil && fi.IsDir()
+}
+
 // IsDeployed returns true if the project has a "current" symlink.
 func IsDeployed(dataDir, project string) bool {
 	_, err := os.Stat(filepath.Join(projectDir(dataDir, project), "current"))

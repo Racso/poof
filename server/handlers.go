@@ -879,38 +879,52 @@ func (s *Server) redeployStatic(w http.ResponseWriter, p *store.Project, r *http
 	s.gate.enterDeploy()
 	defer s.gate.leaveDeploy()
 
-	deps, err := s.store.ListDeployments(p.Name, 0)
+	versions, err := s.staticVersionsOnDisk(p.Name)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Newest first by id: deployed_at has one-second resolution.
-	sort.Slice(deps, func(i, j int) bool { return deps[i].ID > deps[j].ID })
-	var lastErr error
+	if len(versions) == 0 {
+		jsonError(w, fmt.Sprintf("%s has no successful static deploy on disk to redeploy: push to %q so CI builds and uploads it, or upload a folder with `poof deploy %s --from <dir>`", p.Name, p.Branch, p.Name), http.StatusConflict)
+		return
+	}
+	v := versions[0]
+	if err := s.static.Rollback(s.cfg.DataDir, p.Name, v); err != nil {
+		jsonError(w, fmt.Sprintf("redeploy failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("static redeployed: %s (v%d)", p.Name, v)
+	s.syncRouting(w, "redeploying static project "+p.Name)
+	jsonOK(w, map[string]interface{}{
+		"status":  "deployed",
+		"domain":  p.Domain,
+		"version": v,
+	})
+}
+
+// staticVersionsOnDisk returns the ids of a static project's successful
+// deployments whose version directory still exists, newest first. A row
+// whose directory is gone (GC'd, or deleted by hand) cannot be served, so
+// neither redeploy nor rollback may pick it.
+func (s *Server) staticVersionsOnDisk(project string) ([]int64, error) {
+	deps, err := s.store.ListDeployments(project, 0)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
 	for _, d := range deps {
 		if d.Status != "success" {
 			continue
 		}
-		if err := s.static.Rollback(s.cfg.DataDir, p.Name, d.ID); err != nil {
-			log.Printf("static redeploy %s: skipping v%d: %v", p.Name, d.ID, err)
-			lastErr = err
+		if !s.static.HasVersion(s.cfg.DataDir, project, d.ID) {
+			log.Printf("static %s: v%d is recorded as success but missing on disk; skipping", project, d.ID)
 			continue
 		}
-		log.Printf("static redeployed: %s (v%d)", p.Name, d.ID)
-		s.syncRouting(w, "redeploying static project "+p.Name)
-		jsonOK(w, map[string]interface{}{
-			"status":  "deployed",
-			"domain":  p.Domain,
-			"version": d.ID,
-		})
-		return
+		ids = append(ids, d.ID)
 	}
-
-	msg := fmt.Sprintf("%s has no successful static deploy to redeploy: push to %q so CI builds and uploads it, or upload a folder with `poof deploy %s --from <dir>`", p.Name, p.Branch, p.Name)
-	if lastErr != nil {
-		msg = fmt.Sprintf("%s has no successful static deploy left on disk (last error: %v): push to %q so CI builds and uploads it, or upload a folder with `poof deploy %s --from <dir>`", p.Name, lastErr, p.Branch, p.Name)
-	}
-	jsonError(w, msg, http.StatusConflict)
+	// Newest first by id: deployed_at has one-second resolution.
+	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
+	return ids, nil
 }
 
 func (s *Server) deployStaticProject(w http.ResponseWriter, r *http.Request) {
@@ -965,15 +979,21 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prev, err := s.store.PreviousDeployment(name)
-	if err != nil || prev == nil {
-		jsonError(w, "no previous deployment to roll back to", http.StatusBadRequest)
-		return
-	}
-
 	if p.IsStatic() {
-		log.Printf("static rollback triggered: %s → v%d", name, prev.ID)
-		if err := s.static.Rollback(s.cfg.DataDir, name, prev.ID); err != nil {
+		s.gate.enterDeploy()
+		defer s.gate.leaveDeploy()
+		versions, err := s.staticVersionsOnDisk(name)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(versions) < 2 {
+			jsonError(w, "no previous deployment on disk to roll back to", http.StatusBadRequest)
+			return
+		}
+		target := versions[1]
+		log.Printf("static rollback triggered: %s → v%d", name, target)
+		if err := s.static.Rollback(s.cfg.DataDir, name, target); err != nil {
 			jsonError(w, fmt.Sprintf("rollback failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -982,6 +1002,12 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 			"status": "rolled back",
 			"domain": p.Domain,
 		})
+		return
+	}
+
+	prev, err := s.store.PreviousDeployment(name)
+	if err != nil || prev == nil {
+		jsonError(w, "no previous deployment to roll back to", http.StatusBadRequest)
 		return
 	}
 
