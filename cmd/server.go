@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"io"
 
@@ -52,7 +53,7 @@ var serverCmd = &cobra.Command{
 
 		checkCaddySetup(scfg)
 
-		srv := server.New(scfg, st, newGitHubClient, dockerAdapter{}, staticAdapter{}, caddyAdapter{})
+		srv := server.New(scfg, st, &githubAdapter{}, dockerAdapter{}, staticAdapter{}, caddyAdapter{})
 		if err := srv.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: server: %v\n", err)
 			os.Exit(1)
@@ -60,8 +61,55 @@ var serverCmd = &cobra.Command{
 	},
 }
 
-func newGitHubClient(token string) server.RepoManager {
-	return gh.NewClient(token)
+// githubAdapter implements server.GitHubProvider over the github package. It
+// keeps one AppAuth alive across requests so installation tokens are reused
+// rather than minted per call, and rebuilds it when the App settings change.
+type githubAdapter struct {
+	mu      sync.Mutex
+	app     *gh.AppAuth
+	appID   string
+	keyPath string
+}
+
+func (g *githubAdapter) appAuth(auth server.GitHubAuth) (*gh.AppAuth, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.app == nil || g.appID != auth.AppID || g.keyPath != auth.KeyPath {
+		app, err := gh.NewAppAuth(auth.AppID, auth.KeyPath)
+		if err != nil {
+			return nil, err
+		}
+		g.app, g.appID, g.keyPath = app, auth.AppID, auth.KeyPath
+	}
+	return g.app, nil
+}
+
+func (g *githubAdapter) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
+	if !auth.UsesApp() {
+		return gh.NewClient(auth.Token), nil
+	}
+	app, err := g.appAuth(auth)
+	if err != nil {
+		return nil, err
+	}
+	token, err := app.RepoToken(owner, repo)
+	if err != nil {
+		return nil, err
+	}
+	return gh.NewClient(token), nil
+}
+
+func (g *githubAdapter) PackagesToken(auth server.GitHubAuth, owner string) (string, error) {
+	app, err := g.appAuth(auth)
+	if err != nil {
+		return "", err
+	}
+	return app.PackagesToken(owner)
+}
+
+func (g *githubAdapter) ValidateAppKey(path string) error {
+	_, err := gh.LoadPrivateKey(path)
+	return err
 }
 
 // dockerAdapter delegates server.ContainerManager to the docker package functions.

@@ -29,14 +29,89 @@ func (s *Server) settingDomain() string {
 	return v
 }
 
-func (s *Server) settingGitHubToken() string {
-	v, _ := s.store.GetSetting("github-token")
-	return v
-}
-
 func (s *Server) settingGitHubUser() string {
 	v, _ := s.store.GetSetting("github-user")
 	return v
+}
+
+// Setting keys for the GitHub credential. See GitHubAuth.
+const (
+	settingGitHubAppID      = "github-app-id"
+	settingGitHubAppKeyPath = "github-app-key-path"
+	settingGitHubToken      = "github-token"
+)
+
+// githubAuth reads the GitHub credential from settings. Read on every use so
+// `poof config set` takes effect without a restart.
+func (s *Server) githubAuth() GitHubAuth {
+	appID, _ := s.store.GetSetting(settingGitHubAppID)
+	keyPath, _ := s.store.GetSetting(settingGitHubAppKeyPath)
+	token, _ := s.store.GetSetting(settingGitHubToken)
+	return GitHubAuth{AppID: appID, KeyPath: keyPath, Token: token}
+}
+
+// warnLegacyGitHubToken logs at startup while a PAT is still stored. The App
+// is the credential Poof is meant to run with; the PAT is a migration aid.
+func (s *Server) warnLegacyGitHubToken() {
+	auth := s.githubAuth()
+	if auth.Token == "" {
+		return
+	}
+	if auth.UsesApp() {
+		log.Printf("warning: a legacy github-token is still stored and unused (the GitHub App takes precedence) — clear it with 'poof config unset github-token'")
+		return
+	}
+	log.Printf("warning: GitHub access uses a legacy personal access token — configure a GitHub App (github-app-id + github-app-key-path) and clear github-token")
+}
+
+// splitRepo resolves a project's repo setting into owner and name. A bare
+// name belongs to the configured github-user.
+func (s *Server) splitRepo(repo string) (owner, name string) {
+	owner, name, found := strings.Cut(repo, "/")
+	if !found {
+		return s.settingGitHubUser(), repo
+	}
+	return owner, name
+}
+
+// githubClientFor returns a GitHub client scoped to the project's repository,
+// plus the resolved owner and repo name. It is the single way handlers reach
+// GitHub; errors mean the credential could not be turned into a client (App
+// not installed on the owner's account, unreadable key, ...).
+func (s *Server) githubClientFor(repo string) (client RepoManager, owner, name string, err error) {
+	owner, name = s.splitRepo(repo)
+	client, err = s.github.RepoManager(s.githubAuth(), owner, name)
+	return client, owner, name, err
+}
+
+// registryCredentials returns the docker login for pulling owner's images:
+// a packages-only App token, or the legacy user + PAT. Empty when nothing is
+// configured or minting fails (logged); the pull then runs anonymously, which
+// is enough for a public image.
+func (s *Server) registryCredentials(owner string) (user, token string) {
+	auth := s.githubAuth()
+	if !auth.UsesApp() {
+		return s.settingGitHubUser(), auth.Token
+	}
+	token, err := s.github.PackagesToken(auth, owner)
+	if err != nil {
+		log.Printf("warning: registry token for %s: %v — pulling without credentials", owner, err)
+		return "", ""
+	}
+	return registryUser, token
+}
+
+// registryUser is the username GHCR expects alongside an installation token.
+const registryUser = "x-access-token"
+
+// imageOwner returns the account an image belongs to on its registry
+// (`ghcr.io/owner/pkg:tag` → `owner`), or "" for a bare Docker Hub name.
+func imageOwner(image string) string {
+	parts := strings.Split(strings.SplitN(image, ":", 2)[0], "/")
+	if len(parts) >= 3 {
+		return parts[1]
+	}
+	return ""
 }
 
 // --- Config ---
@@ -47,11 +122,13 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// The GitHub PAT is write-only over the API: any token holder could
-	// otherwise read it back in plaintext and act on the whole account.
+	// The legacy GitHub PAT is write-only over the API: any token holder
+	// could otherwise read it back in plaintext and act on the whole account.
+	// The App settings are an id and a path; the key itself never enters
+	// the database.
 	masked := make(map[string]string, len(settings))
 	for k, v := range settings {
-		if k == "github-token" {
+		if k == settingGitHubToken {
 			v = maskSecret(v)
 		}
 		masked[k] = v
@@ -73,8 +150,7 @@ func maskSecret(v string) string {
 
 func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
-	validKeys := map[string]bool{"domain": true, "github-user": true, "github-token": true}
-	if !validKeys[key] {
+	if !configKeys[key] {
 		jsonError(w, "unknown config key: "+key, http.StatusBadRequest)
 		return
 	}
@@ -85,12 +161,45 @@ func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "value is required", http.StatusBadRequest)
 		return
 	}
+	// A bad key path or an unparseable PEM should fail here, with the
+	// operator watching, rather than on the next `poof add` in a log line.
+	if key == settingGitHubAppKeyPath {
+		if err := s.github.ValidateAppKey(req.Value); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if err := s.store.SetSetting(key, req.Value); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	log.Printf("config updated: %s", key)
 	jsonOK(w, map[string]string{"key": key, "status": "updated"})
+}
+
+// configKeys are the settings `poof config set` / `unset` may touch.
+var configKeys = map[string]bool{
+	"domain":                true,
+	"github-user":           true,
+	settingGitHubToken:      true,
+	settingGitHubAppID:      true,
+	settingGitHubAppKeyPath: true,
+}
+
+// unsetConfig removes a setting. It exists so the legacy PAT can be cleared
+// once the App is in place; setConfig refuses empty values.
+func (s *Server) unsetConfig(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if !configKeys[key] {
+		jsonError(w, "unknown config key: "+key, http.StatusBadRequest)
+		return
+	}
+	if err := s.store.DeleteSetting(key); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("config cleared: %s", key)
+	jsonOK(w, map[string]string{"key": key, "status": "cleared"})
 }
 
 // domainConflict reports a human-readable conflict when domain is already
@@ -353,15 +462,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set up GitHub repo (secrets + workflow) if a PAT is configured and CI is enabled.
-	if p.CI && s.settingGitHubToken() != "" {
-		client := s.ghFactory(s.settingGitHubToken())
-		owner, repoName, found := strings.Cut(req.Repo, "/")
-		if !found {
-			owner = s.settingGitHubUser()
-			repoName = req.Repo
+	// Set up GitHub repo (secrets + workflow) if a credential is configured and CI is enabled.
+	if p.CI && s.githubAuth().Configured() {
+		client, owner, repoName, err := s.githubClientFor(req.Repo)
+		if err == nil {
+			err = client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static, p.CIMode, req.Build)
 		}
-		if err := client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static, p.CIMode, req.Build); err != nil {
+		if err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
 		}
 	}
@@ -503,27 +610,26 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if s.settingGitHubToken() != "" && (repoChanged || branchChanged || folderChanged || staticChanged || buildChanged || ciChanged || ciModeChanged) {
-		client := s.ghFactory(s.settingGitHubToken())
-		owner, repoName, found := strings.Cut(p.Repo, "/")
-		if !found {
-			owner = s.settingGitHubUser()
-			repoName = p.Repo
-		}
-		repoToken, _ := s.store.GetRepoToken(p.Repo)
-		if p.CI && repoToken == "" {
-			// Turning CI back on after `--ci no` removed the repo's last
-			// CI project: without this, an empty POOF_TOKEN is written.
-			if repoToken, err = s.ensureRepoToken(p.Repo); err != nil {
-				log.Printf("warning: minting deploy token for %s failed: %v", p.Repo, err)
-			}
-		}
-		ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
-		if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
+	if s.githubAuth().Configured() && (repoChanged || branchChanged || folderChanged || staticChanged || buildChanged || ciChanged || ciModeChanged) {
+		client, owner, repoName, err := s.githubClientFor(p.Repo)
+		if err != nil {
 			log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
-		}
-		if !p.CI && ciSiblings == 0 {
-			_ = s.store.DeleteRepoToken(p.Repo)
+		} else {
+			repoToken, _ := s.store.GetRepoToken(p.Repo)
+			if p.CI && repoToken == "" {
+				// Turning CI back on after `--ci no` removed the repo's last
+				// CI project: without this, an empty POOF_TOKEN is written.
+				if repoToken, err = s.ensureRepoToken(p.Repo); err != nil {
+					log.Printf("warning: minting deploy token for %s failed: %v", p.Repo, err)
+				}
+			}
+			ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
+			if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
+				log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
+			}
+			if !p.CI && ciSiblings == 0 {
+				_ = s.store.DeleteRepoToken(p.Repo)
+			}
 		}
 	}
 
@@ -563,18 +669,16 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		s.teardownAppNetwork(name)
 	}
 
-	// Clean up GitHub if PAT is configured.
-	if s.settingGitHubToken() != "" {
-		client := s.ghFactory(s.settingGitHubToken())
-		owner, repoName, found := strings.Cut(p.Repo, "/")
-		if !found {
-			owner = s.settingGitHubUser()
-			repoName = p.Repo
-		}
+	// Clean up GitHub if a credential is configured.
+	if s.githubAuth().Configured() {
 		// Only delete the POOF_TOKEN secret if this is the last project for this repo.
 		siblings, _ := s.store.CountProjectsForRepo(p.Repo)
 		lastForRepo := siblings <= 1
-		if err := client.RemoveRepoCI(owner, repoName, name, p.Branch, lastForRepo); err != nil {
+		client, owner, repoName, err := s.githubClientFor(p.Repo)
+		if err == nil {
+			err = client.RemoveRepoCI(owner, repoName, name, p.Branch, lastForRepo)
+		}
+		if err != nil {
 			log.Printf("warning: GitHub cleanup for %s: %v", name, err)
 		}
 		if lastForRepo {
@@ -752,14 +856,12 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set up GitHub.
-	if p.CI && s.settingGitHubToken() != "" {
-		client := s.ghFactory(s.settingGitHubToken())
-		owner, repoName, found := strings.Cut(source.Repo, "/")
-		if !found {
-			owner = s.settingGitHubUser()
-			repoName = source.Repo
+	if p.CI && s.githubAuth().Configured() {
+		client, owner, repoName, err := s.githubClientFor(source.Repo)
+		if err == nil {
+			err = client.SetRepoCI(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build)
 		}
-		if err := client.SetRepoCI(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build); err != nil {
+		if err != nil {
 			log.Printf("warning: GitHub setup for %s failed: %v", cloneName, err)
 		}
 	}
@@ -789,8 +891,8 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.settingGitHubToken() == "" {
-		jsonError(w, "no GitHub PAT configured on server", http.StatusPreconditionFailed)
+	if !s.githubAuth().Configured() {
+		jsonError(w, "no GitHub App configured on server (poof config set github-app-id / github-app-key-path)", http.StatusPreconditionFailed)
 		return
 	}
 
@@ -803,11 +905,10 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	client := s.ghFactory(s.settingGitHubToken())
-	owner, repoName, found := strings.Cut(p.Repo, "/")
-	if !found {
-		owner = s.settingGitHubUser()
-		repoName = p.Repo
+	client, owner, repoName, err := s.githubClientFor(p.Repo)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("GitHub CI refresh failed: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
@@ -1202,6 +1303,11 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	// While paused, the new container is created but not started: the fix is
 	// applied offline and resume brings it up. Its deployment row stays
 	// "staged" until resume resolves it to success/failed by the start outcome.
+	registryOwner := imageOwner(image)
+	if registryOwner == "" {
+		registryOwner, _ = s.splitRepo(p.Repo)
+	}
+	registryUser, registryToken := s.registryCredentials(registryOwner)
 	err = s.container.Deploy(ContainerDeployConfig{
 		Name:          p.Name,
 		Image:         image,
@@ -1209,8 +1315,8 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 		Volumes:       mounts,
 		Network:       appNet,
 		Networks:      nets,
-		RegistryUser:  s.settingGitHubUser(),
-		RegistryToken: s.settingGitHubToken(),
+		RegistryUser:  registryUser,
+		RegistryToken: registryToken,
 		CreateOnly:    p.Paused,
 	})
 

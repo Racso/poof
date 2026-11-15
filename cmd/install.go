@@ -290,21 +290,28 @@ func runInstall(cmd *cobra.Command, args []string) {
 	}
 
 	// ── 9. Start Poof! container ─────────────────────────────────────
+	const githubAppKeyPath = "/etc/poof/github-app.pem"
 	printStep("Starting Poof!")
 
 	// Remove existing container if stopped.
 	exec.Command("docker", "rm", "-f", "poof").Run()
 
-	out, err = exec.Command("docker", "run", "-d",
+	runArgs := []string{"run", "-d",
 		"--name", "poof",
 		"--restart", "always",
 		"--network", "poof-net",
 		"-p", "127.0.0.1:9000:9000",
 		"-v", "/etc/poof/poof.toml:/etc/poof/poof.toml:ro",
-		"-v", poofDataDir+":"+poofDataDir,
+		"-v", poofDataDir + ":" + poofDataDir,
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
-		"poof:latest",
-	).CombinedOutput()
+	}
+	// The GitHub App private key, when the operator has already placed it.
+	// Read-only: the server only ever signs with it.
+	if _, err := os.Stat(githubAppKeyPath); err == nil {
+		runArgs = append(runArgs, "-v", githubAppKeyPath+":"+githubAppKeyPath+":ro")
+	}
+	runArgs = append(runArgs, "poof:latest")
+	out, err = exec.Command("docker", runArgs...).CombinedOutput()
 	if err != nil {
 		printFail("Failed to start Poof! container")
 		fmt.Fprintf(os.Stderr, "  %s\n", strings.TrimSpace(string(out)))

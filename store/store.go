@@ -967,6 +967,11 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
+func (s *Store) DeleteSetting(key string) error {
+	_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
+	return err
+}
+
 func (s *Store) GetAllSettings() (map[string]string, error) {
 	rows, err := s.db.Query(`SELECT key, value FROM settings ORDER BY key`)
 	if err != nil {

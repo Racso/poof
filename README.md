@@ -9,7 +9,7 @@ poof add myapp
 
 ## How it works
 
-1. `poof add myapp` registers a project. If a GitHub PAT is configured, Poof! also sets `POOF_TOKEN` as a repo secret and commits the deploy workflow into the repo.
+1. `poof add myapp` registers a project. If a GitHub App is configured, Poof! also sets `POOF_TOKEN` as a repo secret and commits the deploy workflow into the repo.
 2. On every push to `main`, GitHub Actions builds a Docker image, pushes it to GHCR tagged both `:<commit-sha>` (immutable, what gets deployed) and `:<branch>` (moving, for anything that wants to follow the branch), then calls `POST /projects/myapp/deploy` on your Poof! server.
 3. Poof! pulls the image, starts the container on its own isolated network (`poof-app-myapp`, shared only with Caddy), and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
 
@@ -63,10 +63,34 @@ After the server is running, push the remaining settings from your machine:
 ```sh
 poof config set domain yourdomain.com
 poof config set github-user  your-github-username
-poof config set github-token ghp_...    # PAT with scopes: repo, workflow, read:packages, delete:packages
+poof config set github-app-id 12345
+poof config set github-app-key-path /etc/poof/github-app.pem
 ```
 
 Run `poof config` at any time to see the current client and server settings.
+
+### GitHub App
+
+Poof! talks to GitHub as a GitHub App: it commits workflow files, sets Actions secrets and pulls images from GHCR with short-lived installation tokens scoped to one repository at a time. Nothing long-lived is stored in the database; the only secret on the server is the App's private key, in a file.
+
+Create the App once (Settings → Developer settings → GitHub Apps → New GitHub App):
+
+- **Name:** Poof (any name works).
+- **Webhook:** uncheck *Active*. Poof! does not receive webhooks.
+- **Repository permissions:** Contents *Read and write*, Workflows *Read and write*, Secrets *Read and write*, Metadata *Read-only*, Packages *Read-only*.
+- Where it can be installed: *Any account*, if other people's repositories will deploy through this server.
+
+Then, on the App's page, note the **App ID**, generate a **private key** (a `.pem` download), and **install** the App on your account with access to *All repositories*. Anyone else whose repositories deploy through your server installs the same App on their own account; Poof! finds the right installation from the repository owner, with no extra setting.
+
+Put the key on the server, readable only by the Poof! container:
+
+```sh
+sudo install -m 0600 -o root -g root poof.*.private-key.pem /etc/poof/github-app.pem
+```
+
+and mount it read-only into the container (`-v /etc/poof/github-app.pem:/etc/poof/github-app.pem:ro`; `poof install` does this when the file exists). `poof config set github-app-key-path` refuses a path the server cannot read or parse.
+
+A legacy personal access token (`poof config set github-token ghp_...`) still works as a fallback, but the server logs a warning while one is stored. Once the App is configured, clear it with `poof config unset github-token` and delete the token on GitHub.
 
 ## Client configuration
 

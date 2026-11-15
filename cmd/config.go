@@ -15,33 +15,49 @@ var configCmd = &cobra.Command{
 	Run:   runConfigShow,
 }
 
+// serverConfigKeys are the settings stored on the server, in display order.
+var serverConfigKeys = []string{"domain", "github-user", "github-app-id", "github-app-key-path", "github-token"}
+
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> [value]",
 	Short: "Set a configuration value",
 	Long: `Set a configuration value.
 
 Local keys (written to this machine's config file):
-  server        URL of the Poof! server. Omit value on the server machine itself.
-  token         API token for authenticating with the server.
+  server               URL of the Poof! server. Omit value on the server machine itself.
+  token                API token for authenticating with the server.
 
 Server keys (sent to the remote server — requires server and token to be set):
-  domain        Default domain for new projects (e.g. mydomain.com).
-  github-user   GitHub username used for automatic CI setup.
-  github-token  GitHub personal access token.`,
+  domain               Default domain for new projects (e.g. mydomain.com).
+  github-user          GitHub username used for automatic CI setup.
+  github-app-id        GitHub App id used to manage CI and pull images.
+  github-app-key-path  Path, on the server, to the App's private key (PEM).
+  github-token         Legacy GitHub personal access token. Prefer the App.`,
 	Args: cobra.RangeArgs(1, 2),
 	Run:  runConfigSet,
 }
 
+var configUnsetCmd = &cobra.Command{
+	Use:   "unset <key>",
+	Short: "Clear a server configuration value",
+	Long: `Clear a server configuration value.
+
+Typically used to remove the legacy github-token once a GitHub App is configured.`,
+	Args: cobra.ExactArgs(1),
+	Run:  runConfigUnset,
+}
+
 func init() {
 	configCmd.AddCommand(configSetCmd)
+	configCmd.AddCommand(configUnsetCmd)
 	rootCmd.AddCommand(configCmd)
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) {
 	path := config.ClientConfigPath()
 	fmt.Printf("client config  %s\n", path)
-	fmt.Printf("  %-14s  %s\n", "server", displayValue(cfg.Server))
-	fmt.Printf("  %-14s  %s\n", "token", maskSecret(cfg.Token))
+	fmt.Printf("  %-20s  %s\n", "server", displayValue(cfg.Server))
+	fmt.Printf("  %-20s  %s\n", "token", maskSecret(cfg.Token))
 
 	if cfg.Server == "" {
 		fmt.Println()
@@ -62,12 +78,30 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("server settings  (%s)\n", serverLabel)
-	for _, key := range []string{"domain", "github-user", "github-token"} {
+	for _, key := range serverConfigKeys {
 		v := displayValue(settings[key])
 		if key == "github-token" {
 			v = maskSecret(settings[key])
 		}
-		fmt.Printf("  %-14s  %s\n", key, v)
+		fmt.Printf("  %-20s  %s\n", key, v)
+	}
+}
+
+func isServerConfigKey(key string) bool {
+	for _, k := range serverConfigKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+func requireServerConnection() {
+	if cfg.Server == "" {
+		fatal("server not configured — run: poof config set server <url> first")
+	}
+	if cfg.Token == "" {
+		fatal("token not configured — run: poof config set token <token> first")
 	}
 }
 
@@ -78,8 +112,8 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		value = args[1]
 	}
 
-	switch key {
-	case "server":
+	switch {
+	case key == "server":
 		if value == "" {
 			value = config.ServerLocal
 		}
@@ -89,7 +123,7 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("server = %q  →  %s%s\n", value, path, profileSuffix())
 
-	case "token":
+	case key == "token":
 		if value == "" {
 			fatal("value required: poof config set token <token>")
 		}
@@ -99,24 +133,31 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("token updated  →  %s%s\n", path, profileSuffix())
 
-	case "domain", "github-user", "github-token":
+	case isServerConfigKey(key):
 		if value == "" {
 			fatal("value required: poof config set %s <value>", key)
 		}
-		if cfg.Server == "" {
-			fatal("server not configured — run: poof config set server <url> first")
-		}
-		if cfg.Token == "" {
-			fatal("token not configured — run: poof config set token <token> first")
-		}
+		requireServerConnection()
 		if err := apiPatch("/config/"+key, map[string]string{"value": value}, nil); err != nil {
 			fatal("%v", err)
 		}
 		fmt.Printf("%s updated\n", key)
 
 	default:
-		fatal("unknown key %q\nknown keys: server, token, domain, github-user, github-token", key)
+		fatal("unknown key %q\nknown keys: server, token, %s", key, strings.Join(serverConfigKeys, ", "))
 	}
+}
+
+func runConfigUnset(cmd *cobra.Command, args []string) {
+	key := args[0]
+	if !isServerConfigKey(key) {
+		fatal("unknown server key %q\nknown keys: %s", key, strings.Join(serverConfigKeys, ", "))
+	}
+	requireServerConnection()
+	if err := apiDelete("/config/" + key); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Printf("%s cleared\n", key)
 }
 
 func maskSecret(s string) string {

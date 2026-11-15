@@ -184,12 +184,16 @@ jobs:
             --data-binary @/tmp/site.tar.gz
 `
 
+// Client talks to the GitHub REST API with a bearer token: an App installation
+// token (see AppAuth) or a legacy personal access token. Either works the same
+// way here; only who minted it differs.
 type Client struct {
-	token string
+	token   string
+	apiBase string
 }
 
 func NewClient(token string) *Client {
-	return &Client{token: token}
+	return &Client{token: token, apiBase: apiBase}
 }
 
 // RefreshProjectCI reconciles the CI state for a project. If ci is true, it
@@ -472,7 +476,7 @@ func (c *Client) deleteWorkflow(owner, repo, projectName, branch string) error {
 	}
 
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("DELETE", apiBase+path, bytes.NewReader(body))
+	req, err := http.NewRequest("DELETE", c.apiBase+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -495,7 +499,7 @@ func (c *Client) deleteWorkflow(owner, repo, projectName, branch string) error {
 // --- HTTP helpers ---
 
 func (c *Client) get(path string, out interface{}) error {
-	req, err := http.NewRequest("GET", apiBase+path, nil)
+	req, err := http.NewRequest("GET", c.apiBase+path, nil)
 	if err != nil {
 		return err
 	}
@@ -520,7 +524,7 @@ func (c *Client) get(path string, out interface{}) error {
 // flows that want to ask "does this file exist?" without papering over
 // real failures.
 func (c *Client) getMaybe(path string, out interface{}) (found bool, err error) {
-	req, err := http.NewRequest("GET", apiBase+path, nil)
+	req, err := http.NewRequest("GET", c.apiBase+path, nil)
 	if err != nil {
 		return false, err
 	}
@@ -552,7 +556,7 @@ func (c *Client) put(path string, payload interface{}) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("PUT", apiBase+path, bytes.NewReader(body))
+	req, err := http.NewRequest("PUT", c.apiBase+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -573,7 +577,7 @@ func (c *Client) put(path string, payload interface{}) error {
 }
 
 func (c *Client) delete(path string) error {
-	req, err := http.NewRequest("DELETE", apiBase+path, nil)
+	req, err := http.NewRequest("DELETE", c.apiBase+path, nil)
 	if err != nil {
 		return err
 	}

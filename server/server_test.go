@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +60,37 @@ func (m *mockRepoManager) RemoveRepoCI(owner, repo, projectName, branch string, 
 func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error {
 	m.refreshCalls = append(m.refreshCalls, mockRefreshCall{owner, repo, projectName, ci, poofURL, repoToken, branch, image, folder, static, ciMode, build, deleteSecrets})
 	return nil
+}
+
+// --- Mock GitHubProvider ---
+
+type mockGitHubProvider struct {
+	repo *mockRepoManager
+	// Every credential the server asked a client for, in order.
+	auths []server.GitHubAuth
+	// Owners the server asked a registry token for.
+	packagesOwners []string
+	// Non-nil makes RepoManager fail, like an App not installed on the owner.
+	repoErr error
+	// Non-nil makes ValidateAppKey fail.
+	keyErr error
+}
+
+func (m *mockGitHubProvider) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
+	m.auths = append(m.auths, auth)
+	if m.repoErr != nil {
+		return nil, m.repoErr
+	}
+	return m.repo, nil
+}
+
+func (m *mockGitHubProvider) PackagesToken(auth server.GitHubAuth, owner string) (string, error) {
+	m.packagesOwners = append(m.packagesOwners, owner)
+	return "ghs_packages_" + owner, nil
+}
+
+func (m *mockGitHubProvider) ValidateAppKey(path string) error {
+	return m.keyErr
 }
 
 // --- Mock ContainerManager ---
@@ -324,6 +356,7 @@ func (m *mockCaddySyncer) Validate(_, caddyfile string) error {
 
 type testMocks struct {
 	repo      *mockRepoManager
+	github    *mockGitHubProvider
 	container *mockContainerManager
 	static    *mockStaticDeployer
 	caddy     *mockCaddySyncer
@@ -364,9 +397,8 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 		caddy:     &mockCaddySyncer{},
 	}
 	mocks.caddyfilePath = cfg.CaddyfilePath()
-	srv := server.New(cfg, st, func(token string) server.RepoManager {
-		return mocks.repo
-	}, mocks.container, mocks.static, mocks.caddy)
+	mocks.github = &mockGitHubProvider{repo: mocks.repo}
+	srv := server.New(cfg, st, mocks.github, mocks.container, mocks.static, mocks.caddy)
 
 	return srv, st, mocks
 }
@@ -3148,6 +3180,156 @@ func TestGetConfigMasksGitHubToken(t *testing.T) {
 	}
 	if cfg["github-user"] != "racso" {
 		t.Errorf("non-secret settings must pass through: %q", cfg["github-user"])
+	}
+}
+
+// --- GitHub App credential ---
+
+func TestCreateProjectUsesGitHubApp(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-app-id", "12345")
+	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
+
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "repo": "silviatorres1/galqui"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.github.auths) != 1 {
+		t.Fatalf("expected 1 RepoManager request, got %d", len(mocks.github.auths))
+	}
+	if a := mocks.github.auths[0]; !a.UsesApp() || a.AppID != "12345" || a.KeyPath != "/etc/poof/github-app.pem" {
+		t.Errorf("auth passed to provider: %+v", a)
+	}
+	if len(mocks.repo.setupCalls) != 1 || mocks.repo.setupCalls[0].Owner != "silviatorres1" {
+		t.Errorf("SetRepoCI calls: %+v", mocks.repo.setupCalls)
+	}
+}
+
+func TestCreateProjectSurvivesGitHubAppNotInstalled(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("domain", "rac.so")
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-app-id", "12345")
+	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
+	mocks.github.repoErr = errors.New("GitHub App is not installed on account \"racso\"")
+
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create must succeed with CI setup logged as a warning: %d — %s", rr.Code, rr.Body.String())
+	}
+	if len(mocks.repo.setupCalls) != 0 {
+		t.Errorf("SetRepoCI must not run without a client: %+v", mocks.repo.setupCalls)
+	}
+}
+
+func TestRefreshProjectReportsGitHubAppError(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-app-id", "12345")
+	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
+	mocks.github.repoErr = errors.New("GitHub App is not installed on account \"racso\"")
+
+	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
+	if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "not installed") {
+		t.Fatalf("refresh: %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRefreshProjectWithoutAnyGitHubCredential(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
+
+	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
+	if rr.Code != http.StatusPreconditionFailed {
+		t.Fatalf("refresh: %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDeployPullsWithPackagesTokenUnderGitHubApp(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-app-id", "12345")
+	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
+	st.SetSetting("github-token", "ghp_legacy") // ignored while the App is configured
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/Silviatorres1/web", Repo: "silviatorres1/web", Branch: "main", Port: 80})
+
+	rr := do(t, srv, "POST", "/projects/web/deploy", map[string]interface{}{"image": "ghcr.io/Silviatorres1/web:v2"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+	c := mocks.container.deployCalls[0]
+	if c.RegistryUser != "x-access-token" || c.RegistryToken != "ghs_packages_Silviatorres1" {
+		t.Errorf("registry login: %s / %s", c.RegistryUser, c.RegistryToken)
+	}
+	if len(mocks.github.packagesOwners) != 1 || mocks.github.packagesOwners[0] != "Silviatorres1" {
+		t.Errorf("packages token requested for %v, want the image's owner", mocks.github.packagesOwners)
+	}
+}
+
+func TestDeployPullsWithLegacyPATWithoutApp(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.SetSetting("github-user", "racso")
+	st.SetSetting("github-token", "ghp_legacy")
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80})
+
+	rr := do(t, srv, "POST", "/projects/web/deploy", map[string]interface{}{"image": "ghcr.io/racso/web:v2"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+	c := mocks.container.deployCalls[0]
+	if c.RegistryUser != "racso" || c.RegistryToken != "ghp_legacy" {
+		t.Errorf("registry login: %s / %s", c.RegistryUser, c.RegistryToken)
+	}
+	if len(mocks.github.packagesOwners) != 0 {
+		t.Errorf("no App token should be requested without an App: %v", mocks.github.packagesOwners)
+	}
+}
+
+func TestSetConfigValidatesAppKeyPath(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	mocks.github.keyErr = errors.New("github app key: no PEM block found")
+
+	rr := do(t, srv, "PATCH", "/config/github-app-key-path", map[string]string{"value": "/etc/poof/nope.pem"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unusable key, got %d — %s", rr.Code, rr.Body.String())
+	}
+	if v, _ := st.GetSetting("github-app-key-path"); v != "" {
+		t.Errorf("rejected path must not be stored, got %q", v)
+	}
+
+	mocks.github.keyErr = nil
+	rr = do(t, srv, "PATCH", "/config/github-app-key-path", map[string]string{"value": "/etc/poof/github-app.pem"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("set key path: %d — %s", rr.Code, rr.Body.String())
+	}
+	rr = do(t, srv, "PATCH", "/config/github-app-id", map[string]string{"value": "12345"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("set app id: %d — %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUnsetConfigClearsLegacyToken(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.SetSetting("github-token", "ghp_legacy")
+
+	rr := do(t, srv, "DELETE", "/config/github-token", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unset: %d — %s", rr.Code, rr.Body.String())
+	}
+	if v, _ := st.GetSetting("github-token"); v != "" {
+		t.Errorf("token still stored: %q", v)
+	}
+	rr = do(t, srv, "DELETE", "/config/bogus", nil, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("unknown key: got %d", rr.Code)
+	}
+	rr = do(t, srv, "DELETE", "/config/github-token", nil, "")
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("unset without auth: got %d", rr.Code)
 	}
 }
 

@@ -25,6 +25,34 @@ type RepoManager interface {
 	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error
 }
 
+// GitHubAuth is the GitHub credential the server holds, read from settings on
+// every use: a GitHub App (`github-app-id` + `github-app-key-path`), or the
+// legacy personal access token (`github-token`), kept only as a fallback. The
+// App wins when both are set.
+type GitHubAuth struct {
+	AppID   string
+	KeyPath string
+	Token   string
+}
+
+// UsesApp reports whether the App credential is complete.
+func (a GitHubAuth) UsesApp() bool { return a.AppID != "" && a.KeyPath != "" }
+
+// Configured reports whether any GitHub credential is available.
+func (a GitHubAuth) Configured() bool { return a.UsesApp() || a.Token != "" }
+
+// GitHubProvider turns the stored credential into GitHub clients. Abstracted
+// so handlers can be tested without signing JWTs or hitting the GitHub API.
+type GitHubProvider interface {
+	// RepoManager returns a client able to manage CI on owner/repo.
+	RepoManager(auth GitHubAuth, owner, repo string) (RepoManager, error)
+	// PackagesToken returns a registry-pull token for owner's packages. Only
+	// called when auth.UsesApp(); the legacy PAT is used directly otherwise.
+	PackagesToken(auth GitHubAuth, owner string) (string, error)
+	// ValidateAppKey checks that path holds a usable App private key.
+	ValidateAppKey(path string) error
+}
+
 // ContainerManager abstracts Docker container operations.
 type ContainerManager interface {
 	Deploy(cfg ContainerDeployConfig) error
@@ -104,7 +132,7 @@ type Server struct {
 	cfg       *config.ServerConfig
 	store     *store.Store
 	logPath   string
-	ghFactory func(token string) RepoManager
+	github    GitHubProvider
 	container ContainerManager
 	static    StaticDeployer
 	caddy     CaddySyncer
@@ -124,12 +152,12 @@ type Server struct {
 	gcSweep func()
 }
 
-func New(cfg *config.ServerConfig, st *store.Store, ghFactory func(token string) RepoManager, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
+func New(cfg *config.ServerConfig, st *store.Store, github GitHubProvider, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
 	srv := &Server{
 		cfg:       cfg,
 		store:     st,
 		logPath:   filepath.Join(cfg.DataDir, "server.log"),
-		ghFactory: ghFactory,
+		github:    github,
 		container: container,
 		static:    static,
 		caddy:     caddySyncer,
@@ -210,6 +238,7 @@ func (s *Server) handler() http.Handler {
 	// Server settings
 	mux.HandleFunc("GET /config", s.auth(s.getConfig))
 	mux.HandleFunc("PATCH /config/{key}", s.auth(s.setConfig))
+	mux.HandleFunc("DELETE /config/{key}", s.auth(s.unsetConfig))
 
 	// Garbage collection
 	mux.HandleFunc("POST /gc", s.auth(s.triggerGC))
@@ -314,6 +343,7 @@ func (s *Server) Run() error {
 
 	addr := fmt.Sprintf(":%d", s.cfg.APIPort)
 	log.Printf("poof server starting — commit=%s committed=%s addr=%s", version.Commit, version.CommitTime, addr)
+	s.warnLegacyGitHubToken()
 
 	if err := s.syncCaddy(); err != nil {
 		log.Printf("ERROR: initial caddy sync failed: %v — Caddy is serving whatever config it "+

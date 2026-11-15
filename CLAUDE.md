@@ -47,7 +47,7 @@ Server entrypoints live in `cmd/server.go` and `cmd/install.go`. CLI entrypoints
 ## CLI surface (`poof --help`)
 
 Project lifecycle:
-- `poof add <name>` — register; auto-sets GitHub secrets + commits `.github/workflows/poof.yml` if a PAT is configured.
+- `poof add <name>` — register; auto-sets GitHub secrets + commits `.github/workflows/poof.yml` if a GitHub App is configured.
 - `poof add <name> --external <container>[:<port>]` — **external project**: Poof owns the domain and routing, nothing else. No image, repo, branch or CI; Caddy proxies straight to a container Poof doesn't manage (Compose, hand-run). Port defaults to 80. Registration **refuses if the container doesn't exist** (existing is enough — a stopped container still proves the name is real), so a typo fails immediately instead of surfacing later as a 502. The per-app network is created and the upstream attached at registration, since there's no deploy step to do it. `deploy`/`rollback`/`snapshot` refuse; `remove` deletes the route and network and explicitly reports that the container was left running. `list`/`status` report the status `external` and print only what Poof actually knows (domain + upstream) — the container is not Poof's, so there is no running state to report and `projectRunning` never inspects one. Replaces the static-project-plus-snippet shim. **Remote upstream:** when the target's host is an IP address (`--external 10.0.0.3:8901`, `Project.HasRemoteUpstream`), it is a service on another machine: no container-exists check, no per-app network, no member row (`ensureProjectNetwork` and `ensureExternalMemberships` skip it), and `remove` touches no network. This is how a route to another host joins a wildcard zone instead of living in a hand-written conf.d file, which would get a certificate of its own.
 - `poof configure <name>` — change any field except token; only passed flags mutate.
 - `poof clone <src> <suffix>` — create `<src>-<suffix>` deploying from branch `<suffix>`; optional `--env --all|--only|--except|--ask`. Refuses if the source has a Caddy snippet unless `--caddy-yes` (copy verbatim — references to the source's container are NOT rewritten) or `--caddy-no` (skip) is passed.
@@ -62,7 +62,7 @@ Deploy / observe:
 - `poof status <name>`, `poof list`, `poof logs <name> [-n N]`, `poof server-logs`, `poof troubleshoot`, `poof version`.
 
 Config / env / volumes / redirects:
-- `poof config [set <key> [value]]` — local keys: `server`, `token`. Server keys: `domain`, `github-user`, `github-token`. With `--profile` / `--profile-env` for multi-server setups.
+- `poof config [set <key> [value] | unset <key>]` — local keys: `server`, `token`. Server keys: `domain`, `github-user`, `github-app-id`, `github-app-key-path`, `github-token` (legacy). `unset` clears a server key (`DELETE /config/{key}`); it exists so the legacy PAT can be removed. With `--profile` / `--profile-env` for multi-server setups.
 - `poof env get|set|unset|copy` — copy supports `--all|--only|--except|--ask`.
 - `poof volume add|list|remove` — managed (`/app/data`) or explicit (`/host:/container`). Volume IDs are global, but every volume endpoint is scoped to the project in the path: an id belonging to another project 404s rather than being read or deleted.
 - `poof net create|ls|delete|add|show|list|remove` — Poof-managed Docker networks for deliberate connectivity. `create <name> [--internal]` defines a network; `add <network> [member...] [--caddy] [--poof]` attaches members; `show <network>` lists them; `list <project>` shows a project's networks; `remove <network> [member...]` detaches. `delete` refuses while anything is attached and leaves the underlying Docker network in place.
@@ -118,7 +118,18 @@ caddy_admin_url  = "http://caddy-proxy:2019"
 caddy_static_dir = "/etc/caddy/conf.d"
 ```
 
-The server also stores GitHub credentials (`github_user`, `github_token`) and the public domain — set via `poof config set` from the client. The PAT is **write-only over the API**: `GET /config` returns a fingerprint (`ghp_…1234`), never the value, so an API token is not a path to the GitHub account.
+The server also stores the public domain and the GitHub settings (`github-user`, `github-app-id`, `github-app-key-path`), set via `poof config set` from the client.
+
+### GitHub credential (`github/app.go`, `server.GitHubAuth`)
+
+Poof authenticates to GitHub as a **GitHub App**, decided 2026-11-15 after the Nov 11 token-theft incident: a stolen PAT was the whole account, an installation token is one repo for one hour.
+
+- `github.AppAuth` holds the App id and private key (`/etc/poof/github-app.pem`, mounted read-only, mode 0600, never in `poof.db`). It signs a 9-minute RS256 JWT with the standard library, discovers the installation for the repository **owner** via `GET /app/installations` (paginated; so Racso and silviatorres1 work from one App with no per-account setting), and mints installation tokens via `POST /app/installations/{id}/access_tokens`. Tokens are cached per (owner, repos, permissions) until 5 minutes before expiry.
+- Two token shapes: `RepoToken(owner, repo)` is scoped to the single repo with `contents:write, workflows:write, secrets:write, metadata:read` (what `poof add` / `poof refresh` need); `PackagesToken(owner)` is `packages:read` only, for registry pulls (deploy and `PullSelf` in `update.go`), with docker login user `x-access-token`. The pull owner is taken from the image path (`ghcr.io/<owner>/...`), falling back to the repo owner.
+- `server.GitHubProvider` is the seam: `githubAdapter` in `cmd/server.go` implements it over the `github` package and keeps one `AppAuth` alive across requests (rebuilt when the settings change); tests inject a mock. Handlers reach GitHub only through `githubClientFor(repo)`, which resolves owner/name and returns a `RepoManager`; `registryCredentials(owner)` does the same for pulls. `RepoManager` itself is unchanged.
+- `githubAuth()` reads the three settings on every use, so `poof config set` takes effect without a restart. `github-app-key-path` is validated (readable, parseable PEM) at set time; a bad path 400s and is not stored.
+- `github-token` (a classic PAT) **remains as a legacy fallback**, used only when the App settings are incomplete; the server logs a warning at startup while one is stored. It stays write-only over the API: `GET /config` returns a fingerprint (`ghp_…1234`), never the value. Clear it with `poof config unset github-token` once the App works.
+- Package GC in the generated workflow (`actions/delete-package-versions`) runs with the workflow's own `GITHUB_TOKEN` and is unaffected.
 
 ## Client config (`~/.config/poof/poof.toml`)
 
@@ -163,7 +174,7 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 
 ## CI integration
 
-When a GitHub PAT is configured, `poof add` / `poof refresh`:
+When a GitHub App (or legacy PAT) is configured, `poof add` / `poof refresh`:
 1. Sets repo secrets `POOF_URL` and `POOF_TOKEN`.
 2. Commits `.github/workflows/poof.yml` (template in `defaults/`) **to the project's configured branch** — push triggers only fire for workflow files present on the pushed branch, so committing to the default branch would leave non-default-branch projects (e.g. clones) without CI. If the branch doesn't exist on GitHub yet, the commit fails with a hint to push the branch and run `poof refresh`.
 3. The workflow builds + pushes to GHCR on `push` to the configured branch (and only on changes to `--folder` if set), then `POST`s to the server's deploy endpoint.
