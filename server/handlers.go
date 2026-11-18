@@ -34,34 +34,13 @@ func (s *Server) settingGitHubUser() string {
 	return v
 }
 
-// Setting keys for the GitHub credential. See GitHubAuth.
-const (
-	settingGitHubAppID      = "github-app-id"
-	settingGitHubAppKeyPath = "github-app-key-path"
-	settingGitHubToken      = "github-token"
-)
-
-// githubAuth reads the GitHub credential from settings. Read on every use so
-// `poof config set` takes effect without a restart.
-func (s *Server) githubAuth() GitHubAuth {
-	appID, _ := s.store.GetSetting(settingGitHubAppID)
-	keyPath, _ := s.store.GetSetting(settingGitHubAppKeyPath)
-	token, _ := s.store.GetSetting(settingGitHubToken)
-	return GitHubAuth{AppID: appID, KeyPath: keyPath, Token: token}
-}
-
-// warnLegacyGitHubToken logs at startup while a PAT is still stored. The App
-// is the credential Poof is meant to run with; the PAT is a migration aid.
+// warnLegacyGitHubToken logs at startup while a classic PAT is stored: it is
+// the whole account, which is what the login and fine-grained tokens avoid.
 func (s *Server) warnLegacyGitHubToken() {
-	auth := s.githubAuth()
-	if auth.Token == "" {
-		return
+	pat, _ := s.store.GetSetting(settingGitHubToken)
+	if strings.HasPrefix(pat, "ghp_") {
+		log.Printf("warning: github-token is a classic personal access token (account-wide). Prefer 'poof login', or a fine-grained token limited to the repositories Poof manages, then 'poof config unset github-token'")
 	}
-	if auth.UsesApp() {
-		log.Printf("warning: a legacy github-token is still stored and unused (the GitHub App takes precedence) — clear it with 'poof config unset github-token'")
-		return
-	}
-	log.Printf("warning: GitHub access uses a legacy personal access token — configure a GitHub App (github-app-id + github-app-key-path) and clear github-token")
 }
 
 // splitRepo resolves a project's repo setting into owner and name. A bare
@@ -84,24 +63,21 @@ func (s *Server) githubClientFor(repo string) (client RepoManager, owner, name s
 	return client, owner, name, err
 }
 
-// registryCredentials returns the docker login for pulling owner's images:
-// a packages-only App token, or the legacy user + PAT. Empty when nothing is
-// configured or minting fails (logged); the pull then runs anonymously, which
-// is enough for a public image.
+// registryCredentials returns the docker login for a pull that carries no job
+// token (manual `poof deploy`, self-update): the stored PAT with github-user,
+// when there is one. Empty otherwise; the pull then runs anonymously, which
+// is enough for a public image. owner is unused since the App tokens went
+// away but kept so call sites read naturally.
 func (s *Server) registryCredentials(owner string) (user, token string) {
-	auth := s.githubAuth()
-	if !auth.UsesApp() {
-		return s.settingGitHubUser(), auth.Token
-	}
-	token, err := s.github.PackagesToken(auth, owner)
-	if err != nil {
-		log.Printf("warning: registry token for %s: %v — pulling without credentials", owner, err)
+	_ = owner
+	pat, _ := s.store.GetSetting(settingGitHubToken)
+	if pat == "" {
 		return "", ""
 	}
-	return registryUser, token
+	return s.settingGitHubUser(), pat
 }
 
-// registryUser is the username GHCR expects alongside an installation token.
+// registryUser is the username GHCR expects alongside a GitHub Actions token.
 const registryUser = "x-access-token"
 
 // imageOwner returns the account an image belongs to on its registry
@@ -122,14 +98,17 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// The legacy GitHub PAT is write-only over the API: any token holder
-	// could otherwise read it back in plaintext and act on the whole account.
-	// The App settings are an id and a path; the key itself never enters
-	// the database.
+	// Credentials are write-only over the API: any token holder could
+	// otherwise read them back and act as the operator on GitHub. The PAT
+	// is shown as a fingerprint; the login blob is not shown at all (GET
+	// /auth/github reports who is logged in).
 	masked := make(map[string]string, len(settings))
 	for k, v := range settings {
-		if k == settingGitHubToken {
+		switch k {
+		case settingGitHubToken:
 			v = maskSecret(v)
+		case settingGitHubLogin:
+			continue
 		}
 		masked[k] = v
 	}
@@ -161,14 +140,6 @@ func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "value is required", http.StatusBadRequest)
 		return
 	}
-	// A bad key path or an unparseable PEM should fail here, with the
-	// operator watching, rather than on the next `poof add` in a log line.
-	if key == settingGitHubAppKeyPath {
-		if err := s.github.ValidateAppKey(req.Value); err != nil {
-			jsonError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
 	if err := s.store.SetSetting(key, req.Value); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -179,15 +150,14 @@ func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 
 // configKeys are the settings `poof config set` / `unset` may touch.
 var configKeys = map[string]bool{
-	"domain":                true,
-	"github-user":           true,
-	settingGitHubToken:      true,
-	settingGitHubAppID:      true,
-	settingGitHubAppKeyPath: true,
+	"domain":              true,
+	"github-user":         true,
+	settingGitHubToken:    true,
+	settingGitHubClientID: true,
 }
 
-// unsetConfig removes a setting. It exists so the legacy PAT can be cleared
-// once the App is in place; setConfig refuses empty values.
+// unsetConfig removes a setting. It exists so a PAT can be cleared once
+// `poof login` is in place; setConfig refuses empty values.
 func (s *Server) unsetConfig(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if !configKeys[key] {
@@ -892,7 +862,7 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.githubAuth().Configured() {
-		jsonError(w, "no GitHub App configured on server (poof config set github-app-id / github-app-key-path)", http.StatusPreconditionFailed)
+		jsonError(w, noGitHubAuthHint, http.StatusPreconditionFailed)
 		return
 	}
 

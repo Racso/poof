@@ -62,35 +62,25 @@ After the server is running, push the remaining settings from your machine:
 
 ```sh
 poof config set domain yourdomain.com
-poof config set github-user  your-github-username
-poof config set github-app-id 12345
-poof config set github-app-key-path /etc/poof/github-app.pem
+poof login
 ```
 
 Run `poof config` at any time to see the current client and server settings.
 
-### GitHub App
+### GitHub access
 
-Poof! talks to GitHub as a GitHub App: it commits workflow files, sets Actions secrets and pulls images from GHCR with short-lived installation tokens scoped to one repository at a time. Nothing long-lived is stored in the database; the only secret on the server is the App's private key, in a file.
+Poof! needs to write to your repositories exactly once per project: to commit the deploy workflow (`poof add`, `poof refresh`, `poof clone`, `poof remove`). Deploys themselves need nothing stored on the server; see *How a deploy authenticates* below.
 
-Create the App once (Settings → Developer settings → GitHub Apps → New GitHub App):
+**`poof login`** (recommended). Install the public [Poof GitHub App](https://github.com/apps/poof-app) on the account that owns your repositories, choosing *All repositories* or just the ones Poof! will manage. Then run `poof login`: the server starts a GitHub device flow, you enter a one-time code in your browser, and the server receives a token that acts as you, limited to what the App may do (commit workflow files) on the repositories you selected. Nothing to create, no key to copy.
 
-- **Name:** Poof (any name works).
-- **Webhook:** uncheck *Active*. Poof! does not receive webhooks.
-- **Repository permissions:** Contents *Read and write*, Workflows *Read and write*, Secrets *Read and write*, Metadata *Read-only*, Packages *Read-only*.
-- Where it can be installed: *Any account*, if other people's repositories will deploy through this server.
+- The access token lasts 8 hours; the server refreshes it silently for about 6 months, after which `poof login` again.
+- It is stored encrypted with a key derived from the server's API token, so the database alone (a backup, a copied file) does not yield it. `poof login --status` shows who is logged in; `poof logout` forgets it. Revoke from GitHub at any time (Settings → Applications → Authorized GitHub Apps).
+- Other people whose repositories deploy through your server either install the App and run `poof login` against your server with their own account, or you keep one login that has access to their repositories.
+- The server defaults `github-user` to the login.
 
-Then, on the App's page, note the **App ID**, generate a **private key** (a `.pem` download), and **install** the App on your account with access to *All repositories*. Anyone else whose repositories deploy through your server installs the same App on their own account; Poof! finds the right installation from the repository owner, with no extra setting.
+**A personal access token** works too: `poof config set github-token <token>`. Use a fine-grained token limited to the repositories Poof! manages, with *Contents* and *Workflows* read and write. A classic `ghp_` token is accepted with a warning: it is your whole account, which is the exposure the rest of this design removes. It is also the only credential the server can use to pull a private image on a manual `poof deploy` (CI deploys hand the server a token of their own); without one, a manual deploy of a private image works only when the image is already on disk.
 
-Put the key on the server, readable only by the Poof! container:
-
-```sh
-sudo install -m 0600 -o root -g root poof.*.private-key.pem /etc/poof/github-app.pem
-```
-
-and mount it read-only into the container (`-v /etc/poof/github-app.pem:/etc/poof/github-app.pem:ro`; `poof install` does this when the file exists). `poof config set github-app-key-path` refuses a path the server cannot read or parse.
-
-A legacy personal access token (`poof config set github-token ghp_...`) still works as a fallback, but the server logs a warning while one is stored. Once the App is configured, clear it with `poof config unset github-token` and delete the token on GitHub.
+Running your own GitHub App instead of the public one: create it with Contents and Workflows *Read and write*, enable *Device Flow*, no webhook, and `poof config set github-client-id <client id>`.
 
 ## Client configuration
 

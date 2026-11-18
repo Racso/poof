@@ -1,12 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 
 	"io"
 
@@ -61,55 +61,48 @@ var serverCmd = &cobra.Command{
 	},
 }
 
-// githubAdapter implements server.GitHubProvider over the github package. It
-// keeps one AppAuth alive across requests so installation tokens are reused
-// rather than minted per call, and rebuilds it when the App settings change.
-type githubAdapter struct {
-	mu      sync.Mutex
-	app     *gh.AppAuth
-	appID   string
-	keyPath string
+// githubAdapter implements server.GitHubProvider over the github package.
+type githubAdapter struct{}
+
+func (githubAdapter) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
+	return gh.NewClient(auth.Token), nil
 }
 
-func (g *githubAdapter) appAuth(auth server.GitHubAuth) (*gh.AppAuth, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.app == nil || g.appID != auth.AppID || g.keyPath != auth.KeyPath {
-		app, err := gh.NewAppAuth(auth.AppID, auth.KeyPath)
-		if err != nil {
-			return nil, err
-		}
-		g.app, g.appID, g.keyPath = app, auth.AppID, auth.KeyPath
-	}
-	return g.app, nil
-}
-
-func (g *githubAdapter) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
-	if !auth.UsesApp() {
-		return gh.NewClient(auth.Token), nil
-	}
-	app, err := g.appAuth(auth)
+func (githubAdapter) DeviceStart(clientID string) (server.DeviceCode, error) {
+	code, err := gh.NewDeviceFlow(clientID).Start()
 	if err != nil {
-		return nil, err
+		return server.DeviceCode{}, err
 	}
-	token, err := app.RepoToken(owner, repo)
-	if err != nil {
-		return nil, err
-	}
-	return gh.NewClient(token), nil
+	return server.DeviceCode{
+		DeviceCode: code.DeviceCode, UserCode: code.UserCode, VerificationURI: code.VerificationURI,
+		ExpiresIn: code.ExpiresIn, Interval: code.Interval,
+	}, nil
 }
 
-func (g *githubAdapter) PackagesToken(auth server.GitHubAuth, owner string) (string, error) {
-	app, err := g.appAuth(auth)
-	if err != nil {
-		return "", err
+func (githubAdapter) DevicePoll(clientID, deviceCode string) (server.UserToken, error) {
+	tok, err := gh.NewDeviceFlow(clientID).Poll(deviceCode)
+	// slow_down is "still pending, and back off": the server's poll interval
+	// already exceeds GitHub's minimum, so pending is the right reading.
+	if errors.Is(err, gh.ErrAuthorizationPending) || errors.Is(err, gh.ErrSlowDown) {
+		return server.UserToken{}, server.ErrAuthorizationPending
 	}
-	return app.PackagesToken(owner)
+	return userToken(tok), err
 }
 
-func (g *githubAdapter) ValidateAppKey(path string) error {
-	_, err := gh.LoadPrivateKey(path)
-	return err
+func (githubAdapter) RefreshUserToken(clientID, refreshToken string) (server.UserToken, error) {
+	tok, err := gh.NewDeviceFlow(clientID).Refresh(refreshToken)
+	return userToken(tok), err
+}
+
+func (githubAdapter) UserLogin(accessToken string) (string, error) {
+	return gh.NewDeviceFlow("").Login(accessToken)
+}
+
+func userToken(t gh.UserToken) server.UserToken {
+	return server.UserToken{
+		AccessToken: t.AccessToken, ExpiresAt: t.ExpiresAt,
+		RefreshToken: t.RefreshToken, RefreshExpiresAt: t.RefreshExpiresAt,
+	}
 }
 
 // dockerAdapter delegates server.ContainerManager to the docker package functions.

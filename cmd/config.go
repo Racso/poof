@@ -16,7 +16,7 @@ var configCmd = &cobra.Command{
 }
 
 // serverConfigKeys are the settings stored on the server, in display order.
-var serverConfigKeys = []string{"domain", "github-user", "github-app-id", "github-app-key-path", "github-token"}
+var serverConfigKeys = []string{"domain", "github-user", "github-client-id", "github-token"}
 
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> [value]",
@@ -29,10 +29,11 @@ Local keys (written to this machine's config file):
 
 Server keys (sent to the remote server — requires server and token to be set):
   domain               Default domain for new projects (e.g. mydomain.com).
-  github-user          GitHub username used for automatic CI setup.
-  github-app-id        GitHub App id used to manage CI and pull images.
-  github-app-key-path  Path, on the server, to the App's private key (PEM).
-  github-token         Legacy GitHub personal access token. Prefer the App.`,
+  github-user          GitHub username used for automatic CI setup (set by poof login).
+  github-client-id     GitHub App client id for poof login. Defaults to the public Poof App.
+  github-token         GitHub personal access token, if you prefer one to poof login.
+                       Use a fine-grained token limited to the repositories Poof manages
+                       (Contents and Workflows: read and write).`,
 	Args: cobra.RangeArgs(1, 2),
 	Run:  runConfigSet,
 }
@@ -42,7 +43,7 @@ var configUnsetCmd = &cobra.Command{
 	Short: "Clear a server configuration value",
 	Long: `Clear a server configuration value.
 
-Typically used to remove the legacy github-token once a GitHub App is configured.`,
+Typically used to remove a github-token once poof login is in place.`,
 	Args: cobra.ExactArgs(1),
 	Run:  runConfigUnset,
 }

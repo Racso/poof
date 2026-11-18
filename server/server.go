@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/racso/poof/config"
@@ -26,32 +27,48 @@ type RepoManager interface {
 	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error
 }
 
-// GitHubAuth is the GitHub credential the server holds, read from settings on
-// every use: a GitHub App (`github-app-id` + `github-app-key-path`), or the
-// legacy personal access token (`github-token`), kept only as a fallback. The
-// App wins when both are set.
+// GitHubAuth is the credential the server uses to write to repositories: a
+// device-flow login's access token or a personal access token (Source tells
+// which). Resolved by githubAuth() on every use; see githubauth.go.
 type GitHubAuth struct {
-	AppID   string
-	KeyPath string
-	Token   string
+	Token  string
+	Source string
 }
 
-// UsesApp reports whether the App credential is complete.
-func (a GitHubAuth) UsesApp() bool { return a.AppID != "" && a.KeyPath != "" }
-
 // Configured reports whether any GitHub credential is available.
-func (a GitHubAuth) Configured() bool { return a.UsesApp() || a.Token != "" }
+func (a GitHubAuth) Configured() bool { return a.Token != "" }
 
-// GitHubProvider turns the stored credential into GitHub clients. Abstracted
-// so handlers can be tested without signing JWTs or hitting the GitHub API.
+// DeviceCode mirrors github.DeviceCode for the interface boundary.
+type DeviceCode struct {
+	DeviceCode      string
+	UserCode        string
+	VerificationURI string
+	ExpiresIn       int
+	Interval        int
+}
+
+// UserToken mirrors github.UserToken for the interface boundary.
+type UserToken struct {
+	AccessToken      string
+	ExpiresAt        time.Time
+	RefreshToken     string
+	RefreshExpiresAt time.Time
+}
+
+// GitHubProvider is the seam to GitHub: repository clients and the device
+// flow. Abstracted so handlers can be tested without the GitHub API.
 type GitHubProvider interface {
 	// RepoManager returns a client able to manage CI on owner/repo.
 	RepoManager(auth GitHubAuth, owner, repo string) (RepoManager, error)
-	// PackagesToken returns a registry-pull token for owner's packages. Only
-	// called when auth.UsesApp(); the legacy PAT is used directly otherwise.
-	PackagesToken(auth GitHubAuth, owner string) (string, error)
-	// ValidateAppKey checks that path holds a usable App private key.
-	ValidateAppKey(path string) error
+	// DeviceStart begins a device flow for the App identified by clientID.
+	DeviceStart(clientID string) (DeviceCode, error)
+	// DevicePoll makes one attempt to redeem deviceCode. It returns
+	// ErrAuthorizationPending until the operator approves the code.
+	DevicePoll(clientID, deviceCode string) (UserToken, error)
+	// RefreshUserToken exchanges a refresh token for a new pair.
+	RefreshUserToken(clientID, refreshToken string) (UserToken, error)
+	// UserLogin returns the GitHub login an access token acts as.
+	UserLogin(accessToken string) (string, error)
 }
 
 // ContainerManager abstracts Docker container operations.
@@ -153,6 +170,10 @@ type Server struct {
 	gcSweep func()
 	// oidc verifies GitHub Actions tokens on the deploy endpoints. See oidc.go.
 	oidc *oidcVerifier
+	// loginMu guards the stored GitHub login and the device flow in progress
+	// (pending). See githubauth.go.
+	loginMu sync.Mutex
+	pending *pendingLogin
 }
 
 // SetOIDCEndpoints points the verifier at another issuer and JWKS. Tests use
@@ -246,6 +267,11 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("DELETE /wildcard-certificates/{zone}", s.auth(s.deleteWildcardCertificate))
 
 	// Server settings
+	// GitHub login (device flow); see githubauth.go.
+	mux.HandleFunc("POST /auth/github/device", s.auth(s.startDeviceLogin))
+	mux.HandleFunc("GET /auth/github", s.auth(s.getGitHubAuth))
+	mux.HandleFunc("DELETE /auth/github", s.auth(s.deleteGitHubAuth))
+
 	mux.HandleFunc("GET /config", s.auth(s.getConfig))
 	mux.HandleFunc("PATCH /config/{key}", s.auth(s.setConfig))
 	mux.HandleFunc("DELETE /config/{key}", s.auth(s.unsetConfig))

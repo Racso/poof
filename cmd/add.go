@@ -21,9 +21,9 @@ Defaults (all overridable with flags):
   --branch   %s
   --port     %d
 
-If a GitHub PAT is configured on the server, Poof! will automatically:
-  - Set POOF_URL and POOF_TOKEN as repo secrets
-  - Commit .github/workflows/poof.yml into the repo
+If GitHub access is configured on the server (poof login or a PAT), Poof! will
+automatically commit .github/workflows/poof-auto-ci-<name>.yml into the repo.
+The workflow authenticates its deploys with GitHub OIDC; no repo secret is set.
 
 Monorepo / subfolder builds:
   Use --folder to point at a subdirectory that contains a Dockerfile.

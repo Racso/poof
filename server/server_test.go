@@ -3,7 +3,6 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,12 +67,25 @@ type mockGitHubProvider struct {
 	repo *mockRepoManager
 	// Every credential the server asked a client for, in order.
 	auths []server.GitHubAuth
-	// Owners the server asked a registry token for.
-	packagesOwners []string
-	// Non-nil makes RepoManager fail, like an App not installed on the owner.
+	// Non-nil makes RepoManager fail.
 	repoErr error
-	// Non-nil makes ValidateAppKey fail.
-	keyErr error
+
+	// Device flow script. pollResults are returned by DevicePoll in order;
+	// once exhausted the last one repeats. A nil error with a token completes
+	// the flow.
+	deviceCode  server.DeviceCode
+	deviceErr   error
+	pollResults []mockPoll
+	polls       int
+	refreshed   []string // refresh tokens the server exchanged
+	refreshTok  server.UserToken
+	refreshErr  error
+	logins      map[string]string // access token → login
+}
+
+type mockPoll struct {
+	tok server.UserToken
+	err error
 }
 
 func (m *mockGitHubProvider) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
@@ -84,13 +96,38 @@ func (m *mockGitHubProvider) RepoManager(auth server.GitHubAuth, owner, repo str
 	return m.repo, nil
 }
 
-func (m *mockGitHubProvider) PackagesToken(auth server.GitHubAuth, owner string) (string, error) {
-	m.packagesOwners = append(m.packagesOwners, owner)
-	return "ghs_packages_" + owner, nil
+func (m *mockGitHubProvider) DeviceStart(clientID string) (server.DeviceCode, error) {
+	if m.deviceErr != nil {
+		return server.DeviceCode{}, m.deviceErr
+	}
+	if m.deviceCode.DeviceCode == "" {
+		return server.DeviceCode{DeviceCode: "dc", UserCode: "ABCD-1234", VerificationURI: "https://github.com/login/device", ExpiresIn: 900, Interval: 0}, nil
+	}
+	return m.deviceCode, nil
 }
 
-func (m *mockGitHubProvider) ValidateAppKey(path string) error {
-	return m.keyErr
+func (m *mockGitHubProvider) DevicePoll(clientID, deviceCode string) (server.UserToken, error) {
+	if len(m.pollResults) == 0 {
+		return server.UserToken{}, server.ErrAuthorizationPending
+	}
+	i := m.polls
+	if i >= len(m.pollResults) {
+		i = len(m.pollResults) - 1
+	}
+	m.polls++
+	return m.pollResults[i].tok, m.pollResults[i].err
+}
+
+func (m *mockGitHubProvider) RefreshUserToken(clientID, refreshToken string) (server.UserToken, error) {
+	m.refreshed = append(m.refreshed, refreshToken)
+	return m.refreshTok, m.refreshErr
+}
+
+func (m *mockGitHubProvider) UserLogin(accessToken string) (string, error) {
+	if l, ok := m.logins[accessToken]; ok {
+		return l, nil
+	}
+	return "octocat", nil
 }
 
 // --- Mock ContainerManager ---
@@ -3180,135 +3217,6 @@ func TestGetConfigMasksGitHubToken(t *testing.T) {
 	}
 	if cfg["github-user"] != "racso" {
 		t.Errorf("non-secret settings must pass through: %q", cfg["github-user"])
-	}
-}
-
-// --- GitHub App credential ---
-
-func TestCreateProjectUsesGitHubApp(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("domain", "rac.so")
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-app-id", "12345")
-	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
-
-	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "repo": "silviatorres1/galqui"}, globalToken)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
-	}
-	if len(mocks.github.auths) != 1 {
-		t.Fatalf("expected 1 RepoManager request, got %d", len(mocks.github.auths))
-	}
-	if a := mocks.github.auths[0]; !a.UsesApp() || a.AppID != "12345" || a.KeyPath != "/etc/poof/github-app.pem" {
-		t.Errorf("auth passed to provider: %+v", a)
-	}
-	if len(mocks.repo.setupCalls) != 1 || mocks.repo.setupCalls[0].Owner != "silviatorres1" {
-		t.Errorf("SetRepoCI calls: %+v", mocks.repo.setupCalls)
-	}
-}
-
-func TestCreateProjectSurvivesGitHubAppNotInstalled(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("domain", "rac.so")
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-app-id", "12345")
-	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
-	mocks.github.repoErr = errors.New("GitHub App is not installed on account \"racso\"")
-
-	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("create must succeed with CI setup logged as a warning: %d — %s", rr.Code, rr.Body.String())
-	}
-	if len(mocks.repo.setupCalls) != 0 {
-		t.Errorf("SetRepoCI must not run without a client: %+v", mocks.repo.setupCalls)
-	}
-}
-
-func TestRefreshProjectReportsGitHubAppError(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-app-id", "12345")
-	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
-	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
-	mocks.github.repoErr = errors.New("GitHub App is not installed on account \"racso\"")
-
-	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
-	if rr.Code != http.StatusInternalServerError || !strings.Contains(rr.Body.String(), "not installed") {
-		t.Fatalf("refresh: %d — %s", rr.Code, rr.Body.String())
-	}
-}
-
-func TestRefreshProjectWithoutAnyGitHubCredential(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
-
-	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
-	if rr.Code != http.StatusPreconditionFailed {
-		t.Fatalf("refresh: %d — %s", rr.Code, rr.Body.String())
-	}
-}
-
-func TestDeployPullsWithPackagesTokenUnderGitHubApp(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-app-id", "12345")
-	st.SetSetting("github-app-key-path", "/etc/poof/github-app.pem")
-	st.SetSetting("github-token", "ghp_legacy") // ignored while the App is configured
-	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/Silviatorres1/web", Repo: "silviatorres1/web", Branch: "main", Port: 80})
-
-	rr := do(t, srv, "POST", "/projects/web/deploy", map[string]interface{}{"image": "ghcr.io/Silviatorres1/web:v2"}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
-	}
-	c := mocks.container.deployCalls[0]
-	if c.RegistryUser != "x-access-token" || c.RegistryToken != "ghs_packages_Silviatorres1" {
-		t.Errorf("registry login: %s / %s", c.RegistryUser, c.RegistryToken)
-	}
-	if len(mocks.github.packagesOwners) != 1 || mocks.github.packagesOwners[0] != "Silviatorres1" {
-		t.Errorf("packages token requested for %v, want the image's owner", mocks.github.packagesOwners)
-	}
-}
-
-func TestDeployPullsWithLegacyPATWithoutApp(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "ghp_legacy")
-	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80})
-
-	rr := do(t, srv, "POST", "/projects/web/deploy", map[string]interface{}{"image": "ghcr.io/racso/web:v2"}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
-	}
-	c := mocks.container.deployCalls[0]
-	if c.RegistryUser != "racso" || c.RegistryToken != "ghp_legacy" {
-		t.Errorf("registry login: %s / %s", c.RegistryUser, c.RegistryToken)
-	}
-	if len(mocks.github.packagesOwners) != 0 {
-		t.Errorf("no App token should be requested without an App: %v", mocks.github.packagesOwners)
-	}
-}
-
-func TestSetConfigValidatesAppKeyPath(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	mocks.github.keyErr = errors.New("github app key: no PEM block found")
-
-	rr := do(t, srv, "PATCH", "/config/github-app-key-path", map[string]string{"value": "/etc/poof/nope.pem"}, globalToken)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for an unusable key, got %d — %s", rr.Code, rr.Body.String())
-	}
-	if v, _ := st.GetSetting("github-app-key-path"); v != "" {
-		t.Errorf("rejected path must not be stored, got %q", v)
-	}
-
-	mocks.github.keyErr = nil
-	rr = do(t, srv, "PATCH", "/config/github-app-key-path", map[string]string{"value": "/etc/poof/github-app.pem"}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("set key path: %d — %s", rr.Code, rr.Body.String())
-	}
-	rr = do(t, srv, "PATCH", "/config/github-app-id", map[string]string{"value": "12345"}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("set app id: %d — %s", rr.Code, rr.Body.String())
 	}
 }
 

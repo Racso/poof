@@ -11,12 +11,12 @@ var refreshAll bool
 
 var refreshCmd = &cobra.Command{
 	Use:   "refresh [name]",
-	Short: "Re-sync GitHub secrets and workflow for a project",
-	Long: `Re-sync the POOF_URL and POOF_TOKEN secrets and the deploy
-workflow file in the project's GitHub repo. Skips the workflow
-commit if the file is already up to date.
+	Short: "Regenerate the GitHub deploy workflow for a project",
+	Long: `Regenerate the deploy workflow file in the project's GitHub repo.
+Skips the commit if the file is already up to date.
 
-Useful after template changes or token migrations. With --all, every
+Useful after template changes (for example to move a repo from the old
+POOF_TOKEN secret to OIDC authentication). With --all, every
 project is refreshed in turn; failures are reported per project and do
 not stop the run.`,
 	Args: cobra.MaximumNArgs(1),
