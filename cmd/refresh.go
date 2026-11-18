@@ -73,6 +73,8 @@ func refreshOne(name string) error {
 	}
 	if result["status"] == "ci removed" {
 		fmt.Printf("  ✓ %s — Poof-managed CI removed\n", name)
+	} else if result["ci_mode"] == "callable" {
+		fmt.Printf("  ✓ %s (callable: the calling job must grant id-token: write, or the run fails at startup)\n", name)
 	} else {
 		fmt.Printf("  ✓ %s\n", name)
 	}

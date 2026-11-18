@@ -895,7 +895,7 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		status = "ci removed"
 	}
 	log.Printf("project CI refreshed: %s (status=%s)", name, status)
-	jsonOK(w, map[string]string{"status": status})
+	jsonOK(w, map[string]string{"status": status, "ci_mode": p.CIMode})
 }
 
 // --- Deploy & Rollback ---
