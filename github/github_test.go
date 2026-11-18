@@ -49,7 +49,7 @@ func TestTriggerBlock_Callable(t *testing.T) {
 		"workflow_call:",
 		"POOF_URL:",
 		"POOF_TOKEN:",
-		"required: true",
+		"required: false",
 		"workflow_dispatch:",
 	} {
 		if !strings.Contains(got, want) {
@@ -70,5 +70,28 @@ func TestTriggerBlock_EmptyModeFallsBackToManaged(t *testing.T) {
 	got := triggerBlock("", "main", "")
 	if !strings.Contains(got, "push") || strings.Contains(got, "workflow_call") {
 		t.Errorf("empty mode should default to managed (push), got: %q", got)
+	}
+}
+
+func TestTemplates_AuthenticateWithOIDCAndJobToken(t *testing.T) {
+	for name, tpl := range map[string]string{
+		"container":     workflowTemplate,
+		"static docker": staticWorkflowDockerTemplate,
+		"static direct": staticWorkflowDirectTemplate,
+	} {
+		for _, want := range []string{"id-token: write", "ACTIONS_ID_TOKEN_REQUEST_URL", "audience=$POOF_URL", `POOF_URL="POOF_SERVER_URL"`} {
+			if !strings.Contains(tpl, want) {
+				t.Errorf("%s template missing %q", name, want)
+			}
+		}
+		for _, stale := range []string{"secrets.POOF_TOKEN", "secrets.POOF_URL"} {
+			if strings.Contains(tpl, stale) {
+				t.Errorf("%s template still reads %s", name, stale)
+			}
+		}
+	}
+	// Only the container workflow has an image for the server to pull.
+	if !strings.Contains(workflowTemplate, "X-Poof-Registry-Token: ${{ secrets.GITHUB_TOKEN }}") {
+		t.Error("container template must hand the job token to the server for the pull")
 	}
 }

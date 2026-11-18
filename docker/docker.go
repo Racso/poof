@@ -41,36 +41,46 @@ func registryHost(image string) string {
 	return ""
 }
 
-// login authenticates with the registry that hosts the given image.
-func login(image, user, token string) error {
-	registry := registryHost(image)
-	args := []string{"login", "-u", user, "--password-stdin"}
-	if registry != "" {
-		args = append(args, registry)
-	}
-	cmd := exec.Command("docker", args...)
-	cmd.Stdin = strings.NewReader(token)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("registry login failed: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// PullSelf logs in to the registry (if credentials are provided) and pulls the
-// given image. Returns the pull output (including Status and Digest lines) for
-// logging by the caller. Used by the self-update flow.
-func PullSelf(image, user, token string) (string, error) {
+// pull fetches image, logging in first when credentials are given. The login
+// lives in a throwaway DOCKER_CONFIG that is deleted when the pull ends: the
+// credential is often a CI job's token that dies minutes later, and nothing
+// should keep a copy of it (the default config.json would, in plain text).
+func pull(image, user, token string) (string, error) {
+	var env []string
 	if user != "" && token != "" {
-		if err := login(image, user, token); err != nil {
-			return "", err
+		dir, err := os.MkdirTemp("", "poof-docker-auth-")
+		if err != nil {
+			return "", fmt.Errorf("registry login: %w", err)
+		}
+		defer os.RemoveAll(dir)
+		env = append(os.Environ(), "DOCKER_CONFIG="+dir)
+
+		registry := registryHost(image)
+		args := []string{"login", "-u", user, "--password-stdin"}
+		if registry != "" {
+			args = append(args, registry)
+		}
+		cmd := exec.Command("docker", args...)
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(token)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("registry login failed: %s", strings.TrimSpace(string(out)))
 		}
 	}
-	out, err := exec.Command("docker", "pull", image).CombinedOutput()
+	cmd := exec.Command("docker", "pull", image)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// PullSelf pulls the given image with optional registry credentials and
+// returns the pull output (including Status and Digest lines) for logging by
+// the caller. Used by the self-update flow.
+func PullSelf(image, user, token string) (string, error) {
+	return pull(image, user, token)
 }
 
 // SelfContainerName returns the Docker container name of the running process
@@ -182,17 +192,11 @@ func Deploy(cfg DeployConfig) error {
 	if cfg.Network == "" {
 		return fmt.Errorf("deploy %s: no network specified", cfg.Name)
 	}
-	if cfg.RegistryUser != "" && cfg.RegistryToken != "" {
-		if err := login(cfg.Image, cfg.RegistryUser, cfg.RegistryToken); err != nil {
-			return err
-		}
-	}
-
-	out, err := exec.Command("docker", "pull", cfg.Image).CombinedOutput()
+	pullOut, err := pull(cfg.Image, cfg.RegistryUser, cfg.RegistryToken)
 	if err != nil {
-		return fmt.Errorf("docker pull failed: %s", strings.TrimSpace(string(out)))
+		return err
 	}
-	if pullOut := strings.TrimSpace(string(out)); pullOut != "" {
+	if pullOut != "" {
 		log.Printf("deploy %s: pull output: %s", cfg.Name, pullOut)
 	}
 
@@ -246,7 +250,7 @@ func Deploy(cfg DeployConfig) error {
 
 	args = append(args, cfg.Image)
 
-	out, err = exec.Command("docker", args...).CombinedOutput()
+	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker create failed: %s", strings.TrimSpace(string(out)))
 	}

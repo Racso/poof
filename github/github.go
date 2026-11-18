@@ -31,7 +31,9 @@ const apiBase = "https://api.github.com"
 //   POOF_BUILD_ARGS    → docker build args ("." for root, "-f folder/Dockerfile folder" for subfolders)
 //   POOF_PROJECT_NAME  → Poof! project name (may differ from GitHub repo name in monorepos)
 //   POOF_PKG_NAME      → GHCR package name for cleanup
-//   All projects in the same repo share a single POOF_TOKEN secret.
+//   POOF_SERVER_URL    → this server's public URL (plain text; it is not a secret)
+//   The deploy call authenticates with the job's GitHub OIDC token, so no
+//   repo secret is needed.
 
 // CI mode strings. Kept aligned with store.CIMode* constants but redeclared
 // here to avoid an import cycle (server depends on both packages).
@@ -52,13 +54,16 @@ const (
 // GitHub Actions UI for debugging.
 func triggerBlock(ciMode, branch, folder string) string {
 	if ciMode == CIModeCallable {
+		// The secrets are no longer read (deploys authenticate with OIDC) but
+		// stay declared, optional, so an outer workflow written for the old
+		// shape that still passes them is not rejected by GitHub.
 		return `on:
   workflow_call:
     secrets:
       POOF_URL:
-        required: true
+        required: false
       POOF_TOKEN:
-        required: true
+        required: false
   workflow_dispatch:
 `
 	}
@@ -76,6 +81,7 @@ POOF_TRIGGER_BLOCK
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 jobs:
   deploy:
@@ -109,8 +115,14 @@ jobs:
 
       - name: Deploy via Poof!
         run: |
-          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy" \
-            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
+          # GitHub's OIDC token proves which repository is calling; the job's
+          # own GITHUB_TOKEN lets Poof! pull the image and dies with the job.
+          POOF_URL="POOF_SERVER_URL"
+          JWT=$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$POOF_URL" | jq -r .value)
+          curl -fsSL -X POST "$POOF_URL/projects/POOF_PROJECT_NAME/deploy" \
+            -H "Authorization: Bearer $JWT" \
+            -H "X-Poof-Registry-Token: ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"image\": \"${{ env.IMAGE }}\"}"
 
@@ -135,6 +147,7 @@ name: POOF_WORKFLOW_NAME
 POOF_TRIGGER_BLOCK
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   deploy:
@@ -153,8 +166,11 @@ jobs:
       - name: Deploy to Poof!
         run: |
           tar -czf site.tar.gz -C ./poof-output .
-          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy/static" \
-            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
+          POOF_URL="POOF_SERVER_URL"
+          JWT=$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$POOF_URL" | jq -r .value)
+          curl -fsSL -X POST "$POOF_URL/projects/POOF_PROJECT_NAME/deploy/static" \
+            -H "Authorization: Bearer $JWT" \
             -H "Content-Type: application/gzip" \
             --data-binary @site.tar.gz
 `
@@ -167,6 +183,7 @@ name: POOF_WORKFLOW_NAME
 POOF_TRIGGER_BLOCK
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   deploy:
@@ -178,8 +195,11 @@ jobs:
       - name: Deploy to Poof!
         run: |
           tar -czf /tmp/site.tar.gz --exclude=.git -C POOF_FOLDER .
-          curl -fsSL -X POST "${{ secrets.POOF_URL }}/projects/POOF_PROJECT_NAME/deploy/static" \
-            -H "Authorization: Bearer ${{ secrets.POOF_TOKEN }}" \
+          POOF_URL="POOF_SERVER_URL"
+          JWT=$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$POOF_URL" | jq -r .value)
+          curl -fsSL -X POST "$POOF_URL/projects/POOF_PROJECT_NAME/deploy/static" \
+            -H "Authorization: Bearer $JWT" \
             -H "Content-Type: application/gzip" \
             --data-binary @/tmp/site.tar.gz
 `
@@ -211,17 +231,14 @@ func (c *Client) RefreshProjectCI(owner, repo, projectName string, ci bool, poof
 	return c.RemoveRepoCI(owner, repo, projectName, branch, deleteSecrets)
 }
 
-// SetRepoCI sets the POOF_URL and POOF_TOKEN repo secrets and commits the
-// deploy workflow file. All projects in the same repo share a single
-// POOF_TOKEN secret.
+// SetRepoCI commits the deploy workflow file. The workflow authenticates its
+// deploy call with GitHub's OIDC token, so no repo secret is written any
+// more; poofToken is accepted for interface compatibility and unused. The
+// POOF_URL / POOF_TOKEN secrets of older workflows are left alone until
+// RemoveRepoCI deletes them.
 func (c *Client) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode string, build bool) error {
-	if err := c.setSecret(owner, repo, "POOF_URL", poofURL); err != nil {
-		return fmt.Errorf("set POOF_URL secret: %w", err)
-	}
-	if err := c.setSecret(owner, repo, "POOF_TOKEN", poofToken); err != nil {
-		return fmt.Errorf("set POOF_TOKEN secret: %w", err)
-	}
-	if err := c.commitWorkflow(owner, repo, projectName, branch, image, folder, static, ciMode, build); err != nil {
+	_ = poofToken
+	if err := c.commitWorkflow(owner, repo, projectName, poofURL, branch, image, folder, static, ciMode, build); err != nil {
 		return fmt.Errorf("commit workflow: %w", err)
 	}
 	return nil
@@ -363,7 +380,7 @@ func imagePackageName(image string) string {
 	return base
 }
 
-func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder, static, ciMode string, build bool) error {
+func (c *Client) commitWorkflow(owner, repo, projectName, poofURL, branch, image, folder, static, ciMode string, build bool) error {
 	isStatic := static == "static" || static == "spa"
 	isCallable := ciMode == CIModeCallable
 
@@ -424,6 +441,7 @@ func (c *Client) commitWorkflow(owner, repo, projectName, branch, image, folder,
 	workflow = strings.ReplaceAll(workflow, "POOF_WORKFLOW_NAME", workflowName)
 	workflow = strings.ReplaceAll(workflow, "POOF_TRIGGER_BLOCK", triggerBlock(ciMode, branch, cleanFolder))
 	workflow = strings.ReplaceAll(workflow, "POOF_PROJECT_NAME", projectName)
+	workflow = strings.ReplaceAll(workflow, "POOF_SERVER_URL", strings.TrimRight(poofURL, "/"))
 	encoded := base64.StdEncoding.EncodeToString([]byte(workflow))
 
 	path := workflowPath(owner, repo, projectName)

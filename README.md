@@ -9,7 +9,7 @@ poof add myapp
 
 ## How it works
 
-1. `poof add myapp` registers a project. If a GitHub App is configured, Poof! also sets `POOF_TOKEN` as a repo secret and commits the deploy workflow into the repo.
+1. `poof add myapp` registers a project. If GitHub access is configured, Poof! also commits the deploy workflow into the repo. No repo secret is needed: the workflow proves which repository it is with GitHub's OIDC token.
 2. On every push to `main`, GitHub Actions builds a Docker image, pushes it to GHCR tagged both `:<commit-sha>` (immutable, what gets deployed) and `:<branch>` (moving, for anything that wants to follow the branch), then calls `POST /projects/myapp/deploy` on your Poof! server.
 3. Poof! pulls the image, starts the container on its own isolated network (`poof-app-myapp`, shared only with Caddy), and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
 
@@ -166,7 +166,7 @@ poof pause <name>                    take a project offline (503 + container sto
 poof redirect add <from> <to>        add a domain redirect (301)
 poof redirect delete <id>            delete a redirect by ID
 poof redirect list                   list all redirects
-poof refresh <name> | --all          re-sync GitHub secrets and workflow
+poof refresh <name> | --all          re-generate the GitHub workflow
 poof remove <name>                   remove project, stop container
 poof resume <name>                   put a paused project back online
 poof rollback <name>                 redeploy previous image
@@ -243,18 +243,24 @@ The `--ci` flag controls how Poof! sets up GitHub Actions for a project:
 
 - **`--ci yes`** (default) — Poof! commits a standalone push-triggered workflow at `.github/workflows/poof.yml`, on the project's configured branch. Every push to that branch builds, pushes to GHCR, and triggers a deploy. The branch must already exist on GitHub; if it doesn't yet, push it and run `poof refresh <name>`.
 - **`--ci no`** — Poof! does not touch the repo. You're on your own for triggering deploys (call `POST /projects/<name>/deploy` from anywhere).
-- **`--ci callable`** — Poof! commits a *reusable* workflow (`on: workflow_call`) instead. You write your own outer workflow that runs tests/lint/matrix builds and then calls this one. Useful when Poof's deploy step is one stage of a larger pipeline.
+- **`--ci callable`** — Poof! commits a *reusable* workflow (`on: workflow_call`) instead. You write your own outer workflow that runs tests/lint/matrix builds and then calls this one. Useful when Poof's deploy step is one stage of a larger pipeline. The calling job must grant the permissions the reusable workflow needs: `permissions: { contents: read, packages: write, id-token: write }`.
 
 ```sh
 poof add myapp --ci callable        # reusable workflow
 poof configure myapp --ci no        # stop managing CI for this project
 ```
 
-`POOF_URL` and `POOF_TOKEN` are set as repo secrets in `yes` and `callable` modes. Re-sync them with `poof refresh <name>` after rotating a token.
+### How a deploy authenticates
+
+The generated workflow stores no secret. At deploy time the job asks GitHub for an OIDC token (a short-lived JWT naming the repository, audience = the server's `public_url`) and sends it as the bearer token; the server verifies the signature against GitHub's published keys and checks that the repository matches the project. The job's own `GITHUB_TOKEN` travels in the `X-Poof-Registry-Token` header so the server can pull the freshly pushed image; it is used for that one pull, never stored, and GitHub revokes it when the job ends. Restarts and rollbacks use images already on disk.
+
+A repository's numeric id is pinned the first time it deploys a project: a repo deleted and recreated under the same name cannot take over the project.
+
+Workflows generated before this change (bearer `POOF_TOKEN` secret) keep working; `poof refresh <name>` regenerates them in the new shape.
 
 ## Refreshing GitHub config
 
-Re-sync secrets and workflow files for a project:
+Re-generate the workflow file for a project:
 
 ```sh
 poof refresh myapp

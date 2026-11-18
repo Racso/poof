@@ -174,10 +174,18 @@ Selected via `--profile work` or `POOF_PROFILE=work` + `--profile-env`.
 
 ## CI integration
 
-When a GitHub App (or legacy PAT) is configured, `poof add` / `poof refresh`:
-1. Sets repo secrets `POOF_URL` and `POOF_TOKEN`.
-2. Commits `.github/workflows/poof.yml` (template in `defaults/`) **to the project's configured branch** — push triggers only fire for workflow files present on the pushed branch, so committing to the default branch would leave non-default-branch projects (e.g. clones) without CI. If the branch doesn't exist on GitHub yet, the commit fails with a hint to push the branch and run `poof refresh`.
-3. The workflow builds + pushes to GHCR on `push` to the configured branch (and only on changes to `--folder` if set), then `POST`s to the server's deploy endpoint.
+When GitHub access is configured, `poof add` / `poof refresh`:
+1. Commits `.github/workflows/poof-auto-ci-<name>.yml` (templates in `github/github.go`) **to the project's configured branch** — push triggers only fire for workflow files present on the pushed branch, so committing to the default branch would leave non-default-branch projects (e.g. clones) without CI. If the branch doesn't exist on GitHub yet, the commit fails with a hint to push the branch and run `poof refresh`. No repo secret is written any more (the old `POOF_URL` / `POOF_TOKEN` pair is deleted by `RemoveRepoCI` when the last project of a repo drops CI).
+2. The workflow builds + pushes to GHCR on `push` to the configured branch (and only on changes to `--folder` if set), then `POST`s to the server's deploy endpoint.
+
+### Deploy authentication: OIDC + the job's own token (`server/oidc.go`)
+
+Decided 2026-11-18 (spec in `docs/github-auth-redesign.md`). The deploy endpoints (`authFlex`) accept three bearer tokens, in this order: the global API token; a **GitHub Actions OIDC token** (recognised by its unverified `iss` claim); the legacy per-repo `POOF_TOKEN` (kept for workflows not yet refreshed).
+
+- The generated workflow requests `id-token: write`, fetches the JWT with `audience=<public_url>` and sends it as the bearer. `oidcVerifier` checks RS256 against GitHub's JWKS (`token.actions.githubusercontent.com/.well-known/jwks`, cached in memory; an unknown `kid` refetches at most once a minute), `iss`, `aud == cfg.PublicURL`, `exp`/`nbf` with 60 s skew, and a non-empty `repository`. `authorizeOIDC` then requires `repository` to equal the project's repo (case-insensitive) and **pins `repository_id`** in settings (`oidc-repository-id:<repo>`) on first sight: a repo recreated under the same name does not inherit the project. `SetOIDCEndpoints` lets tests point the verifier at a fake issuer.
+- The job's `GITHUB_TOKEN` travels in the `X-Poof-Registry-Token` header (`server.RegistryTokenHeader`; a header so it never lands in a logged body). `runDeploy` uses it as `x-access-token` for that pull only; `docker.pull` logs in inside a throwaway `DOCKER_CONFIG` directory that is deleted after the pull, so no credential is left in `config.json`. Without the header (manual `poof deploy`, legacy workflow) the server's own registry credential is used, or none for a public image. Restart, rollback, pause/resume never pull.
+- `--ci callable` workflows can only hold `id-token: write` if the calling job grants it; README says so.
+- Package name collision (seen 2026-11-18): pushing to a GHCR package that exists but is not linked to the repo fails with 403 at blob HEAD. The image default `ghcr.io/<owner>/<project>` assumes the package is the repo's own.
 
 Image tags and labels (container workflow, `github/github.go`):
 - `:<full commit sha>`: immutable; the only tag Poof deploys and records.

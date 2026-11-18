@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/racso/poof/config"
@@ -150,6 +151,14 @@ type Server struct {
 	// gcSweep is the work an automatic sweep performs. Always runAutoGC in
 	// production; injectable so the scheduling loop can be tested on its own.
 	gcSweep func()
+	// oidc verifies GitHub Actions tokens on the deploy endpoints. See oidc.go.
+	oidc *oidcVerifier
+}
+
+// SetOIDCEndpoints points the verifier at another issuer and JWKS. Tests use
+// it to stand in for GitHub; production keeps the defaults.
+func (s *Server) SetOIDCEndpoints(issuer, jwksURL string) {
+	s.oidc = newOIDCVerifier(issuer, jwksURL)
 }
 
 func New(cfg *config.ServerConfig, st *store.Store, github GitHubProvider, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
@@ -164,6 +173,7 @@ func New(cfg *config.ServerConfig, st *store.Store, github GitHubProvider, conta
 		gate:      newDeployGate(),
 		gcSignal:  make(chan struct{}, 1),
 		gcQuiet:   defaultGCQuietPeriod,
+		oidc:      newOIDCVerifier(githubOIDCIssuer, githubOIDCJWKSURL),
 	}
 	srv.gcSweep = srv.runAutoGC
 	return srv
@@ -374,21 +384,56 @@ func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Try repo-level deploy token.
 		name := r.PathValue("name")
 		p, err := s.store.GetProject(name)
 		if err != nil || p == nil {
 			jsonError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		repoToken, _ := s.store.GetRepoToken(p.Repo)
 		token := bearerToken(r)
+		// A GitHub Actions OIDC token proves the calling repository without
+		// any shared secret. Anything else is the legacy per-repo deploy token.
+		if oidcIssuerOf(token) == s.oidc.issuer {
+			if err := s.authorizeOIDC(token, p); err != nil {
+				jsonError(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+			return
+		}
+		repoToken, _ := s.store.GetRepoToken(p.Repo)
 		if token == "" || repoToken == "" || token != repoToken {
 			jsonError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
+}
+
+// authorizeOIDC accepts a GitHub Actions token for p when it is valid for
+// this server and was issued to p's repository. The repository id is pinned
+// on first sight: a repo deleted and recreated under the same name (by
+// someone who gained the name) does not inherit the project.
+func (s *Server) authorizeOIDC(token string, p *store.Project) error {
+	claims, err := s.oidc.Verify(token, s.cfg.PublicURL)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(claims.Repository, p.Repo) {
+		return fmt.Errorf("token is for repository %s, project deploys from %s", claims.Repository, p.Repo)
+	}
+	pinKey := "oidc-repository-id:" + strings.ToLower(p.Repo)
+	pinned, _ := s.store.GetSetting(pinKey)
+	switch {
+	case pinned == "" && claims.RepositoryID != "":
+		if err := s.store.SetSetting(pinKey, claims.RepositoryID); err != nil {
+			return fmt.Errorf("pin repository id: %w", err)
+		}
+	case pinned != "" && pinned != claims.RepositoryID:
+		return fmt.Errorf("repository id %s does not match the one first seen for %s", claims.RepositoryID, p.Repo)
+	}
+	log.Printf("oidc deploy for %s: repo %s run %s by %s (%s)", p.Name, claims.Repository, claims.RunID, claims.Actor, claims.SHA)
+	return nil
 }
 
 func (s *Server) validGlobalToken(r *http.Request) bool {

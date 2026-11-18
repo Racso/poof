@@ -962,8 +962,14 @@ func (s *Server) deployProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.runDeploy(w, p, req.Image)
+	s.runDeploy(w, p, req.Image, r.Header.Get(RegistryTokenHeader))
 }
+
+// RegistryTokenHeader carries the calling job's own GITHUB_TOKEN on a deploy
+// request. It pulls the image for that one deploy and is gone when the job
+// ends, so the server never needs a registry credential of its own. A header
+// rather than a body field: request bodies get logged, headers do not.
+const RegistryTokenHeader = "X-Poof-Registry-Token"
 
 // redeployStatic is a plain deploy of a static project: it re-points the site
 // at the newest successful version still on disk. It never takes files from
@@ -1113,7 +1119,7 @@ func (s *Server) rollbackProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("rollback triggered: %s → %s", name, prev.Image)
-	s.runDeploy(w, p, prev.Image)
+	s.runDeploy(w, p, prev.Image, "")
 }
 
 // --- Pause & Resume & Snapshot ---
@@ -1247,7 +1253,10 @@ func (s *Server) snapshotProject(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "snapshotted", "image": res.ImageRef, "dir": res.Dir})
 }
 
-func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string) {
+// runDeploy pulls image and (re)starts p's container. pullToken, when set, is
+// the calling CI job's registry token (see RegistryTokenHeader); otherwise the
+// server's own registry credential is used, or none for a public image.
+func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullToken string) {
 	envVars, err := s.store.GetEnvVars(p.Name)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
@@ -1307,7 +1316,10 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image string
 	if registryOwner == "" {
 		registryOwner, _ = s.splitRepo(p.Repo)
 	}
-	registryUser, registryToken := s.registryCredentials(registryOwner)
+	registryUser, registryToken := registryUser, pullToken
+	if pullToken == "" {
+		registryUser, registryToken = s.registryCredentials(registryOwner)
+	}
 	err = s.container.Deploy(ContainerDeployConfig{
 		Name:          p.Name,
 		Image:         image,
