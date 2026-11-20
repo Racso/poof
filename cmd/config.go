@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/racso/poof/config"
+	"github.com/racso/poof/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -23,9 +26,13 @@ var configSetCmd = &cobra.Command{
 	Short: "Set a configuration value",
 	Long: `Set a configuration value.
 
-Local keys (written to this machine's config file):
+Local keys:
   server               URL of the Poof! server. Omit value on the server machine itself.
-  token                API token for authenticating with the server.
+                       Written to this machine's config file (poof.toml).
+  token                API token for authenticating with the server. Kept in the
+                       encrypted credentials file, per profile; pass '-' to read it
+                       from standard input. $POOF_TOKEN overrides it. A token still
+                       in poof.toml from older versions keeps working, with a note.
 
 Local credential keys (kept encrypted in credentials.json; see 'poof ci --help'):
   github-token         GitHub token used to write workflow files and dispatch runs.
@@ -62,7 +69,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 	path := config.ClientConfigPath()
 	fmt.Printf("client config  %s\n", path)
 	fmt.Printf("  %-20s  %s\n", "server", displayValue(cfg.Server))
-	fmt.Printf("  %-20s  %s\n", "token", maskSecret(cfg.Token))
+	fmt.Printf("  %-20s  %s\n", "token", describeToken())
 
 	fmt.Println()
 	showCredentials()
@@ -104,9 +111,28 @@ func requireServerConnection() {
 	if cfg.Server == "" {
 		fatal("server not configured — run: poof config set server <url> first")
 	}
-	if cfg.Token == "" {
+	if tok, _ := resolveToken(); tok == "" {
 		fatal("token not configured — run: poof config set token <token> first")
 	}
+}
+
+// describeToken is the `poof config` line for the API token: where it is,
+// never what it is. It does not decrypt anything.
+func describeToken() string {
+	if os.Getenv("POOF_TOKEN") != "" {
+		return "$POOF_TOKEN"
+	}
+	inFile := config.ClientFileHasToken(config.ClientConfigPath(), activeProfile())
+	if loadCredentials().HasAPIToken(activeProfile()) {
+		if inFile {
+			return "(stored, encrypted; a clear-text copy may remain in poof.toml: 'poof config set token <token>' removes it)"
+		}
+		return "(stored, encrypted)"
+	}
+	if inFile {
+		return "(in poof.toml, in the clear: 'poof config set token <token>' moves it into the encrypted file)"
+	}
+	return "(not set)"
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) {
@@ -129,13 +155,29 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 
 	case key == "token":
 		if value == "" {
-			fatal("value required: poof config set token <token>")
+			fatal("value required: poof config set token <token>  (or '-' to read it from stdin)")
 		}
+		if value == "-" {
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			value = strings.TrimSpace(line)
+			if value == "" {
+				fatal("no token on standard input")
+			}
+		}
+		profile := activeProfile()
+		updateCredentials(func(s *secrets.Settings, v *secrets.Values) { secrets.SetAPIToken(s, v, profile, value) })
+		fmt.Printf("token stored  →  %s%s\n", credentialsPath(), profileSuffix())
+		// A clear-text copy in poof.toml would shadow nothing (the encrypted
+		// one wins) but defeats the point; remove it.
 		path := config.ClientConfigPath()
-		if err := config.WriteClientSetting(path, activeProfile(), "token", value); err != nil {
-			fatal("writing config: %v", err)
+		if config.ClientFileHasToken(path, profile) {
+			if err := config.DeleteClientSetting(path, profile, "token"); err != nil {
+				fmt.Fprintf(os.Stderr, "  could not remove the clear-text token from %s: %v\n", path, err)
+			} else {
+				fmt.Printf("  clear-text token removed from %s\n", path)
+			}
 		}
-		fmt.Printf("token updated  →  %s%s\n", path, profileSuffix())
+		warnWeakProtection(loadCredentials())
 
 	case isCredentialKey(key):
 		setCredentialKey(key, value)
@@ -157,6 +199,15 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 
 func runConfigUnset(cmd *cobra.Command, args []string) {
 	key := args[0]
+	if key == "token" {
+		profile := activeProfile()
+		updateCredentials(func(s *secrets.Settings, v *secrets.Values) { secrets.SetAPIToken(s, v, profile, "") })
+		if err := config.DeleteClientSetting(config.ClientConfigPath(), profile, "token"); err != nil {
+			fatal("%v", err)
+		}
+		fmt.Printf("token cleared%s\n", profileSuffix())
+		return
+	}
 	if isCredentialKey(key) {
 		unsetCredentialKey(key)
 		return

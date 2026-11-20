@@ -80,7 +80,7 @@ Other people whose repositories deploy through your server run the same commands
 
 ### Client credentials
 
-A stored token lives in `~/.config/poof/credentials.json`, encrypted. Its key is made from two ingredients mixed together, each optional: `$POOF_KEY` in this machine's environment, and a passphrase you type when the token is needed (`poof config set passphrase`; `poof config unset passphrase` removes it). Either alone protects the file; both together is better; neither is allowed and loudly marked `WEAK`. Only commands that actually need the token ask for the passphrase (deploys, status, logs never do). Scripts pass it with `--passphrase-stdin`.
+Stored tokens (the Poof API token of each profile, and a GitHub token if you keep one) live in `~/.config/poof/credentials.json`, encrypted. Its key is made from two ingredients mixed together, each optional: `$POOF_KEY` in this machine's environment, and a passphrase you type when the token is needed (`poof config set passphrase`; `poof config unset passphrase` removes it). Either alone protects the file; both together is better; neither is allowed and loudly marked `WEAK`. With a passphrase set, every command that talks to the server asks for it (the API token is in there); with `$POOF_KEY` alone nothing is asked. Scripts pass the passphrase with `--passphrase-stdin`, or skip the file entirely with `$POOF_TOKEN`.
 
 If you change `$POOF_KEY`, the file cannot be opened any more: restore the old value, `poof config unset github-token`, set the new value and store the token again.
 
@@ -90,8 +90,9 @@ The CLI reads from `~/.config/poof/poof.toml` (respects `$XDG_CONFIG_HOME`; Wind
 
 ```toml
 server = "https://poof.yourdomain.com"
-token  = "your-secret-token"
 ```
+
+The API token is not in that file: `poof config set token <token>` (or `-` to read it from stdin) stores it, per profile, in the encrypted `credentials.json` next to it (see *Client credentials*), and `$POOF_TOKEN` overrides it for a single run. A `token = "…"` still in `poof.toml` from older versions keeps working, with a note on the terminal; the next `poof config set token` moves it and deletes the clear-text copy.
 
 ### Profiles
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/mattn/go-isatty"
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/version"
 	"github.com/spf13/cobra"
@@ -127,10 +128,47 @@ func serverURL() string {
 
 // apiToken returns the API auth token. Fatals if token is not configured.
 func apiToken() string {
-	if cfg.Token == "" {
+	tok, _ := resolveToken()
+	if tok == "" {
 		fatal("token not configured — run: poof config set token <token>")
 	}
-	return cfg.Token
+	return tok
+}
+
+var resolvedToken struct {
+	done   bool
+	token  string
+	source string
+}
+
+// resolveToken finds the API token for the active profile and says where it
+// came from: "$POOF_TOKEN", "credentials" (the encrypted file), or
+// "poof.toml" (the legacy clear-text field, still honoured). Empty when
+// there is none. The credentials file is only opened when the environment
+// has nothing, so commands that never reach the server never prompt.
+func resolveToken() (token, source string) {
+	if resolvedToken.done {
+		return resolvedToken.token, resolvedToken.source
+	}
+	resolvedToken.done = true
+	defer func() { resolvedToken.token, resolvedToken.source = token, source }()
+
+	if v := os.Getenv("POOF_TOKEN"); v != "" {
+		return v, "$POOF_TOKEN"
+	}
+	f := loadCredentials()
+	if f.HasAPIToken(activeProfile()) {
+		if tok := openCredentials(f).APITokens[activeProfile()]; tok != "" {
+			return tok, "credentials"
+		}
+	}
+	if cfg.Token != "" {
+		if isatty.IsTerminal(os.Stderr.Fd()) {
+			fmt.Fprintf(os.Stderr, "note: the API token is in %s in the clear; 'poof config set token <token>' moves it into the encrypted credentials file\n", config.ClientConfigPath())
+		}
+		return cfg.Token, "poof.toml"
+	}
+	return "", ""
 }
 
 // --- HTTP helpers for CLI commands ---

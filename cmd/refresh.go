@@ -46,6 +46,7 @@ turn; failures are reported per project and do not stop the run.`,
 			return
 		}
 
+		ciLinksSuppressed = true
 		var failed int
 		for _, p := range projects {
 			if err := refreshOne(p.Name); err != nil {

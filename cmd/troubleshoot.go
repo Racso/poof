@@ -62,12 +62,13 @@ func runTroubleshoot(cmd *cobra.Command, args []string) {
 		return
 	}
 	ok("server: %s", cfg.Server)
-	if cfg.Token == "" {
+	token, source := resolveToken()
+	if token == "" {
 		bad("token: not set")
 		next("poof config set token <token>")
 		return
 	}
-	ok("token: set (%d chars)", len(cfg.Token))
+	ok("token: set (%d chars, from %s)", len(token), source)
 
 	base := serverURL()
 	u, err := url.Parse(base)
@@ -135,7 +136,7 @@ func runTroubleshoot(cmd *cobra.Command, args []string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	req, _ := http.NewRequest("GET", base+"/version", nil)
-	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	req.Header.Set("Authorization", "Bearer "+apiToken())
 	resp, err := client.Do(req)
 	if err != nil {
 		bad("GET /version failed: %v", err)

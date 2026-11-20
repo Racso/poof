@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -46,11 +47,57 @@ type Settings struct {
 	GH *bool `json:"gh,omitempty"`
 	// GitHubTokenEnv names an environment variable holding a GitHub token.
 	GitHubTokenEnv string `json:"github_token_env,omitempty"`
+	// APITokenProfiles lists the profiles whose API token is sealed inside,
+	// so `poof config` can say "stored" without decrypting. Profile names
+	// are not secret: they are in poof.toml in the clear.
+	APITokenProfiles []string `json:"api_token_profiles,omitempty"`
+}
+
+// HasAPIToken reports, from the clear header, whether a profile's token is sealed.
+func (s Settings) HasAPIToken(profile string) bool {
+	for _, p := range s.APITokenProfiles {
+		if p == profile {
+			return true
+		}
+	}
+	return false
 }
 
 // Values are the secrets, stored encrypted.
 type Values struct {
 	GitHubToken string `json:"github_token,omitempty"`
+	// APITokens holds the Poof API token of each client profile, keyed by
+	// profile name ("" is the default profile).
+	APITokens map[string]string `json:"api_tokens,omitempty"`
+}
+
+// IsEmpty reports whether there is nothing worth sealing.
+func (v Values) IsEmpty() bool {
+	return v.GitHubToken == "" && len(v.APITokens) == 0
+}
+
+// SetAPIToken stores (or, with "", removes) the API token of a profile and
+// keeps the header's list of profiles in step.
+func SetAPIToken(s *Settings, v *Values, profile, token string) {
+	if token == "" {
+		delete(v.APITokens, profile)
+		if len(v.APITokens) == 0 {
+			v.APITokens = nil
+		}
+	} else {
+		if v.APITokens == nil {
+			v.APITokens = map[string]string{}
+		}
+		v.APITokens[profile] = token
+	}
+	s.APITokenProfiles = s.APITokenProfiles[:0:0]
+	for p := range v.APITokens {
+		s.APITokenProfiles = append(s.APITokenProfiles, p)
+	}
+	sort.Strings(s.APITokenProfiles)
+	if len(s.APITokenProfiles) == 0 {
+		s.APITokenProfiles = nil
+	}
 }
 
 // envelope is the on-disk shape.
@@ -123,7 +170,7 @@ func (f *File) Open(ing Ingredients) (Values, error) {
 // file holding only settings needs no key to read.
 func Save(path string, settings Settings, values Values, ing Ingredients) error {
 	env := envelope{Version: Version, Settings: settings}
-	if values != (Values{}) {
+	if !values.IsEmpty() {
 		plain, err := json.Marshal(values)
 		if err != nil {
 			return err

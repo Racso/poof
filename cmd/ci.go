@@ -112,6 +112,10 @@ func init() {
 	rootCmd.AddCommand(ciCmd)
 }
 
+// ciLinksSuppressed is set by bulk commands (refresh --all): the browser
+// links run to 2 KB each and are useless fifty times over.
+var ciLinksSuppressed bool
+
 // applyCI performs the plan with whatever credential this machine has, or
 // prints how to finish by hand. Nothing here is fatal: the registration on
 // the server already happened, and a workflow placed later is just as good.
@@ -122,9 +126,7 @@ func applyCI(actions []ciAction) {
 	token, source := githubCredential()
 	if token == "" {
 		fmt.Println("  GitHub not updated: no 'gh' login or $GH_TOKEN on this machine. To finish by hand:")
-		for _, a := range actions {
-			printCILinks(a)
-		}
+		byHand(actions)
 		return
 	}
 	client := github.NewClient(token)
@@ -150,8 +152,10 @@ func applyCI(actions []ciAction) {
 			if hint := ciErrorHint(err, source); hint != "" {
 				fmt.Printf("    %s\n", hint)
 			}
-			fmt.Println("    By hand:")
-			printCILinks(a)
+			if !isArchived(err) {
+				fmt.Println("    By hand:")
+				byHand([]ciAction{a})
+			}
 		case changed && a.Op == "write":
 			fmt.Printf("  ✓ workflow committed to %s@%s (via %s)\n", a.Repo, a.Branch, source)
 		case changed:
@@ -164,8 +168,27 @@ func applyCI(actions []ciAction) {
 	}
 }
 
+func byHand(actions []ciAction) {
+	if ciLinksSuppressed {
+		fmt.Println("    (run 'poof refresh <name>' for one project to get the browser links)")
+		return
+	}
+	for _, a := range actions {
+		printCILinks(a)
+	}
+}
+
+// isArchived recognises GitHub's refusal to write to an archived repository:
+// no credential fixes that, so no hint about scopes applies.
+func isArchived(err error) bool {
+	return github.StatusOf(err) == http.StatusForbidden && strings.Contains(err.Error(), "archived")
+}
+
 // ciErrorHint turns the usual GitHub refusals into the fix.
 func ciErrorHint(err error, source string) string {
+	if isArchived(err) {
+		return "the repository is archived (read-only): 'poof configure <name> --ci no' stops Poof! from trying, or 'poof remove <name>'"
+	}
 	switch github.StatusOf(err) {
 	case http.StatusForbidden:
 		if source == "gh" {

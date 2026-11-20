@@ -121,6 +121,46 @@ func TestSettingsOnlyFileNeedsNoKey(t *testing.T) {
 	}
 }
 
+func TestAPITokensPerProfile(t *testing.T) {
+	path := tempPath(t)
+	ing := Ingredients{Env: "e"}
+	var s Settings
+	var v Values
+	SetAPIToken(&s, &v, "", "default-tok")
+	SetAPIToken(&s, &v, "work", "work-tok")
+	if err := Save(path, s, v, ing); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := Load(path)
+	if !f.HasAPIToken("") || !f.HasAPIToken("work") || f.HasAPIToken("other") {
+		t.Errorf("header profile list wrong: %v", f.APITokenProfiles)
+	}
+	got, err := f.Open(ing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APITokens[""] != "default-tok" || got.APITokens["work"] != "work-tok" {
+		t.Errorf("tokens: %+v", got.APITokens)
+	}
+	if _, err := f.Open(Ingredients{Env: "x"}); !errors.Is(err, ErrWrongKey) {
+		t.Errorf("wrong key must fail, got %v", err)
+	}
+
+	s = f.Settings
+	SetAPIToken(&s, &got, "work", "")
+	SetAPIToken(&s, &got, "", "")
+	if !got.IsEmpty() || got.APITokens != nil || s.APITokenProfiles != nil {
+		t.Errorf("removing every token should leave Values and the header empty: %+v %+v", got, s)
+	}
+	if err := Save(path, s, got, ing); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = Load(path)
+	if f.HasSecrets() {
+		t.Error("an emptied Values must not leave ciphertext behind")
+	}
+}
+
 func TestMissingFileIsEmpty(t *testing.T) {
 	f, err := Load(filepath.Join(t.TempDir(), "nope.json"))
 	if err != nil || f.HasSecrets() || f.Ask {

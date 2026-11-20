@@ -249,6 +249,58 @@ func expandTilde(p string) string {
 	return p
 }
 
+// DeleteClientSetting removes one key from the client config file, from the
+// root or from a profile's table. A missing file or key is not an error.
+func DeleteClientSetting(path, profile, key string) error {
+	raw := make(map[string]interface{})
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	if _, err := toml.DecodeFile(path, &raw); err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	if profile == "" {
+		if _, ok := raw[key]; !ok {
+			return nil
+		}
+		delete(raw, key)
+	} else {
+		table, _ := raw[profile].(map[string]interface{})
+		if _, ok := table[key]; !ok {
+			return nil
+		}
+		delete(table, key)
+		raw[profile] = table
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return toml.NewEncoder(f).Encode(raw)
+}
+
+// ClientFileHasToken reports whether the client config file itself (not the
+// environment) carries a token for the profile, in the clear.
+func ClientFileHasToken(path, profile string) bool {
+	file, err := parseClientFile(path)
+	if err != nil {
+		return false
+	}
+	if profile == "" {
+		return file.Token != ""
+	}
+	entry, ok := file.Profiles[profile]
+	if !ok {
+		return false
+	}
+	if entry.Import != "" {
+		imported, err := parseClientFile(expandTilde(entry.Import))
+		return err == nil && imported.Token != ""
+	}
+	return entry.Token != ""
+}
+
 // WriteClientSetting writes or updates a single key in the client config file
 // at path. The file is created if it doesn't exist and existing keys are
 // preserved.
