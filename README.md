@@ -9,7 +9,7 @@ poof add myapp
 
 ## How it works
 
-1. `poof add myapp` registers a project. If GitHub access is configured, Poof! also commits the deploy workflow into the repo. No repo secret is needed: the workflow proves which repository it is with GitHub's OIDC token.
+1. `poof add myapp` registers a project and puts the deploy workflow into the repo from your machine (with `gh` or a token you already have; or it prints a link to do it in a browser). No repo secret is needed: the workflow proves which repository it is with GitHub's OIDC token, and the server stores no GitHub credential at all.
 2. On every push to `main`, GitHub Actions builds a Docker image, pushes it to GHCR tagged both `:<commit-sha>` (immutable, what gets deployed) and `:<branch>` (moving, for anything that wants to follow the branch), then calls `POST /projects/myapp/deploy` on your Poof! server.
 3. Poof! pulls the image, starts the container on its own isolated network (`poof-app-myapp`, shared only with Caddy), and pushes the updated routing config to Caddy's admin API. Caddy handles TLS automatically.
 
@@ -62,25 +62,27 @@ After the server is running, push the remaining settings from your machine:
 
 ```sh
 poof config set domain yourdomain.com
-poof login
+poof config set github-user yourname     # default owner for --repo and --image
 ```
 
 Run `poof config` at any time to see the current client and server settings.
 
 ### GitHub access
 
-Poof! needs to write to your repositories exactly once per project: to commit the deploy workflow (`poof add`, `poof refresh`, `poof clone`, `poof remove`). Deploys themselves need nothing stored on the server; see *How a deploy authenticates* below.
+**The server holds no GitHub credential.** Deploys need none (see *How a deploy authenticates*), and the one thing that does need one, putting the deploy workflow file into a repository (`poof add`, `poof refresh`, `poof configure`, `poof clone`, `poof remove`), happens from your machine, where a credential already lives. The server tells the CLI which file to write or delete; the CLI uses the first of:
 
-**`poof login`** (recommended). Install the public [Poof GitHub App](https://github.com/apps/poof-app) on the account that owns your repositories, choosing *All repositories* or just the ones Poof! will manage. Then run `poof login`: the server starts a GitHub device flow, you enter a one-time code in your browser, and the server receives a token that acts as you, limited to what the App may do (commit workflow files) on the repositories you selected. Nothing to create, no key to copy.
+1. **Your GitHub CLI login**, if `gh` is installed. Poof! asks once whether it may use it (`poof config set gh yes|no` changes the answer). The login needs the `workflow` scope: `gh auth refresh -s workflow` if a commit is refused.
+2. **A token you store**: `poof config set github-token <token>` (or `-` to read it from stdin). A fine-grained token limited to the repositories Poof! manages, with *Contents* and *Workflows* read and write, plus *Actions* write for `poof deploy --dispatch`. It is kept encrypted; see *Client credentials*.
+3. **A token in the environment**: the variable named by `poof config set github-token-env <NAME>`, or `$GH_TOKEN` / `$GITHUB_TOKEN`.
+4. **None of the above**: the command prints the links to create, edit or delete the file in your browser, with the content pre-filled. `poof ci print <name>` prints the file (`--links` the links) at any time.
 
-- The access token lasts 8 hours; the server refreshes it silently for about 6 months, after which `poof login` again.
-- It is stored encrypted with a key derived from the server's API token, so the database alone (a backup, a copied file) does not yield it. `poof login --status` shows who is logged in; `poof logout` forgets it. Revoke from GitHub at any time (Settings → Applications → Authorized GitHub Apps).
-- Other people whose repositories deploy through your server either install the App and run `poof login` against your server with their own account, or you keep one login that has access to their repositories.
-- The server defaults `github-user` to the login.
+Other people whose repositories deploy through your server run the same commands with their own `gh` or token; nothing of theirs is stored on the server.
 
-**A personal access token** works too: `poof config set github-token <token>`. Use a fine-grained token limited to the repositories Poof! manages, with *Contents* and *Workflows* read and write. A classic `ghp_` token is accepted with a warning: it is your whole account, which is the exposure the rest of this design removes. It is also the only credential the server can use to pull a private image on a manual `poof deploy` (CI deploys hand the server a token of their own); without one, a manual deploy of a private image works only when the image is already on disk.
+### Client credentials
 
-Running your own GitHub App instead of the public one: create it with Contents and Workflows *Read and write*, enable *Device Flow*, no webhook, and `poof config set github-client-id <client id>`.
+A stored token lives in `~/.config/poof/credentials.json`, encrypted. Its key is made from two ingredients mixed together, each optional: `$POOF_KEY` in this machine's environment, and a passphrase you type when the token is needed (`poof config set passphrase`; `poof config unset passphrase` removes it). Either alone protects the file; both together is better; neither is allowed and loudly marked `WEAK`. Only commands that actually need the token ask for the passphrase (deploys, status, logs never do). Scripts pass it with `--passphrase-stdin`.
+
+If you change `$POOF_KEY`, the file cannot be opened any more: restore the old value, `poof config unset github-token`, set the new value and store the token again.
 
 ## Client configuration
 
@@ -126,14 +128,16 @@ import = "~/.config/poof/work.toml"
 ## CLI
 
 ```
-poof add <name> [flags]              register project + automate GitHub setup
+poof add <name> [flags]              register project + place its deploy workflow
 poof caddy get|set|delete <name>     manage a project's Caddy snippet
 poof caddy list                      list projects with custom Caddy snippets
+poof ci print <name> [--links]       print a project's deploy workflow, or the links to place it by hand
 poof clone <name> <suffix>           clone project as <name>-<suffix> on branch <suffix>
 poof config                          show client and server configuration
-poof config set <key> [value]        set a client or server configuration value
-poof configure <name> [flags]        update project configuration (token is preserved)
-poof deploy <name>                   redeploy latest image / static version (--from <dir> uploads a folder)
+poof config set <key> [value]        set a client, credential or server configuration value
+poof config unset <key>              clear a credential or server configuration value
+poof configure <name> [flags]        update project configuration
+poof deploy <name>                   redeploy latest image / static version (--from <dir> uploads a folder, --dispatch runs the workflow)
 poof env copy <src> <dst> <mode>     copy env vars (--all, --only, --except, --ask)
 poof env get <name>                  list env var keys (comma-separated, values never shown)
 poof env set <name> KEY=VALUE        set env vars
@@ -182,8 +186,9 @@ poof wildcard-certificate list       list zones served by a wildcard certificate
 Global flags (all client commands):
 
 ```
---profile <name>   use a named profile from the client config
---profile-env      read the profile name from $POOF_PROFILE (errors if unset)
+--profile <name>     use a named profile from the client config
+--profile-env        read the profile name from $POOF_PROFILE (errors if unset)
+--passphrase-stdin   read the credentials passphrase from stdin instead of the terminal
 ```
 
 All flags have smart defaults — `poof add myapp` is usually enough.
@@ -231,7 +236,7 @@ For the common "frontend has an `/api/*` proxy to a backend" case, re-cast the p
 
 The `--ci` flag controls how Poof! sets up GitHub Actions for a project:
 
-- **`--ci yes`** (default) — Poof! commits a standalone push-triggered workflow at `.github/workflows/poof.yml`, on the project's configured branch. Every push to that branch builds, pushes to GHCR, and triggers a deploy. The branch must already exist on GitHub; if it doesn't yet, push it and run `poof refresh <name>`.
+- **`--ci yes`** (default) — a standalone push-triggered workflow at `.github/workflows/poof-auto-ci-<name>.yml`, on the project's configured branch. Every push to that branch builds, pushes to GHCR, and triggers a deploy. The branch must already exist on GitHub; if it doesn't yet, push it and run `poof refresh <name>`. The workflow can also be run by hand from the Actions tab (or `poof deploy <name> --dispatch`); given a `tag`, it redeploys that image without rebuilding.
 - **`--ci no`** — Poof! does not touch the repo. You're on your own for triggering deploys (call `POST /projects/<name>/deploy` from anywhere).
 - **`--ci callable`** — Poof! commits a *reusable* workflow (`on: workflow_call`) instead. You write your own outer workflow that runs tests/lint/matrix builds and then calls this one. Useful when Poof's deploy step is one stage of a larger pipeline. The calling job must grant the permissions the reusable workflow needs: `permissions: { contents: read, packages: write, id-token: write }`.
 
@@ -243,6 +248,8 @@ poof configure myapp --ci no        # stop managing CI for this project
 ### How a deploy authenticates
 
 The generated workflow stores no secret. At deploy time the job asks GitHub for an OIDC token (a short-lived JWT naming the repository, audience = the server's `public_url`) and sends it as the bearer token; the server verifies the signature against GitHub's published keys and checks that the repository matches the project. The job's own `GITHUB_TOKEN` travels in the `X-Poof-Registry-Token` header so the server can pull the freshly pushed image; it is used for that one pull, never stored, and GitHub revokes it when the job ends. Restarts and rollbacks use images already on disk.
+
+A manual `poof deploy` therefore pulls anonymously, which is fine for a public image or one still on the host. For a private image that is gone from the host, `poof deploy <name> --image <ref> --dispatch` runs the workflow with that tag: the job pulls it with its own token and the server never needs a registry credential.
 
 A repository's numeric id is pinned the first time it deploys a project: a repo deleted and recreated under the same name cannot take over the project.
 
@@ -585,7 +592,8 @@ Snapshot images (`poof-snapshot/*`) are never touched.
 - **Auth or connection errors from the CLI?** Run `poof troubleshoot` — it probes config, DNS, TCP, TLS, HTTP and auth in order and names the first thing that fails. With multiple servers, make sure the right profile is active (`--profile <name>` or `POOF_PROFILE` + `--profile-env`).
 - **Project names must be valid hostnames.** A project becomes a container named `poof-<name>`, which Caddy resolves by DNS. Names are restricted to what RFC 1123 allows for a hostname — letters, digits, hyphens and dots, with each dot-separated part starting and ending alphanumerically. `poof add` rejects anything else up front, because the failure mode is otherwise miserable to diagnose: Docker's own DNS is permissive enough that the name resolves fine from inside a container, while every request proxied through Caddy returns 502.
 - **Running out of networks?** `all predefined address pools have been fully subnetted` means Docker exhausted its address pools — its defaults only allow 31 networks, and Poof uses one per project. `poof install` configures a larger pool; see [Requirements](#requirements).
-- **Agents / automation:** the HTTP API behind the CLI is bearer-token authed and not a stable public surface — drive Poof! through the CLI.
+- **"GitHub not updated" after `poof add`?** The project is registered; only the workflow file is missing. The command printed the links to add it in a browser, or set up a credential (see *GitHub access*) and run `poof refresh <name>`.
+- **Agents / automation:** the HTTP API behind the CLI is bearer-token authed and not a stable public surface — drive Poof! through the CLI. A box or CI job exports `GH_TOKEN` for the workflow commits and feeds the credentials passphrase, if any, through `--passphrase-stdin`.
 
 ## License
 

@@ -1,3 +1,9 @@
+> **Superseded on 2026-11-20.** The device-flow login described here was
+> removed: the server now holds no GitHub credential at all, and the client
+> places the workflow file (see *GitHub access* in CLAUDE.md). Parts B and C
+> of this design (OIDC deploys, the job's own token for the pull) remain
+> exactly as specified.
+
 # GitHub auth redesign: no server-side GitHub secret
 
 Status: spec approved for implementation (2026-11-18). Experiments in
