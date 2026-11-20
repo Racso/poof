@@ -21,9 +21,10 @@ Defaults (all overridable with flags):
   --branch   %s
   --port     %d
 
-If GitHub access is configured on the server (poof login or a PAT), Poof! will
-automatically commit .github/workflows/poof-auto-ci-<name>.yml into the repo.
-The workflow authenticates its deploys with GitHub OIDC; no repo secret is set.
+The deploy workflow (.github/workflows/poof-auto-ci-<name>.yml) is committed
+from this machine with 'gh' or $GH_TOKEN when available; otherwise the links
+to do it in a browser are printed. See 'poof ci --help'. The workflow
+authenticates its deploys with GitHub OIDC; no repo secret is set.
 
 Monorepo / subfolder builds:
   Use --folder to point at a subdirectory that contains a Dockerfile.
@@ -168,6 +169,7 @@ Static sites:
 		}
 
 		fmt.Printf("✓ project %q registered\n", name)
+		defer applyCI(ciActionsOf(result))
 		if d, ok := result["domain"].(string); ok {
 			fmt.Printf("  domain:  %s\n", d)
 		}

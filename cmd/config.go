@@ -16,7 +16,7 @@ var configCmd = &cobra.Command{
 }
 
 // serverConfigKeys are the settings stored on the server, in display order.
-var serverConfigKeys = []string{"domain", "github-user", "github-client-id", "github-token"}
+var serverConfigKeys = []string{"domain", "github-user"}
 
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> [value]",
@@ -29,11 +29,9 @@ Local keys (written to this machine's config file):
 
 Server keys (sent to the remote server — requires server and token to be set):
   domain               Default domain for new projects (e.g. mydomain.com).
-  github-user          GitHub username used for automatic CI setup (set by poof login).
-  github-client-id     GitHub App client id for poof login. Defaults to the public Poof App.
-  github-token         GitHub personal access token, if you prefer one to poof login.
-                       Use a fine-grained token limited to the repositories Poof manages
-                       (Contents and Workflows: read and write).`,
+  github-user          GitHub account that owns the repositories and images by default
+                       (--repo and --image fall back to it). Not a credential: the server
+                       holds none; see 'poof ci --help'.`,
 	Args: cobra.RangeArgs(1, 2),
 	Run:  runConfigSet,
 }
@@ -41,11 +39,9 @@ Server keys (sent to the remote server — requires server and token to be set):
 var configUnsetCmd = &cobra.Command{
 	Use:   "unset <key>",
 	Short: "Clear a server configuration value",
-	Long: `Clear a server configuration value.
-
-Typically used to remove a github-token once poof login is in place.`,
-	Args: cobra.ExactArgs(1),
-	Run:  runConfigUnset,
+	Long:  `Clear a server configuration value.`,
+	Args:  cobra.ExactArgs(1),
+	Run:   runConfigUnset,
 }
 
 func init() {
@@ -80,11 +76,7 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("server settings  (%s)\n", serverLabel)
 	for _, key := range serverConfigKeys {
-		v := displayValue(settings[key])
-		if key == "github-token" {
-			v = maskSecret(settings[key])
-		}
-		fmt.Printf("  %-20s  %s\n", key, v)
+		fmt.Printf("  %-20s  %s\n", key, displayValue(settings[key]))
 	}
 }
 
@@ -164,11 +156,6 @@ func runConfigUnset(cmd *cobra.Command, args []string) {
 func maskSecret(s string) string {
 	if s == "" {
 		return "(not set)"
-	}
-	// Servers from v0.28.0 on mask the PAT themselves; masking a masked value
-	// again would just mangle it. Older servers still send it in the clear.
-	if strings.Contains(s, "…") {
-		return s
 	}
 	if len(s) <= 4 {
 		return strings.Repeat("•", len(s))

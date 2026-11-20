@@ -11,8 +11,9 @@ var configureCmd = &cobra.Command{
 	Short: "Update a project's configuration",
 	Long: `Update one or more configuration fields of an existing project.
 
-Only the flags you pass will be changed; omitted flags are left as-is.
-The project token is never affected — GitHub Actions integrations remain valid.`,
+Only the flags you pass will be changed; omitted flags are left as-is. A
+change the deploy workflow depends on (repo, branch, folder, static, build,
+ci) updates the workflow file in the repository too; see 'poof ci --help'.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
@@ -98,6 +99,7 @@ The project token is never affected — GitHub Actions integrations remain valid
 		}
 
 		fmt.Printf("✓ project %q updated\n", name)
+		defer applyCI(ciActionsOf(result))
 		if d, ok := result["domain"].(string); ok {
 			fmt.Printf("  domain:  %s\n", d)
 		}

@@ -20,116 +20,6 @@ import (
 	"github.com/racso/poof/store"
 )
 
-// --- Mock RepoManager ---
-
-type mockRepoManager struct {
-	setupCalls   []mockSetupCall
-	removeCalls  []mockRemoveCall
-	refreshCalls []mockRefreshCall
-}
-
-type mockSetupCall struct {
-	Owner, Repo, ProjectName, PoofURL, PoofToken, Branch, Image, Folder, Static, CIMode string
-	Build                                                                               bool
-}
-
-type mockRemoveCall struct {
-	Owner, Repo, ProjectName, Branch string
-	DeleteSecrets                    bool
-}
-
-type mockRefreshCall struct {
-	Owner, Repo, ProjectName                                  string
-	CI                                                        bool
-	PoofURL, RepoToken, Branch, Image, Folder, Static, CIMode string
-	Build                                                     bool
-	DeleteSecrets                                             bool
-}
-
-func (m *mockRepoManager) SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode string, build bool) error {
-	m.setupCalls = append(m.setupCalls, mockSetupCall{owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode, build})
-	return nil
-}
-
-func (m *mockRepoManager) RemoveRepoCI(owner, repo, projectName, branch string, deleteSecrets bool) error {
-	m.removeCalls = append(m.removeCalls, mockRemoveCall{owner, repo, projectName, branch, deleteSecrets})
-	return nil
-}
-
-func (m *mockRepoManager) RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error {
-	m.refreshCalls = append(m.refreshCalls, mockRefreshCall{owner, repo, projectName, ci, poofURL, repoToken, branch, image, folder, static, ciMode, build, deleteSecrets})
-	return nil
-}
-
-// --- Mock GitHubProvider ---
-
-type mockGitHubProvider struct {
-	repo *mockRepoManager
-	// Every credential the server asked a client for, in order.
-	auths []server.GitHubAuth
-	// Non-nil makes RepoManager fail.
-	repoErr error
-
-	// Device flow script. pollResults are returned by DevicePoll in order;
-	// once exhausted the last one repeats. A nil error with a token completes
-	// the flow.
-	deviceCode  server.DeviceCode
-	deviceErr   error
-	pollResults []mockPoll
-	polls       int
-	refreshed   []string // refresh tokens the server exchanged
-	refreshTok  server.UserToken
-	refreshErr  error
-	logins      map[string]string // access token → login
-}
-
-type mockPoll struct {
-	tok server.UserToken
-	err error
-}
-
-func (m *mockGitHubProvider) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
-	m.auths = append(m.auths, auth)
-	if m.repoErr != nil {
-		return nil, m.repoErr
-	}
-	return m.repo, nil
-}
-
-func (m *mockGitHubProvider) DeviceStart(clientID string) (server.DeviceCode, error) {
-	if m.deviceErr != nil {
-		return server.DeviceCode{}, m.deviceErr
-	}
-	if m.deviceCode.DeviceCode == "" {
-		return server.DeviceCode{DeviceCode: "dc", UserCode: "ABCD-1234", VerificationURI: "https://github.com/login/device", ExpiresIn: 900, Interval: 0}, nil
-	}
-	return m.deviceCode, nil
-}
-
-func (m *mockGitHubProvider) DevicePoll(clientID, deviceCode string) (server.UserToken, error) {
-	if len(m.pollResults) == 0 {
-		return server.UserToken{}, server.ErrAuthorizationPending
-	}
-	i := m.polls
-	if i >= len(m.pollResults) {
-		i = len(m.pollResults) - 1
-	}
-	m.polls++
-	return m.pollResults[i].tok, m.pollResults[i].err
-}
-
-func (m *mockGitHubProvider) RefreshUserToken(clientID, refreshToken string) (server.UserToken, error) {
-	m.refreshed = append(m.refreshed, refreshToken)
-	return m.refreshTok, m.refreshErr
-}
-
-func (m *mockGitHubProvider) UserLogin(accessToken string) (string, error) {
-	if l, ok := m.logins[accessToken]; ok {
-		return l, nil
-	}
-	return "octocat", nil
-}
-
 // --- Mock ContainerManager ---
 
 type mockContainerManager struct {
@@ -392,8 +282,6 @@ func (m *mockCaddySyncer) Validate(_, caddyfile string) error {
 // --- Test mocks aggregate ---
 
 type testMocks struct {
-	repo      *mockRepoManager
-	github    *mockGitHubProvider
 	container *mockContainerManager
 	static    *mockStaticDeployer
 	caddy     *mockCaddySyncer
@@ -428,14 +316,12 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 	}
 
 	mocks := &testMocks{
-		repo:      &mockRepoManager{},
 		container: &mockContainerManager{},
 		static:    &mockStaticDeployer{},
 		caddy:     &mockCaddySyncer{},
 	}
 	mocks.caddyfilePath = cfg.CaddyfilePath()
-	mocks.github = &mockGitHubProvider{repo: mocks.repo}
-	srv := server.New(cfg, st, mocks.github, mocks.container, mocks.static, mocks.caddy)
+	srv := server.New(cfg, st, mocks.container, mocks.static, mocks.caddy)
 
 	return srv, st, mocks
 }
@@ -758,315 +644,272 @@ func TestEnvRequiresExistingProject(t *testing.T) {
 	}
 }
 
-// --- GitHub integration (RepoManager) ---
+// --- CI plans (the client applies them; the server never touches GitHub) ---
 
-func TestCreateProjectCallsSetRepoCI(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+type ciResponse struct {
+	CI     []server.CIAction `json:"ci"`
+	Status string            `json:"status"`
+}
+
+func ciOf(t *testing.T, rr *httptest.ResponseRecorder) []server.CIAction {
+	t.Helper()
+	var out ciResponse
+	decode(t, rr, &out)
+	return out.CI
+}
+
+func TestCreateProjectReturnsWorkflowToWrite(t *testing.T) {
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
 	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
 
 	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
 	}
-
-	if len(mocks.repo.setupCalls) != 1 {
-		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
+	ci := ciOf(t, rr)
+	if len(ci) != 1 {
+		t.Fatalf("expected 1 CI action, got %d", len(ci))
 	}
-	c := mocks.repo.setupCalls[0]
-	if c.Owner != "racso" || c.Repo != "web" {
-		t.Errorf("owner/repo: got %s/%s, want racso/web", c.Owner, c.Repo)
+	a := ci[0]
+	if a.Op != server.CIWrite || a.Repo != "racso/web" || a.Branch != "main" {
+		t.Errorf("action: got %+v", a)
 	}
-	if c.ProjectName != "web" {
-		t.Errorf("projectName: got %q, want web", c.ProjectName)
+	if a.Path != ".github/workflows/poof-auto-ci-web.yml" {
+		t.Errorf("path: got %q", a.Path)
 	}
-	if c.PoofURL != "https://poof.rac.so" {
-		t.Errorf("poofURL: got %q", c.PoofURL)
+	for _, want := range []string{"/projects/web/deploy", `POOF_URL="https://poof.rac.so"`, `branches: ["main"]`, "ghcr.io/racso/web:"} {
+		if !strings.Contains(a.Content, want) {
+			t.Errorf("workflow content missing %q", want)
+		}
 	}
-	if c.Branch != "main" {
-		t.Errorf("branch: got %q, want main", c.Branch)
+	if a.Message == "" {
+		t.Error("commit message is empty")
 	}
 }
 
-func TestCreateProjectSkipsGitHubWithoutPAT(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+func TestCreateProjectWithCIDisabledAsksForRemoval(t *testing.T) {
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
 	st.SetSetting("github-user", "racso")
-	// No github-token set.
 
-	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "ci": false}, globalToken)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
 	}
-
-	if len(mocks.repo.setupCalls) != 0 {
-		t.Errorf("expected no SetRepoCI calls without PAT, got %d", len(mocks.repo.setupCalls))
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || ci[0].Op != server.CIDelete || ci[0].Content != "" {
+		t.Errorf("expected one delete action without content, got %+v", ci)
 	}
 }
 
-func TestCreateProjectSkipsGitHubWhenCIDisabled(t *testing.T) {
+func TestCreateExternalProjectHasNoCI(t *testing.T) {
 	srv, st, mocks := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
+	mocks.container.existing = map[string]bool{"legacy": true}
 
-	ci := false
-	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "ci": ci}, globalToken)
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "ws", "external": "legacy:3000"}, globalToken)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
 	}
-
-	if len(mocks.repo.setupCalls) != 0 {
-		t.Errorf("expected no SetRepoCI calls with ci=false, got %d", len(mocks.repo.setupCalls))
+	if strings.Contains(rr.Body.String(), `"ci":[`) {
+		t.Errorf("external project has no repository, so no CI plan: %s", rr.Body.String())
 	}
 }
 
-func TestDeleteProjectCallsRemoveRepoCI(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+func TestDeleteProjectAsksToRemoveWorkflow(t *testing.T) {
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
 	st.CreateProject(store.Project{
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
 		Repo: "racso/web", Branch: "main", Port: 80,
 	})
+	st.SetRepoToken("racso/web", "legacy-tok")
 
 	rr := do(t, srv, "DELETE", "/projects/web", nil, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("delete: %d — %s", rr.Code, rr.Body.String())
 	}
-
-	if len(mocks.repo.removeCalls) != 1 {
-		t.Fatalf("expected 1 RemoveRepoCI call, got %d", len(mocks.repo.removeCalls))
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || ci[0].Op != server.CIDelete || ci[0].Repo != "racso/web" || ci[0].Branch != "main" {
+		t.Errorf("expected delete of racso/web@main, got %+v", ci)
 	}
-	c := mocks.repo.removeCalls[0]
-	if c.Owner != "racso" || c.Repo != "web" {
-		t.Errorf("owner/repo: got %s/%s", c.Owner, c.Repo)
-	}
-	if c.ProjectName != "web" {
-		t.Errorf("projectName: got %q", c.ProjectName)
-	}
-	if !c.DeleteSecrets {
-		t.Error("expected deleteSecrets=true for last project in repo")
+	if tok, _ := st.GetRepoToken("racso/web"); tok != "" {
+		t.Error("legacy repo token should go with the repo's last project")
 	}
 }
 
-func TestDeleteProjectKeepsSecretsWhenSiblingsExist(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
-	// Two projects sharing the same repo.
-	st.CreateProject(store.Project{
-		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
-		Repo: "racso/monorepo", Branch: "main", Port: 80,
-	})
-	st.CreateProject(store.Project{
-		Name: "api", Domain: "api.rac.so", Image: "ghcr.io/racso/api",
-		Repo: "racso/monorepo", Branch: "main", Port: 3000,
-	})
+func TestDeleteProjectKeepsRepoTokenWhileSiblingsExist(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "racso/mono", Branch: "main", Port: 80})
+	st.CreateProject(store.Project{Name: "api", Domain: "api.rac.so", Image: "i", Repo: "racso/mono", Branch: "main", Port: 3000})
+	st.SetRepoToken("racso/mono", "legacy-tok")
 
 	do(t, srv, "DELETE", "/projects/web", nil, globalToken)
 
-	if len(mocks.repo.removeCalls) != 1 {
-		t.Fatalf("expected 1 RemoveRepoCI call, got %d", len(mocks.repo.removeCalls))
-	}
-	if mocks.repo.removeCalls[0].DeleteSecrets {
-		t.Error("expected deleteSecrets=false when sibling project still exists")
+	if tok, _ := st.GetRepoToken("racso/mono"); tok != "legacy-tok" {
+		t.Error("repo token must survive while another project deploys from the repo")
 	}
 }
 
-func TestUpdateProjectRefreshesCIOnBranchChange(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+func TestUpdateProjectBranchChangeMovesWorkflow(t *testing.T) {
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
 	st.CreateProject(store.Project{
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
 		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
 	})
-	st.SetRepoToken("racso/web", "repo-tok")
 
-	rr := do(t, srv, "PATCH", "/projects/web",
-		map[string]interface{}{"branch": "production"}, globalToken)
+	rr := do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"branch": "production"}, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
 	}
+	ci := ciOf(t, rr)
+	if len(ci) != 2 {
+		t.Fatalf("expected delete-then-write, got %+v", ci)
+	}
+	if ci[0].Op != server.CIDelete || ci[0].Branch != "main" {
+		t.Errorf("first action should remove the file from the old branch, got %+v", ci[0])
+	}
+	if ci[1].Op != server.CIWrite || ci[1].Branch != "production" || !strings.Contains(ci[1].Content, `branches: ["production"]`) {
+		t.Errorf("second action should write the workflow on the new branch, got %+v", ci[1])
+	}
+}
 
-	if len(mocks.repo.refreshCalls) != 1 {
-		t.Fatalf("expected 1 RefreshProjectCI call, got %d", len(mocks.repo.refreshCalls))
+func TestUpdateProjectRepoChangeRemovesFromOldRepo(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "racso/old", Branch: "main", Port: 80, CI: true})
+
+	rr := do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"repo": "racso/new"}, globalToken)
+	ci := ciOf(t, rr)
+	if len(ci) != 2 || ci[0].Repo != "racso/old" || ci[0].Op != server.CIDelete || ci[1].Repo != "racso/new" || ci[1].Op != server.CIWrite {
+		t.Errorf("expected delete in old repo then write in new, got %+v", ci)
 	}
-	c := mocks.repo.refreshCalls[0]
-	if c.Branch != "production" {
-		t.Errorf("branch: got %q, want production", c.Branch)
+}
+
+func TestUpdateProjectDomainOnlyHasNoCI(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
+
+	rr := do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"domain": "app.rac.so"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
 	}
-	if !c.CI {
-		t.Error("expected ci=true to be passed through")
+	if len(ciOf(t, rr)) != 0 {
+		t.Errorf("a domain change does not touch the workflow: %s", rr.Body.String())
+	}
+}
+
+func TestUpdateProjectDisablingCIAsksForRemoval(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
+
+	rr := do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"ci": false}, globalToken)
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || ci[0].Op != server.CIDelete {
+		t.Errorf("expected one delete action, got %+v", ci)
 	}
 }
 
 // --- CI mode (callable / managed) ---
 
 func TestCreateProjectDefaultsCIModeToManaged(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
 	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
 
-	rr := do(t, srv, "POST", "/projects",
-		map[string]interface{}{"name": "web"}, globalToken)
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web"}, globalToken)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
 	}
-
 	p, _ := st.GetProject("web")
 	if p.CIMode != store.CIModeManaged {
 		t.Errorf("persisted ci_mode: got %q, want %q", p.CIMode, store.CIModeManaged)
 	}
-	if len(mocks.repo.setupCalls) != 1 {
-		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
-	}
-	if mocks.repo.setupCalls[0].CIMode != store.CIModeManaged {
-		t.Errorf("SetRepoCI ciMode: got %q, want %q",
-			mocks.repo.setupCalls[0].CIMode, store.CIModeManaged)
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || !strings.Contains(ci[0].Content, "push:") || strings.Contains(ci[0].Content, "workflow_call") {
+		t.Errorf("managed workflow should be push-triggered, got %+v", ci)
 	}
 }
 
 func TestCreateProjectAcceptsCallableCIMode(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
 	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
 
-	rr := do(t, srv, "POST", "/projects",
-		map[string]interface{}{"name": "web", "ci_mode": "callable"}, globalToken)
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "ci_mode": "callable"}, globalToken)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("create: %d — %s", rr.Code, rr.Body.String())
 	}
-
 	p, _ := st.GetProject("web")
 	if p.CIMode != store.CIModeCallable {
 		t.Errorf("persisted ci_mode: got %q, want %q", p.CIMode, store.CIModeCallable)
 	}
-	if len(mocks.repo.setupCalls) != 1 {
-		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
-	}
-	if mocks.repo.setupCalls[0].CIMode != store.CIModeCallable {
-		t.Errorf("SetRepoCI ciMode: got %q, want %q",
-			mocks.repo.setupCalls[0].CIMode, store.CIModeCallable)
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || !strings.Contains(ci[0].Content, "workflow_call:") {
+		t.Errorf("callable workflow should expose workflow_call, got %+v", ci)
 	}
 }
 
 func TestCreateProjectRejectsBogusCIMode(t *testing.T) {
-	srv, _, mocks := newTestServer(t)
-	rr := do(t, srv, "POST", "/projects",
-		map[string]interface{}{"name": "web", "ci_mode": "secondary"}, globalToken)
+	srv, _, _ := newTestServer(t)
+	rr := do(t, srv, "POST", "/projects", map[string]interface{}{"name": "web", "ci_mode": "secondary"}, globalToken)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for bogus ci_mode, got %d — %s", rr.Code, rr.Body.String())
-	}
-	if len(mocks.repo.setupCalls) != 0 {
-		t.Errorf("expected no SetRepoCI calls on validation failure, got %d", len(mocks.repo.setupCalls))
 	}
 }
 
 func TestUpdateProjectRefreshesOnCIModeChange(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
+	srv, st, _ := newTestServer(t)
 	st.CreateProject(store.Project{
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
-		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
-		CIMode: store.CIModeManaged,
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true, CIMode: store.CIModeManaged,
 	})
-	st.SetRepoToken("racso/web", "repo-tok")
 
-	rr := do(t, srv, "PATCH", "/projects/web",
-		map[string]interface{}{"ci_mode": "callable"}, globalToken)
+	rr := do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"ci_mode": "callable"}, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
 	}
-
 	p, _ := st.GetProject("web")
 	if p.CIMode != store.CIModeCallable {
 		t.Errorf("persisted ci_mode: got %q, want %q", p.CIMode, store.CIModeCallable)
 	}
-	if len(mocks.repo.refreshCalls) != 1 {
-		t.Fatalf("expected 1 RefreshProjectCI call (ci_mode change should trigger refresh), got %d",
-			len(mocks.repo.refreshCalls))
-	}
-	if mocks.repo.refreshCalls[0].CIMode != store.CIModeCallable {
-		t.Errorf("RefreshProjectCI ciMode: got %q, want %q",
-			mocks.repo.refreshCalls[0].CIMode, store.CIModeCallable)
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || ci[0].Op != server.CIWrite || !strings.Contains(ci[0].Content, "workflow_call:") {
+		t.Errorf("ci_mode change should re-render the workflow, got %+v", ci)
 	}
 }
 
 func TestUpdateProjectRejectsBogusCIMode(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+	srv, st, _ := newTestServer(t)
 	st.CreateProject(store.Project{
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
-		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
-		CIMode: store.CIModeManaged,
+		Repo: "racso/web", Branch: "main", Port: 80, CI: true, CIMode: store.CIModeManaged,
 	})
-
-	rr := do(t, srv, "PATCH", "/projects/web",
-		map[string]interface{}{"ci_mode": "callable_v2"}, globalToken)
+	rr := do(t, srv, "PATCH", "/projects/web", map[string]interface{}{"ci_mode": "callable_v2"}, globalToken)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for bogus ci_mode, got %d — %s", rr.Code, rr.Body.String())
 	}
-	if len(mocks.repo.refreshCalls) != 0 {
-		t.Errorf("expected no RefreshProjectCI calls on validation failure, got %d",
-			len(mocks.repo.refreshCalls))
-	}
 }
 
-func TestUpdateProjectNoGitHubCallWhenNothingCIRelatedChanges(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
-	st.CreateProject(store.Project{
-		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
-		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
-	})
-
-	// Only changing domain — no CI-related fields.
-	do(t, srv, "PATCH", "/projects/web",
-		map[string]interface{}{"domain": "app.rac.so"}, globalToken)
-
-	if len(mocks.repo.refreshCalls) != 0 {
-		t.Errorf("expected no RefreshProjectCI calls for domain-only change, got %d", len(mocks.repo.refreshCalls))
-	}
-}
-
-func TestCloneProjectCallsSetRepoCI(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+func TestCloneProjectReturnsWorkflowForTheNewBranch(t *testing.T) {
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("domain", "rac.so")
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
 	st.CreateProject(store.Project{
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
 		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
 	})
-	st.SetRepoToken("racso/web", "repo-tok")
 
-	rr := do(t, srv, "POST", "/projects/web/clone",
-		map[string]interface{}{"suffix": "staging"}, globalToken)
+	rr := do(t, srv, "POST", "/projects/web/clone", map[string]interface{}{"suffix": "staging"}, globalToken)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("clone: %d — %s", rr.Code, rr.Body.String())
 	}
-
-	if len(mocks.repo.setupCalls) != 1 {
-		t.Fatalf("expected 1 SetRepoCI call, got %d", len(mocks.repo.setupCalls))
+	ci := ciOf(t, rr)
+	if len(ci) != 1 || ci[0].Branch != "staging" || ci[0].Path != ".github/workflows/poof-auto-ci-web-staging.yml" {
+		t.Errorf("expected the clone's workflow on its branch, got %+v", ci)
 	}
-	c := mocks.repo.setupCalls[0]
-	if c.ProjectName != "web-staging" {
-		t.Errorf("projectName: got %q, want web-staging", c.ProjectName)
-	}
-	if c.Branch != "staging" {
-		t.Errorf("branch: got %q, want staging", c.Branch)
+	if !strings.Contains(ci[0].Content, "/projects/web-staging/deploy") {
+		t.Error("clone workflow should deploy the clone")
 	}
 }
 
@@ -1145,31 +988,51 @@ func TestCloneIgnoresCaddyFlagsWhenSourceHasNoSnippet(t *testing.T) {
 	}
 }
 
-func TestRefreshProjectCallsRefreshProjectCI(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
+func TestRefreshProjectReturnsPlanWithoutMinting(t *testing.T) {
+	srv, st, _ := newTestServer(t)
 	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
 	st.CreateProject(store.Project{
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
 		Repo: "racso/web", Branch: "main", Port: 80, CI: true,
 	})
-	st.SetRepoToken("racso/web", "repo-tok")
 
 	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("refresh: %d — %s", rr.Code, rr.Body.String())
 	}
+	var out ciResponse
+	decode(t, rr, &out)
+	if out.Status != "refreshed" || len(out.CI) != 1 || out.CI[0].Op != server.CIWrite {
+		t.Errorf("refresh: got %+v", out)
+	}
+	if tok, _ := st.GetRepoToken("racso/web"); tok != "" {
+		t.Error("refresh must not mint a legacy repo token")
+	}
+}
 
-	if len(mocks.repo.refreshCalls) != 1 {
-		t.Fatalf("expected 1 RefreshProjectCI call, got %d", len(mocks.repo.refreshCalls))
+func TestRefreshProjectWithCIOffReportsRemoval(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "racso/web", Branch: "main", Port: 80, CI: false})
+
+	rr := do(t, srv, "POST", "/projects/web/refresh", nil, globalToken)
+	var out ciResponse
+	decode(t, rr, &out)
+	if out.Status != "ci removed" || len(out.CI) != 1 || out.CI[0].Op != server.CIDelete {
+		t.Errorf("refresh with ci off: got %+v", out)
 	}
-	c := mocks.repo.refreshCalls[0]
-	if c.Owner != "racso" || c.Repo != "web" {
-		t.Errorf("owner/repo: got %s/%s", c.Owner, c.Repo)
+}
+
+func TestGetProjectCIMatchesRefresh(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web", Repo: "racso/web", Branch: "main", Port: 80, CI: true})
+
+	get := ciOf(t, do(t, srv, "GET", "/projects/web/ci", nil, globalToken))
+	refresh := ciOf(t, do(t, srv, "POST", "/projects/web/refresh", nil, globalToken))
+	if len(get) != 1 || len(refresh) != 1 || get[0] != refresh[0] {
+		t.Errorf("GET /ci and refresh disagree:\n%+v\n%+v", get, refresh)
 	}
-	if c.RepoToken != "repo-tok" {
-		t.Errorf("repoToken: got %q", c.RepoToken)
+	if rr := do(t, srv, "GET", "/projects/ghost/ci", nil, globalToken); rr.Code != http.StatusNotFound {
+		t.Errorf("unknown project: got %d", rr.Code)
 	}
 }
 
@@ -3198,46 +3061,34 @@ func TestCreateRedirectRejectsProjectDomain(t *testing.T) {
 	}
 }
 
-func TestGetConfigMasksGitHubToken(t *testing.T) {
+func TestUnsetConfigClearsServerKey(t *testing.T) {
 	srv, st, _ := newTestServer(t)
-	st.SetSetting("github-token", "ghp_supersecrettoken1234")
 	st.SetSetting("github-user", "racso")
 
-	rr := do(t, srv, "GET", "/config", nil, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("get config: %d", rr.Code)
-	}
-	var cfg map[string]string
-	decode(t, rr, &cfg)
-	if strings.Contains(rr.Body.String(), "supersecret") {
-		t.Errorf("PAT leaked in response: %s", rr.Body.String())
-	}
-	if cfg["github-token"] == "" {
-		t.Errorf("masked token should still show that one is configured")
-	}
-	if cfg["github-user"] != "racso" {
-		t.Errorf("non-secret settings must pass through: %q", cfg["github-user"])
-	}
-}
-
-func TestUnsetConfigClearsLegacyToken(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-	st.SetSetting("github-token", "ghp_legacy")
-
-	rr := do(t, srv, "DELETE", "/config/github-token", nil, globalToken)
+	rr := do(t, srv, "DELETE", "/config/github-user", nil, globalToken)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("unset: %d — %s", rr.Code, rr.Body.String())
 	}
-	if v, _ := st.GetSetting("github-token"); v != "" {
-		t.Errorf("token still stored: %q", v)
+	if v, _ := st.GetSetting("github-user"); v != "" {
+		t.Errorf("setting still stored: %q", v)
 	}
 	rr = do(t, srv, "DELETE", "/config/bogus", nil, globalToken)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("unknown key: got %d", rr.Code)
 	}
-	rr = do(t, srv, "DELETE", "/config/github-token", nil, "")
+	rr = do(t, srv, "DELETE", "/config/github-user", nil, "")
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("unset without auth: got %d", rr.Code)
+	}
+}
+
+func TestConfigRefusesLegacyGitHubCredentialKeys(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	for _, key := range []string{"github-token", "github-client-id", "github-login"} {
+		rr := do(t, srv, "PATCH", "/config/"+key, map[string]string{"value": "x"}, globalToken)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("%s: the server must not accept a GitHub credential, got %d", key, rr.Code)
+		}
 	}
 }
 
@@ -3609,33 +3460,6 @@ func TestExternalProjectReportsNoRunningState(t *testing.T) {
 		if strings.Contains(rr.Body.String(), `"running":true`) {
 			t.Errorf("%s should not claim the external project is running: %s", path, rr.Body.String())
 		}
-	}
-}
-
-// `--ci no` on a repo's last CI project deletes its deploy token; turning CI
-// back on must mint a new one, not publish an empty POOF_TOKEN.
-func TestUpdateProjectReenablingCIMintsRepoToken(t *testing.T) {
-	srv, st, mocks := newTestServer(t)
-	st.SetSetting("github-user", "racso")
-	st.SetSetting("github-token", "gh-pat-xxx")
-
-	st.CreateProject(store.Project{
-		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
-		Repo: "racso/web", Branch: "main", Port: 80, CI: false,
-	})
-
-	rr := do(t, srv, "PATCH", "/projects/web",
-		map[string]interface{}{"ci": true, "ci_mode": "callable"}, globalToken)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("update: %d — %s", rr.Code, rr.Body.String())
-	}
-
-	tok, _ := st.GetRepoToken("racso/web")
-	if tok == "" {
-		t.Fatal("expected a repo token to be minted")
-	}
-	if len(mocks.repo.refreshCalls) != 1 || mocks.repo.refreshCalls[0].RepoToken != tok {
-		t.Fatalf("expected RefreshProjectCI with the minted token, got %+v", mocks.repo.refreshCalls)
 	}
 }
 

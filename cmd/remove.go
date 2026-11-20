@@ -39,7 +39,7 @@ var removeCmd = &cobra.Command{
 		}
 
 		if !yes {
-			fmt.Printf("Remove project %q? This will stop its container and clean up GitHub. [y/N] ", name)
+			fmt.Printf("Remove project %q? This will stop its container and remove its deploy workflow. [y/N] ", name)
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
@@ -55,11 +55,13 @@ var removeCmd = &cobra.Command{
 			path += "?data=keep"
 		}
 
-		if err := apiDelete(path); err != nil {
+		var result map[string]interface{}
+		if err := apiRequest("DELETE", path, nil, &result); err != nil {
 			fatal("%v", err)
 		}
 
 		fmt.Printf("✓ project %q removed\n", name)
+		defer applyCI(ciActionsOf(result))
 		if len(managedVols) == 0 {
 			fmt.Printf("  no managed host data was left behind\n")
 		} else if purge {

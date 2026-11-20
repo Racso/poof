@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -19,6 +20,10 @@ var deployCmd = &cobra.Command{
 	Long: `Redeploy a project.
 
 Container projects: redeploys the latest recorded image, or --image <tag>.
+The server pulls anonymously (it holds no registry credential), so a private
+image that is no longer on the host cannot be pulled by it. --dispatch runs
+the project's GitHub workflow instead, from this machine: with --image, the
+job redeploys that tag without rebuilding; without, it builds the branch.
 
 Static projects: re-points the site at its latest successful version. Nothing
 is uploaded; CI builds and uploads new versions on push. To publish a local
@@ -30,11 +35,15 @@ top level unless --no-index is given; .git is never uploaded.`,
 		image, _ := cmd.Flags().GetString("image")
 		from, _ := cmd.Flags().GetString("from")
 		noIndex, _ := cmd.Flags().GetBool("no-index")
+		dispatch, _ := cmd.Flags().GetBool("dispatch")
 
 		// Fetch project info to determine type.
 		var info struct {
 			Project struct {
 				Static string `json:"static"`
+				Repo   string `json:"repo"`
+				Branch string `json:"branch"`
+				CI     bool   `json:"ci"`
 			} `json:"project"`
 		}
 		if err := apiGet("/projects/"+name, &info); err != nil {
@@ -45,6 +54,20 @@ top level unless --no-index is given; .git is never uploaded.`,
 
 		if isStatic && image != "" {
 			fatal("--image does not apply to a static project (use --from <dir> to upload a folder)")
+		}
+		if dispatch {
+			if isStatic || from != "" {
+				fatal("--dispatch only applies to container projects")
+			}
+			if !info.Project.CI || info.Project.Repo == "" {
+				fatal("--dispatch needs a project with Poof-managed CI")
+			}
+			tag := ""
+			if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+				tag = image[i+1:]
+			}
+			dispatchWorkflow(name, info.Project.Repo, info.Project.Branch, tag)
+			return
 		}
 		if !isStatic && (from != "" || noIndex) {
 			fatal("--from and --no-index only apply to static projects")
@@ -211,4 +234,5 @@ func init() {
 	deployCmd.Flags().String("image", "", "container projects: image to deploy (default: latest recorded)")
 	deployCmd.Flags().String("from", "", "static projects: upload this local folder as a new version")
 	deployCmd.Flags().Bool("no-index", false, "with --from: allow a folder without index.html")
+	deployCmd.Flags().Bool("dispatch", false, "container projects: run the GitHub workflow instead (with --image, redeploy that tag without rebuilding)")
 }

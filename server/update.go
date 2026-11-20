@@ -33,9 +33,10 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request) {
 
 	// Same layer-store race as a project deploy: keep GC off the host while
 	// this pull runs.
+	// Poof's own image is public, and the server holds no registry
+	// credential anyway: the pull is anonymous.
 	s.gate.enterDeploy()
-	registryUser, registryToken := s.registryCredentials(s.settingGitHubUser())
-	pullOut, err := docker.PullSelf(image, registryUser, registryToken)
+	pullOut, err := docker.PullSelf(image, "", "")
 	s.gate.leaveDeploy()
 	if err != nil {
 		jsonError(w, fmt.Sprintf("pull failed: %v", err), http.StatusInternalServerError)

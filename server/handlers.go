@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +19,7 @@ import (
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/defaults"
 	"github.com/racso/poof/store"
+	"github.com/racso/poof/workflow"
 )
 
 // --- Settings helpers ---
@@ -34,15 +34,6 @@ func (s *Server) settingGitHubUser() string {
 	return v
 }
 
-// warnLegacyGitHubToken logs at startup while a classic PAT is stored: it is
-// the whole account, which is what the login and fine-grained tokens avoid.
-func (s *Server) warnLegacyGitHubToken() {
-	pat, _ := s.store.GetSetting(settingGitHubToken)
-	if strings.HasPrefix(pat, "ghp_") {
-		log.Printf("warning: github-token is a classic personal access token (account-wide). Prefer 'poof login', or a fine-grained token limited to the repositories Poof manages, then 'poof config unset github-token'")
-	}
-}
-
 // splitRepo resolves a project's repo setting into owner and name. A bare
 // name belongs to the configured github-user.
 func (s *Server) splitRepo(repo string) (owner, name string) {
@@ -53,42 +44,8 @@ func (s *Server) splitRepo(repo string) (owner, name string) {
 	return owner, name
 }
 
-// githubClientFor returns a GitHub client scoped to the project's repository,
-// plus the resolved owner and repo name. It is the single way handlers reach
-// GitHub; errors mean the credential could not be turned into a client (App
-// not installed on the owner's account, unreadable key, ...).
-func (s *Server) githubClientFor(repo string) (client RepoManager, owner, name string, err error) {
-	owner, name = s.splitRepo(repo)
-	client, err = s.github.RepoManager(s.githubAuth(), owner, name)
-	return client, owner, name, err
-}
-
-// registryCredentials returns the docker login for a pull that carries no job
-// token (manual `poof deploy`, self-update): the stored PAT with github-user,
-// when there is one. Empty otherwise; the pull then runs anonymously, which
-// is enough for a public image. owner is unused since the App tokens went
-// away but kept so call sites read naturally.
-func (s *Server) registryCredentials(owner string) (user, token string) {
-	_ = owner
-	pat, _ := s.store.GetSetting(settingGitHubToken)
-	if pat == "" {
-		return "", ""
-	}
-	return s.settingGitHubUser(), pat
-}
-
 // registryUser is the username GHCR expects alongside a GitHub Actions token.
 const registryUser = "x-access-token"
-
-// imageOwner returns the account an image belongs to on its registry
-// (`ghcr.io/owner/pkg:tag` → `owner`), or "" for a bare Docker Hub name.
-func imageOwner(image string) string {
-	parts := strings.Split(strings.SplitN(image, ":", 2)[0], "/")
-	if len(parts) >= 3 {
-		return parts[1]
-	}
-	return ""
-}
 
 // --- Config ---
 
@@ -98,33 +55,9 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Credentials are write-only over the API: any token holder could
-	// otherwise read them back and act as the operator on GitHub. The PAT
-	// is shown as a fingerprint; the login blob is not shown at all (GET
-	// /auth/github reports who is logged in).
-	masked := make(map[string]string, len(settings))
-	for k, v := range settings {
-		switch k {
-		case settingGitHubToken:
-			v = maskSecret(v)
-		case settingGitHubLogin:
-			continue
-		}
-		masked[k] = v
-	}
-	jsonOK(w, masked)
-}
-
-// maskSecret renders a stored secret as a fingerprint: enough to tell which
-// credential is configured, not enough to use it.
-func maskSecret(v string) string {
-	if v == "" {
-		return ""
-	}
-	if len(v) <= 8 {
-		return "********"
-	}
-	return v[:4] + "…" + v[len(v)-4:]
+	// Nothing in settings is a secret any more: the server holds no GitHub
+	// credential (purgeGitHubCredentials removes any left by older releases).
+	jsonOK(w, settings)
 }
 
 func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
@@ -150,14 +83,11 @@ func (s *Server) setConfig(w http.ResponseWriter, r *http.Request) {
 
 // configKeys are the settings `poof config set` / `unset` may touch.
 var configKeys = map[string]bool{
-	"domain":              true,
-	"github-user":         true,
-	settingGitHubToken:    true,
-	settingGitHubClientID: true,
+	"domain":      true,
+	"github-user": true,
 }
 
-// unsetConfig removes a setting. It exists so a PAT can be cleared once
-// `poof login` is in place; setConfig refuses empty values.
+// unsetConfig removes a setting; setConfig refuses empty values.
 func (s *Server) unsetConfig(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if !configKeys[key] {
@@ -394,24 +324,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get or create a deploy token for this repo.
-	token, err := s.store.GetRepoToken(req.Repo)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if token == "" {
-		token, err = generateToken()
-		if err != nil {
-			jsonError(w, "failed to generate token", http.StatusInternalServerError)
-			return
-		}
-		if err := s.store.SetRepoToken(req.Repo, token); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
 	p := store.Project{
 		Name:     req.Name,
 		Domain:   req.Domain,
@@ -432,17 +344,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set up GitHub repo (secrets + workflow) if a credential is configured and CI is enabled.
-	if p.CI && s.githubAuth().Configured() {
-		client, owner, repoName, err := s.githubClientFor(req.Repo)
-		if err == nil {
-			err = client.SetRepoCI(owner, repoName, req.Name, s.cfg.PublicURL, token, req.Branch, req.Image, req.Folder, req.Static, p.CIMode, req.Build)
-		}
-		if err != nil {
-			log.Printf("warning: GitHub setup for %s failed: %v", req.Name, err)
-		}
-	}
-
 	// An external project is live the moment it is registered: there is no
 	// deploy step to wire up its network or publish its route.
 	if p.IsExternal() {
@@ -457,8 +358,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project created: %s (repo=%s branch=%s image=%s static=%s build=%v ci=%v mode=%s)", p.Name, p.Repo, p.Branch, p.Image, p.Static, p.Build, p.CI, p.CIMode)
+	// The client puts the workflow in the repository; see ci.go.
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, p)
+	jsonOK(w, projectResponse{Project: p, CI: s.ciPlan(&p)})
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
@@ -479,6 +381,10 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Where the workflow lived before this change, so a move of repo or
+	// branch can take the old file away: left behind, a push-triggered
+	// workflow on the old branch would keep deploying.
+	oldRepo, oldBranch := p.Repo, p.Branch
 	ciChanged, ciModeChanged := false, false
 	repoChanged, branchChanged, folderChanged, staticChanged, buildChanged := false, false, false, false, false
 	domainChanged := false
@@ -580,32 +486,20 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("project updated: %s", name)
-	if s.githubAuth().Configured() && (repoChanged || branchChanged || folderChanged || staticChanged || buildChanged || ciChanged || ciModeChanged) {
-		client, owner, repoName, err := s.githubClientFor(p.Repo)
-		if err != nil {
-			log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
-		} else {
-			repoToken, _ := s.store.GetRepoToken(p.Repo)
-			if p.CI && repoToken == "" {
-				// Turning CI back on after `--ci no` removed the repo's last
-				// CI project: without this, an empty POOF_TOKEN is written.
-				if repoToken, err = s.ensureRepoToken(p.Repo); err != nil {
-					log.Printf("warning: minting deploy token for %s failed: %v", p.Repo, err)
-				}
-			}
-			ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
-			if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
-				log.Printf("warning: GitHub CI refresh for %s failed: %v", name, err)
-			}
-			if !p.CI && ciSiblings == 0 {
-				_ = s.store.DeleteRepoToken(p.Repo)
-			}
+
+	// Only a change the workflow text or location depends on asks the client
+	// to touch the repository.
+	var ci []CIAction
+	if !p.IsExternal() && (repoChanged || branchChanged || folderChanged || staticChanged || buildChanged || ciChanged || ciModeChanged) {
+		if (repoChanged || branchChanged) && oldRepo != "" {
+			ci = append(ci, s.ciDelete(oldRepo, oldBranch, p.Name))
 		}
+		ci = append(ci, s.ciPlan(p)...)
 	}
 
 	s.syncRouting(w, "updating project "+name)
 
-	jsonOK(w, p)
+	jsonOK(w, projectResponse{Project: *p, CI: ci})
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
@@ -639,19 +533,10 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		s.teardownAppNetwork(name)
 	}
 
-	// Clean up GitHub if a credential is configured.
-	if s.githubAuth().Configured() {
-		// Only delete the POOF_TOKEN secret if this is the last project for this repo.
-		siblings, _ := s.store.CountProjectsForRepo(p.Repo)
-		lastForRepo := siblings <= 1
-		client, owner, repoName, err := s.githubClientFor(p.Repo)
-		if err == nil {
-			err = client.RemoveRepoCI(owner, repoName, name, p.Branch, lastForRepo)
-		}
-		if err != nil {
-			log.Printf("warning: GitHub cleanup for %s: %v", name, err)
-		}
-		if lastForRepo {
+	// The legacy per-repo deploy token has no project left to deploy once the
+	// repo's last one goes.
+	if p.Repo != "" {
+		if siblings, _ := s.store.CountProjectsForRepo(p.Repo); siblings <= 1 {
 			_ = s.store.DeleteRepoToken(p.Repo)
 		}
 	}
@@ -687,7 +572,11 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 
 	s.syncRouting(w, "removing project "+name)
 
-	resp := map[string]string{"status": "deleted"}
+	resp := map[string]interface{}{"status": "deleted"}
+	if !p.IsExternal() && p.Repo != "" {
+		// The workflow outlives the registration unless the client removes it.
+		resp["ci"] = []CIAction{s.ciDelete(p.Repo, p.Branch, name)}
+	}
 	if p.HasRemoteUpstream() {
 		resp["note"] = fmt.Sprintf("removed the route; the service at %s was left untouched (Poof does not manage it)", p.Upstream())
 	} else if p.IsExternal() {
@@ -767,24 +656,6 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get or create repo token.
-	token, err := s.store.GetRepoToken(source.Repo)
-	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if token == "" {
-		token, err = generateToken()
-		if err != nil {
-			jsonError(w, "failed to generate token", http.StatusInternalServerError)
-			return
-		}
-		if err := s.store.SetRepoToken(source.Repo, token); err != nil {
-			jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
 	// Derive clone config from source. Domain is left for the server default.
 	p := store.Project{
 		Name:   cloneName,
@@ -825,20 +696,12 @@ func (s *Server) cloneProject(w http.ResponseWriter, r *http.Request) {
 		caddySnippetCopied = true
 	}
 
-	// Set up GitHub.
-	if p.CI && s.githubAuth().Configured() {
-		client, owner, repoName, err := s.githubClientFor(source.Repo)
-		if err == nil {
-			err = client.SetRepoCI(owner, repoName, cloneName, s.cfg.PublicURL, token, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build)
-		}
-		if err != nil {
-			log.Printf("warning: GitHub setup for %s failed: %v", cloneName, err)
-		}
-	}
-
 	log.Printf("project cloned: %s → %s (branch=%s)", sourceName, cloneName, req.Suffix)
 
 	result := map[string]interface{}{"project": p}
+	if ci := s.ciPlan(&p); len(ci) > 0 {
+		result["ci"] = ci
+	}
 	if copiedKeys != nil {
 		result["env_keys_copied"] = copiedKeys
 	}
@@ -861,33 +724,9 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.githubAuth().Configured() {
-		jsonError(w, noGitHubAuthHint, http.StatusPreconditionFailed)
+	if p.IsExternal() {
+		jsonError(w, externalRefusal(p), http.StatusBadRequest)
 		return
-	}
-
-	repoToken, _ := s.store.GetRepoToken(p.Repo)
-	if p.CI && repoToken == "" {
-		var err error
-		if repoToken, err = s.ensureRepoToken(p.Repo); err != nil {
-			jsonError(w, "failed to mint deploy token for repo "+p.Repo+": "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	client, owner, repoName, err := s.githubClientFor(p.Repo)
-	if err != nil {
-		jsonError(w, fmt.Sprintf("GitHub CI refresh failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	ciSiblings, _ := s.store.CountCIEnabledProjectsForRepo(p.Repo, p.Name)
-	if err := client.RefreshProjectCI(owner, repoName, p.Name, p.CI, s.cfg.PublicURL, repoToken, p.Branch, p.Image, p.Folder, p.Static, p.CIMode, p.Build, ciSiblings == 0); err != nil {
-		jsonError(w, fmt.Sprintf("GitHub CI refresh failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if !p.CI && ciSiblings == 0 {
-		_ = s.store.DeleteRepoToken(p.Repo)
 	}
 
 	status := "refreshed"
@@ -895,7 +734,7 @@ func (s *Server) refreshProject(w http.ResponseWriter, r *http.Request) {
 		status = "ci removed"
 	}
 	log.Printf("project CI refreshed: %s (status=%s)", name, status)
-	jsonOK(w, map[string]string{"status": status, "ci_mode": p.CIMode})
+	jsonOK(w, map[string]interface{}{"status": status, "ci_mode": p.CIMode, "ci": s.ciPlan(p)})
 }
 
 // --- Deploy & Rollback ---
@@ -1224,8 +1063,10 @@ func (s *Server) snapshotProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // runDeploy pulls image and (re)starts p's container. pullToken, when set, is
-// the calling CI job's registry token (see RegistryTokenHeader); otherwise the
-// server's own registry credential is used, or none for a public image.
+// the calling CI job's registry token (see RegistryTokenHeader). Without one
+// the pull is anonymous: the server has no registry credential of its own,
+// so a private image that is no longer on this host comes back only through
+// the repository's workflow (see redeployHint).
 func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullToken string) {
 	envVars, err := s.store.GetEnvVars(p.Name)
 	if err != nil {
@@ -1282,13 +1123,9 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullT
 	// While paused, the new container is created but not started: the fix is
 	// applied offline and resume brings it up. Its deployment row stays
 	// "staged" until resume resolves it to success/failed by the start outcome.
-	registryOwner := imageOwner(image)
-	if registryOwner == "" {
-		registryOwner, _ = s.splitRepo(p.Repo)
-	}
-	registryUser, registryToken := registryUser, pullToken
-	if pullToken == "" {
-		registryUser, registryToken = s.registryCredentials(registryOwner)
+	pullUser := ""
+	if pullToken != "" {
+		pullUser = registryUser
 	}
 	err = s.container.Deploy(ContainerDeployConfig{
 		Name:          p.Name,
@@ -1297,15 +1134,19 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullT
 		Volumes:       mounts,
 		Network:       appNet,
 		Networks:      nets,
-		RegistryUser:  registryUser,
-		RegistryToken: registryToken,
+		RegistryUser:  pullUser,
+		RegistryToken: pullToken,
 		CreateOnly:    p.Paused,
 	})
 
 	if err != nil {
 		s.store.UpdateDeploymentStatus(depID, "failed")
 		log.Printf("deploy failed: %s → %v", p.Name, err)
-		jsonError(w, fmt.Sprintf("deploy failed: %v", err), http.StatusInternalServerError)
+		msg := fmt.Sprintf("deploy failed: %v", err)
+		if pullToken == "" && strings.Contains(err.Error(), "pull") {
+			msg += s.redeployHint(p, image)
+		}
+		jsonError(w, msg, http.StatusInternalServerError)
 		return
 	}
 
@@ -2365,28 +2206,21 @@ func (s *Server) buildCaddyfile(overrides map[string]string, forceRoute string, 
 
 // --- Helpers ---
 
-// ensureRepoToken returns the repo's deploy token, minting and storing one if
-// it has none.
-func (s *Server) ensureRepoToken(repo string) (string, error) {
-	token, err := s.store.GetRepoToken(repo)
-	if err != nil || token != "" {
-		return token, err
+// redeployHint tells a manual deployer how to get an image the server could
+// not pull: the repository's workflow, dispatched with the tag, pulls it with
+// the job's own token. Only container projects with a managed workflow have
+// that button.
+func (s *Server) redeployHint(p *store.Project, image string) string {
+	if !p.CI || p.Repo == "" {
+		return ""
 	}
-	if token, err = generateToken(); err != nil {
-		return "", err
+	owner, name := s.splitRepo(p.Repo)
+	tag := ""
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		tag = image[i+1:]
 	}
-	if err := s.store.SetRepoToken(repo, token); err != nil {
-		return "", err
-	}
-	return token, nil
-}
-
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+	return fmt.Sprintf(". The server has no registry credential; if the image is not on this host, run the project's workflow with tag=%s so the job pulls it: https://github.com/%s/%s/actions/workflows/%s (or 'poof deploy %s --image %s --dispatch')",
+		tag, owner, name, strings.TrimPrefix(workflow.File(p.Name), ".github/workflows/"), p.Name, image)
 }
 
 // parseExternalTarget splits a `container:port` target. The port is optional

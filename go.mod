@@ -6,7 +6,6 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.49.0
 	modernc.org/sqlite v1.47.0
 )
 

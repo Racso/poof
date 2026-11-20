@@ -68,6 +68,7 @@ container are NOT rewritten — fix them with 'poof spell proxy' or
 		cloneName := source + "-" + suffix
 
 		fmt.Printf("✓ cloned %q → %q (branch: %s)\n", source, cloneName, suffix)
+		defer applyCI(ciActionsOf(result))
 		if proj != nil {
 			if d, ok := proj["domain"].(string); ok {
 				fmt.Printf("  domain:  %s\n", d)

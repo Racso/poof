@@ -11,65 +11,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/store"
 	"github.com/racso/poof/version"
 )
-
-// RepoManager abstracts GitHub repository operations (secrets + workflow files)
-// so that handlers can be tested without hitting the GitHub API.
-type RepoManager interface {
-	SetRepoCI(owner, repo, projectName, poofURL, poofToken, branch, image, folder, static, ciMode string, build bool) error
-	RemoveRepoCI(owner, repo, projectName, branch string, deleteSecrets bool) error
-	RefreshProjectCI(owner, repo, projectName string, ci bool, poofURL, repoToken, branch, image, folder, static, ciMode string, build bool, deleteSecrets bool) error
-}
-
-// GitHubAuth is the credential the server uses to write to repositories: a
-// device-flow login's access token or a personal access token (Source tells
-// which). Resolved by githubAuth() on every use; see githubauth.go.
-type GitHubAuth struct {
-	Token  string
-	Source string
-}
-
-// Configured reports whether any GitHub credential is available.
-func (a GitHubAuth) Configured() bool { return a.Token != "" }
-
-// DeviceCode mirrors github.DeviceCode for the interface boundary.
-type DeviceCode struct {
-	DeviceCode      string
-	UserCode        string
-	VerificationURI string
-	ExpiresIn       int
-	Interval        int
-}
-
-// UserToken mirrors github.UserToken for the interface boundary.
-type UserToken struct {
-	AccessToken      string
-	ExpiresAt        time.Time
-	RefreshToken     string
-	RefreshExpiresAt time.Time
-}
-
-// GitHubProvider is the seam to GitHub: repository clients and the device
-// flow. Abstracted so handlers can be tested without the GitHub API.
-type GitHubProvider interface {
-	// RepoManager returns a client able to manage CI on owner/repo.
-	RepoManager(auth GitHubAuth, owner, repo string) (RepoManager, error)
-	// DeviceStart begins a device flow for the App identified by clientID.
-	DeviceStart(clientID string) (DeviceCode, error)
-	// DevicePoll makes one attempt to redeem deviceCode. It returns
-	// ErrAuthorizationPending until the operator approves the code.
-	DevicePoll(clientID, deviceCode string) (UserToken, error)
-	// RefreshUserToken exchanges a refresh token for a new pair.
-	RefreshUserToken(clientID, refreshToken string) (UserToken, error)
-	// UserLogin returns the GitHub login an access token acts as.
-	UserLogin(accessToken string) (string, error)
-}
 
 // ContainerManager abstracts Docker container operations.
 type ContainerManager interface {
@@ -150,7 +97,6 @@ type Server struct {
 	cfg       *config.ServerConfig
 	store     *store.Store
 	logPath   string
-	github    GitHubProvider
 	container ContainerManager
 	static    StaticDeployer
 	caddy     CaddySyncer
@@ -170,10 +116,6 @@ type Server struct {
 	gcSweep func()
 	// oidc verifies GitHub Actions tokens on the deploy endpoints. See oidc.go.
 	oidc *oidcVerifier
-	// loginMu guards the stored GitHub login and the device flow in progress
-	// (pending). See githubauth.go.
-	loginMu sync.Mutex
-	pending *pendingLogin
 }
 
 // SetOIDCEndpoints points the verifier at another issuer and JWKS. Tests use
@@ -182,12 +124,11 @@ func (s *Server) SetOIDCEndpoints(issuer, jwksURL string) {
 	s.oidc = newOIDCVerifier(issuer, jwksURL)
 }
 
-func New(cfg *config.ServerConfig, st *store.Store, github GitHubProvider, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
+func New(cfg *config.ServerConfig, st *store.Store, container ContainerManager, static StaticDeployer, caddySyncer CaddySyncer) *Server {
 	srv := &Server{
 		cfg:       cfg,
 		store:     st,
 		logPath:   filepath.Join(cfg.DataDir, "server.log"),
-		github:    github,
 		container: container,
 		static:    static,
 		caddy:     caddySyncer,
@@ -219,6 +160,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/deploy/static", s.authFlex(s.deployStaticProject))
 	mux.HandleFunc("POST /projects/{name}/rollback", s.auth(s.rollbackProject))
 	mux.HandleFunc("POST /projects/{name}/refresh", s.auth(s.refreshProject))
+	mux.HandleFunc("GET /projects/{name}/ci", s.auth(s.getProjectCI))
 
 	// Pause & resume (offline/online without touching the registration)
 	mux.HandleFunc("POST /projects/{name}/pause", s.auth(s.pauseProject))
@@ -267,11 +209,6 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("DELETE /wildcard-certificates/{zone}", s.auth(s.deleteWildcardCertificate))
 
 	// Server settings
-	// GitHub login (device flow); see githubauth.go.
-	mux.HandleFunc("POST /auth/github/device", s.auth(s.startDeviceLogin))
-	mux.HandleFunc("GET /auth/github", s.auth(s.getGitHubAuth))
-	mux.HandleFunc("DELETE /auth/github", s.auth(s.deleteGitHubAuth))
-
 	mux.HandleFunc("GET /config", s.auth(s.getConfig))
 	mux.HandleFunc("PATCH /config/{key}", s.auth(s.setConfig))
 	mux.HandleFunc("DELETE /config/{key}", s.auth(s.unsetConfig))
@@ -379,7 +316,7 @@ func (s *Server) Run() error {
 
 	addr := fmt.Sprintf(":%d", s.cfg.APIPort)
 	log.Printf("poof server starting — commit=%s committed=%s addr=%s", version.Commit, version.CommitTime, addr)
-	s.warnLegacyGitHubToken()
+	s.purgeGitHubCredentials()
 
 	if err := s.syncCaddy(); err != nil {
 		log.Printf("ERROR: initial caddy sync failed: %v — Caddy is serving whatever config it "+
@@ -402,8 +339,11 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authFlex middleware: accepts global token OR the repo-level deploy token.
-// Used for /deploy so the GH Action can call it without the global token.
+// authFlex middleware: accepts the global token, a GitHub Actions OIDC token
+// for the project's repository, or the legacy per-repo deploy token. Used for
+// /deploy so the GH Action can call it without the global token. Legacy
+// tokens are no longer minted; the path stays until the hand-written
+// workflows that still send one (see board card #215) move to OIDC.
 func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.validGlobalToken(r) {

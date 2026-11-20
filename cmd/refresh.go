@@ -15,10 +15,10 @@ var refreshCmd = &cobra.Command{
 	Long: `Regenerate the deploy workflow file in the project's GitHub repo.
 Skips the commit if the file is already up to date.
 
-Useful after template changes (for example to move a repo from the old
-POOF_TOKEN secret to OIDC authentication). With --all, every
-project is refreshed in turn; failures are reported per project and do
-not stop the run.`,
+The file is written from this machine with 'gh' or $GH_TOKEN; without
+either, the links to do it in a browser are printed (see 'poof ci --help').
+Useful after template changes. With --all, every project is refreshed in
+turn; failures are reported per project and do not stop the run.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if refreshAll && len(args) > 0 {
@@ -67,17 +67,22 @@ not stop the run.`,
 // refreshOne refreshes a single project and prints the outcome. The error is
 // returned rather than fatal'd so --all can carry on past a failure.
 func refreshOne(name string) error {
-	var result map[string]string
+	var result struct {
+		Status string     `json:"status"`
+		CIMode string     `json:"ci_mode"`
+		CI     []ciAction `json:"ci"`
+	}
 	if err := apiPost("/projects/"+name+"/refresh", nil, &result); err != nil {
 		return err
 	}
-	if result["status"] == "ci removed" {
-		fmt.Printf("  ✓ %s — Poof-managed CI removed\n", name)
-	} else if result["ci_mode"] == "callable" {
+	if result.Status == "ci removed" {
+		fmt.Printf("  ✓ %s — Poof-managed CI is off\n", name)
+	} else if result.CIMode == "callable" {
 		fmt.Printf("  ✓ %s (callable: the calling job must grant id-token: write, or the run fails at startup)\n", name)
 	} else {
 		fmt.Printf("  ✓ %s\n", name)
 	}
+	applyCI(result.CI)
 	return nil
 }
 

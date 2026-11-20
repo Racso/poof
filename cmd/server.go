@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"github.com/racso/poof/caddy"
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/docker"
-	gh "github.com/racso/poof/github"
 	"github.com/racso/poof/server"
 	"github.com/racso/poof/static"
 	"github.com/racso/poof/store"
@@ -53,56 +51,12 @@ var serverCmd = &cobra.Command{
 
 		checkCaddySetup(scfg)
 
-		srv := server.New(scfg, st, &githubAdapter{}, dockerAdapter{}, staticAdapter{}, caddyAdapter{})
+		srv := server.New(scfg, st, dockerAdapter{}, staticAdapter{}, caddyAdapter{})
 		if err := srv.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: server: %v\n", err)
 			os.Exit(1)
 		}
 	},
-}
-
-// githubAdapter implements server.GitHubProvider over the github package.
-type githubAdapter struct{}
-
-func (githubAdapter) RepoManager(auth server.GitHubAuth, owner, repo string) (server.RepoManager, error) {
-	return gh.NewClient(auth.Token), nil
-}
-
-func (githubAdapter) DeviceStart(clientID string) (server.DeviceCode, error) {
-	code, err := gh.NewDeviceFlow(clientID).Start()
-	if err != nil {
-		return server.DeviceCode{}, err
-	}
-	return server.DeviceCode{
-		DeviceCode: code.DeviceCode, UserCode: code.UserCode, VerificationURI: code.VerificationURI,
-		ExpiresIn: code.ExpiresIn, Interval: code.Interval,
-	}, nil
-}
-
-func (githubAdapter) DevicePoll(clientID, deviceCode string) (server.UserToken, error) {
-	tok, err := gh.NewDeviceFlow(clientID).Poll(deviceCode)
-	// slow_down is "still pending, and back off": the server's poll interval
-	// already exceeds GitHub's minimum, so pending is the right reading.
-	if errors.Is(err, gh.ErrAuthorizationPending) || errors.Is(err, gh.ErrSlowDown) {
-		return server.UserToken{}, server.ErrAuthorizationPending
-	}
-	return userToken(tok), err
-}
-
-func (githubAdapter) RefreshUserToken(clientID, refreshToken string) (server.UserToken, error) {
-	tok, err := gh.NewDeviceFlow(clientID).Refresh(refreshToken)
-	return userToken(tok), err
-}
-
-func (githubAdapter) UserLogin(accessToken string) (string, error) {
-	return gh.NewDeviceFlow("").Login(accessToken)
-}
-
-func userToken(t gh.UserToken) server.UserToken {
-	return server.UserToken{
-		AccessToken: t.AccessToken, ExpiresAt: t.ExpiresAt,
-		RefreshToken: t.RefreshToken, RefreshExpiresAt: t.RefreshExpiresAt,
-	}
 }
 
 // dockerAdapter delegates server.ContainerManager to the docker package functions.
