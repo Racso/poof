@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/racso/poof/github"
@@ -41,13 +40,22 @@ what the workflow should look like (add, configure, clone, remove, refresh),
 the server answers with the file to write or delete and this machine does it,
 with the first of:
 
-  1. the GitHub CLI, when 'gh' is installed and logged in ('gh auth token');
-  2. a token in $GH_TOKEN or $GITHUB_TOKEN;
-  3. nothing: the command prints the links to do it in a browser.
+  1. the GitHub CLI's login, when 'gh' is installed and you allowed it
+     ('poof config set gh yes'; asked once on first use);
+  2. the token stored with 'poof config set github-token';
+  3. the environment variable named by 'poof config set github-token-env';
+  4. $GH_TOKEN or $GITHUB_TOKEN;
+  5. nothing: the command prints the links to do it in a browser.
 
 A token needs Contents and Workflows (read and write) on the repository, and
 Actions (write) to dispatch runs. A gh login without the 'workflow' scope
-gets it with 'gh auth refresh -s workflow'.`,
+gets it with 'gh auth refresh -s workflow'.
+
+The stored token lives encrypted in credentials.json next to the client
+config. Its key mixes $POOF_KEY from this machine's environment with a
+passphrase you type ('poof config set passphrase'); either may be absent,
+both absent is weak and said so. --passphrase-stdin feeds the passphrase
+from standard input for scripts.`,
 }
 
 var ciPrintCmd = &cobra.Command{
@@ -102,23 +110,6 @@ func init() {
 	ciPrintCmd.Flags().Bool("links", false, "print the browser links for applying the plan by hand instead of the file")
 	ciCmd.AddCommand(ciPrintCmd)
 	rootCmd.AddCommand(ciCmd)
-}
-
-// githubCredential finds a token on this machine able to act on GitHub, and
-// says where it came from. Empty when there is none.
-func githubCredential() (token, source string) {
-	if path, err := exec.LookPath("gh"); err == nil {
-		out, err := exec.Command(path, "auth", "token", "--hostname", "github.com").Output()
-		if tok := strings.TrimSpace(string(out)); err == nil && tok != "" {
-			return tok, "gh"
-		}
-	}
-	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
-		if tok := os.Getenv(name); tok != "" {
-			return tok, "$" + name
-		}
-	}
-	return "", ""
 }
 
 // applyCI performs the plan with whatever credential this machine has, or

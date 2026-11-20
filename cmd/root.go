@@ -68,6 +68,7 @@ func init() {
 	cobra.OnInitialize(loadConfig)
 	rootCmd.PersistentFlags().StringVar(&profileFlag, "profile", "", "named profile to use from config")
 	rootCmd.PersistentFlags().BoolVar(&profileEnvFlag, "profile-env", false, "read profile name from $POOF_PROFILE (errors if unset)")
+	rootCmd.PersistentFlags().BoolVar(&passphraseStdin, "passphrase-stdin", false, "read the credentials passphrase from standard input instead of the terminal")
 }
 
 func loadConfig() {

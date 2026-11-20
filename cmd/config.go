@@ -27,6 +27,14 @@ Local keys (written to this machine's config file):
   server               URL of the Poof! server. Omit value on the server machine itself.
   token                API token for authenticating with the server.
 
+Local credential keys (kept encrypted in credentials.json; see 'poof ci --help'):
+  github-token         GitHub token used to write workflow files and dispatch runs.
+                       Pass '-' to read it from standard input.
+  github-token-env     Name of an environment variable holding such a token.
+  gh                   yes|no: allow using the GitHub CLI's login.
+  passphrase           Ask for a passphrase (typed, never stored) whenever the
+                       stored token is needed. Omit the value: it is prompted.
+
 Server keys (sent to the remote server — requires server and token to be set):
   domain               Default domain for new projects (e.g. mydomain.com).
   github-user          GitHub account that owns the repositories and images by default
@@ -55,6 +63,9 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("client config  %s\n", path)
 	fmt.Printf("  %-20s  %s\n", "server", displayValue(cfg.Server))
 	fmt.Printf("  %-20s  %s\n", "token", maskSecret(cfg.Token))
+
+	fmt.Println()
+	showCredentials()
 
 	if cfg.Server == "" {
 		fmt.Println()
@@ -126,6 +137,9 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("token updated  →  %s%s\n", path, profileSuffix())
 
+	case isCredentialKey(key):
+		setCredentialKey(key, value)
+
 	case isServerConfigKey(key):
 		if value == "" {
 			fatal("value required: poof config set %s <value>", key)
@@ -137,14 +151,18 @@ func runConfigSet(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s updated\n", key)
 
 	default:
-		fatal("unknown key %q\nknown keys: server, token, %s", key, strings.Join(serverConfigKeys, ", "))
+		fatal("unknown key %q\nknown keys: server, token, %s, %s", key, strings.Join(credentialKeys, ", "), strings.Join(serverConfigKeys, ", "))
 	}
 }
 
 func runConfigUnset(cmd *cobra.Command, args []string) {
 	key := args[0]
+	if isCredentialKey(key) {
+		unsetCredentialKey(key)
+		return
+	}
 	if !isServerConfigKey(key) {
-		fatal("unknown server key %q\nknown keys: %s", key, strings.Join(serverConfigKeys, ", "))
+		fatal("unknown key %q\nknown keys: %s, %s", key, strings.Join(credentialKeys, ", "), strings.Join(serverConfigKeys, ", "))
 	}
 	requireServerConnection()
 	if err := apiDelete("/config/" + key); err != nil {
