@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -188,6 +189,12 @@ func isArchived(err error) bool {
 func ciErrorHint(err error, source string) string {
 	if isArchived(err) {
 		return "the repository is archived (read-only): 'poof configure <name> --ci no' stops Poof! from trying, or 'poof remove <name>'"
+	}
+	if errors.Is(err, github.ErrRepoNotVisible) {
+		if source == "gh" {
+			return "check the repository name, and that your gh login can see it ('gh repo view <owner>/<repo>')"
+		}
+		return "check the repository name, and that the token covers it (fine-grained tokens list their repositories)"
 	}
 	switch github.StatusOf(err) {
 	case http.StatusForbidden:

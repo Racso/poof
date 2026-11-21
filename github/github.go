@@ -28,6 +28,17 @@ func NewClient(token string) *Client {
 	return &Client{token: token, apiBase: apiBase}
 }
 
+// NewClientAt is NewClient against another API base URL (tests).
+func NewClientAt(token, base string) *Client {
+	return &Client{token: token, apiBase: strings.TrimRight(base, "/")}
+}
+
+// ErrRepoNotVisible means GitHub answered 404 for the repository itself:
+// it does not exist, or the token cannot see it. GitHub does not say which,
+// and it answers file lookups in such a repository with the same 404 as a
+// missing file, so this is checked before a 404 is read as "no file".
+var ErrRepoNotVisible = errors.New("repository not found, or the token cannot see it")
+
 // APIError is a non-2xx answer from GitHub, kept structured so callers can
 // tell a missing scope (403) from a missing branch (404) and say so.
 type APIError struct {
@@ -76,6 +87,11 @@ func (c *Client) PutFile(owner, repo, branch, path, content, message string) (ch
 	if err != nil {
 		return false, err
 	}
+	if !found {
+		if err := c.requireRepo(owner, repo); err != nil {
+			return false, err
+		}
+	}
 	if found {
 		sha = existing.SHA
 		current, decodeErr := base64.StdEncoding.DecodeString(strings.ReplaceAll(existing.Content, "\n", ""))
@@ -103,18 +119,20 @@ func (c *Client) PutFile(owner, repo, branch, path, content, message string) (ch
 }
 
 // DeleteFile removes path from branch. A file that is not there is not an
-// error: the goal is its absence.
+// error: the goal is its absence. A repository the token cannot see is one:
+// nothing is known about its files (ErrRepoNotVisible).
 func (c *Client) DeleteFile(owner, repo, branch, path, message string) (changed bool, err error) {
 	var existing fileResponse
 	found, err := c.getMaybe(contentsPath(owner, repo, path)+refQuery(branch), &existing)
 	if err != nil {
-		// A branch that no longer exists has no file to delete either.
-		if StatusOf(err) == http.StatusNotFound {
-			return false, nil
-		}
 		return false, err
 	}
 	if !found {
+		// A branch that no longer exists has no file to delete either, but
+		// only once the repository itself is known to be reachable.
+		if err := c.requireRepo(owner, repo); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 	payload := map[string]string{"message": message, "sha": existing.SHA}
@@ -136,6 +154,19 @@ func (c *Client) Dispatch(owner, repo, workflowFile, ref string, inputs map[stri
 	}
 	path := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches", owner, repo, url.PathEscape(workflowFile))
 	return c.send("POST", path, payload, nil)
+}
+
+// requireRepo returns ErrRepoNotVisible when GitHub answers 404 for the
+// repository. Other failures are returned as they are.
+func (c *Client) requireRepo(owner, repo string) error {
+	found, err := c.getMaybe(fmt.Sprintf("/repos/%s/%s", owner, repo), nil)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%s/%s: %w", owner, repo, ErrRepoNotVisible)
+	}
+	return nil
 }
 
 // branchExists reports whether the branch exists in the repo. Errors are
