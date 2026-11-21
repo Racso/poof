@@ -94,8 +94,10 @@ Static sites:
 		}
 
 		// Validate Dockerfile presence: required for container projects, optional
-		// for static. External projects have no build at all.
-		if !isStatic && external == "" {
+		// for static. External projects have no build at all. The check reads
+		// the working directory, so it only makes sense when that directory is
+		// the repository: an explicit --repo names one we may not have here.
+		if !isStatic && external == "" && repo == "" {
 			if folder == "" {
 				if _, err := os.Stat("Dockerfile"); os.IsNotExist(err) {
 					suggestions := findDockerfileSubfolders()
