@@ -254,7 +254,7 @@ A manual `poof deploy` therefore pulls anonymously, which is fine for a public i
 
 A repository's numeric id is pinned the first time it deploys a project: a repo deleted and recreated under the same name cannot take over the project.
 
-Workflows generated before this change (bearer `POOF_TOKEN` secret) keep working; `poof refresh <name>` regenerates them in the new shape.
+Per-repo `POOF_TOKEN` secrets are gone (v0.42): a workflow still sending one gets a 401 saying so. `poof refresh <name>` regenerates a Poof-managed workflow; a hand-written one needs `id-token: write` and the OIDC bearer shown in `poof ci print <name>`.
 
 ## Refreshing GitHub config
 

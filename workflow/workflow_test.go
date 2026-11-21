@@ -54,16 +54,13 @@ func TestTriggerBlock_Callable(t *testing.T) {
 	if strings.Contains(got, "main") || strings.Contains(got, "backend") {
 		t.Errorf("callable trigger should not embed branch or folder, got: %q", got)
 	}
-	for _, want := range []string{
-		"workflow_call:",
-		"POOF_URL:",
-		"POOF_TOKEN:",
-		"required: false",
-		"workflow_dispatch:",
-	} {
+	for _, want := range []string{"workflow_call:", "workflow_dispatch:"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("callable trigger missing %q, got: %q", want, got)
 		}
+	}
+	if strings.Contains(got, "POOF_TOKEN") || strings.Contains(got, "secrets:") {
+		t.Errorf("callable trigger must not declare the retired secrets, got: %q", got)
 	}
 }
 

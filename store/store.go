@@ -227,11 +227,6 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL
 		);
 
-		CREATE TABLE IF NOT EXISTS repo_tokens (
-			repo  TEXT PRIMARY KEY,
-			token TEXT NOT NULL
-		);
-
 		CREATE TABLE IF NOT EXISTS caddy_snippets (
 			project TEXT PRIMARY KEY,
 			content TEXT NOT NULL,
@@ -251,13 +246,15 @@ func (s *Store) migrate() error {
 
 	// Incremental column migrations for pre-existing databases.
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN folder TEXT NOT NULL DEFAULT ''`)
-	s.db.Exec(`INSERT OR IGNORE INTO repo_tokens (repo, token)
-		SELECT repo, token FROM projects WHERE token != '' GROUP BY repo`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN static TEXT NOT NULL DEFAULT ''`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN build INTEGER NOT NULL DEFAULT 0`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci INTEGER NOT NULL DEFAULT 1`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN ci_mode TEXT NOT NULL DEFAULT 'managed'`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`)
+	// Per-repo deploy tokens (POOF_TOKEN) were retired in v0.42: deploys
+	// authenticate with GitHub OIDC. Drop the table and any token copy.
+	s.db.Exec(`DROP TABLE IF EXISTS repo_tokens`)
+	s.db.Exec(`UPDATE projects SET token = '' WHERE token != ''`)
 	s.db.Exec(`ALTER TABLE projects ADD COLUMN external TEXT NOT NULL DEFAULT ''`)
 	// Subpath routing was removed; drop the column where it still exists.
 	s.db.Exec(`ALTER TABLE projects DROP COLUMN subpath`)
@@ -464,34 +461,6 @@ func (s *Store) ListProjects() ([]Project, error) {
 		projects = append(projects, p)
 	}
 	return projects, rows.Err()
-}
-
-func (s *Store) GetRepoToken(repo string) (string, error) {
-	var token string
-	err := s.db.QueryRow(
-		`SELECT token FROM repo_tokens WHERE repo = ?`, repo,
-	).Scan(&token)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("get repo token: %w", err)
-	}
-	return token, nil
-}
-
-func (s *Store) SetRepoToken(repo, token string) error {
-	_, err := s.db.Exec(
-		`INSERT INTO repo_tokens (repo, token) VALUES (?, ?)
-		 ON CONFLICT(repo) DO UPDATE SET token = excluded.token`,
-		repo, token,
-	)
-	return err
-}
-
-func (s *Store) DeleteRepoToken(repo string) error {
-	_, err := s.db.Exec(`DELETE FROM repo_tokens WHERE repo = ?`, repo)
-	return err
 }
 
 func (s *Store) CountProjectsForRepo(repo string) (int, error) {

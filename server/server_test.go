@@ -522,43 +522,21 @@ func TestDeleteProject(t *testing.T) {
 
 // --- Per-project token auth on /deploy ---
 
-func TestDeployAcceptsRepoToken(t *testing.T) {
+// Per-repo POOF_TOKEN secrets were retired in v0.42: a bearer that is neither
+// the API token nor a GitHub OIDC token is refused, whatever the database holds.
+func TestDeployRejectsNonOIDCBearer(t *testing.T) {
 	srv, st, _ := newTestServer(t)
-
-	p := store.Project{
+	st.CreateProject(store.Project{
 		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
 		Repo: "racso/demo", Branch: "main", Port: 8080,
-	}
-	if err := st.CreateProject(p); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	st.SetRepoToken("racso/demo", "repo-tok")
-
-	// Deploy with repo token — Docker will fail (not running in test),
-	// but auth should pass (we get past 401).
-	rr := do(t, srv, "POST", "/projects/demo/deploy",
-		map[string]interface{}{"image": "img:v2"}, "repo-tok")
-
-	if rr.Code == http.StatusUnauthorized {
-		t.Error("repo token should be accepted for /deploy")
-	}
-}
-
-func TestDeployRejectsWrongToken(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-
-	p := store.Project{
-		Name: "demo", Domain: "demo.rac.so", Image: "img:v1",
-		Repo: "racso/demo", Branch: "main", Port: 8080,
-	}
-	st.CreateProject(p)
-	st.SetRepoToken("racso/demo", "correct-token")
-
-	rr := do(t, srv, "POST", "/projects/demo/deploy",
-		map[string]interface{}{"image": "img:v2"}, "wrong-token")
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 with wrong token, got %d", rr.Code)
+	})
+	for _, tok := range []string{"old-repo-token", ""} {
+		for _, path := range []string{"/projects/demo/deploy", "/projects/demo/deploy/static"} {
+			rr := do(t, srv, "POST", path, map[string]interface{}{"image": "img:v2"}, tok)
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("%s with %q: expected 401, got %d", path, tok, rr.Code)
+			}
+		}
 	}
 }
 
@@ -724,7 +702,6 @@ func TestDeleteProjectAsksToRemoveWorkflow(t *testing.T) {
 		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
 		Repo: "racso/web", Branch: "main", Port: 80,
 	})
-	st.SetRepoToken("racso/web", "legacy-tok")
 
 	rr := do(t, srv, "DELETE", "/projects/web", nil, globalToken)
 	if rr.Code != http.StatusOK {
@@ -733,22 +710,6 @@ func TestDeleteProjectAsksToRemoveWorkflow(t *testing.T) {
 	ci := ciOf(t, rr)
 	if len(ci) != 1 || ci[0].Op != server.CIDelete || ci[0].Repo != "racso/web" || ci[0].Branch != "main" {
 		t.Errorf("expected delete of racso/web@main, got %+v", ci)
-	}
-	if tok, _ := st.GetRepoToken("racso/web"); tok != "" {
-		t.Error("legacy repo token should go with the repo's last project")
-	}
-}
-
-func TestDeleteProjectKeepsRepoTokenWhileSiblingsExist(t *testing.T) {
-	srv, st, _ := newTestServer(t)
-	st.CreateProject(store.Project{Name: "web", Domain: "web.rac.so", Image: "i", Repo: "racso/mono", Branch: "main", Port: 80})
-	st.CreateProject(store.Project{Name: "api", Domain: "api.rac.so", Image: "i", Repo: "racso/mono", Branch: "main", Port: 3000})
-	st.SetRepoToken("racso/mono", "legacy-tok")
-
-	do(t, srv, "DELETE", "/projects/web", nil, globalToken)
-
-	if tok, _ := st.GetRepoToken("racso/mono"); tok != "legacy-tok" {
-		t.Error("repo token must survive while another project deploys from the repo")
 	}
 }
 
@@ -988,7 +949,7 @@ func TestCloneIgnoresCaddyFlagsWhenSourceHasNoSnippet(t *testing.T) {
 	}
 }
 
-func TestRefreshProjectReturnsPlanWithoutMinting(t *testing.T) {
+func TestRefreshProjectReturnsPlan(t *testing.T) {
 	srv, st, _ := newTestServer(t)
 	st.SetSetting("github-user", "racso")
 	st.CreateProject(store.Project{
@@ -1004,9 +965,6 @@ func TestRefreshProjectReturnsPlanWithoutMinting(t *testing.T) {
 	decode(t, rr, &out)
 	if out.Status != "refreshed" || len(out.CI) != 1 || out.CI[0].Op != server.CIWrite {
 		t.Errorf("refresh: got %+v", out)
-	}
-	if tok, _ := st.GetRepoToken("racso/web"); tok != "" {
-		t.Error("refresh must not mint a legacy repo token")
 	}
 }
 

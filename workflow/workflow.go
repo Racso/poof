@@ -68,16 +68,8 @@ func File(projectName string) string {
 // GitHub Actions UI for debugging.
 func triggerBlock(ciMode, branch, folder string, tagInput bool) string {
 	if ciMode == CIModeCallable {
-		// The secrets are no longer read (deploys authenticate with OIDC) but
-		// stay declared, optional, so an outer workflow written for the old
-		// shape that still passes them is not rejected by GitHub.
 		return `on:
   workflow_call:
-    secrets:
-      POOF_URL:
-        required: false
-      POOF_TOKEN:
-        required: false
   workflow_dispatch:
 `
 	}

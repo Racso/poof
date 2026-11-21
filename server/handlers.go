@@ -533,14 +533,6 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		s.teardownAppNetwork(name)
 	}
 
-	// The legacy per-repo deploy token has no project left to deploy once the
-	// repo's last one goes.
-	if p.Repo != "" {
-		if siblings, _ := s.store.CountProjectsForRepo(p.Repo); siblings <= 1 {
-			_ = s.store.DeleteRepoToken(p.Repo)
-		}
-	}
-
 	// network_members has no foreign key on member (a member may be a
 	// container Poof doesn't own), so clean up explicitly.
 	if err := s.store.DeleteNetworkMembersForProject(name); err != nil {

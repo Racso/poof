@@ -339,11 +339,9 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authFlex middleware: accepts the global token, a GitHub Actions OIDC token
-// for the project's repository, or the legacy per-repo deploy token. Used for
-// /deploy so the GH Action can call it without the global token. Legacy
-// tokens are no longer minted; the path stays until the hand-written
-// workflows that still send one (see board card #215) move to OIDC.
+// authFlex middleware: accepts the global token or a GitHub Actions OIDC token
+// for the project's repository. Used for /deploy so a workflow can call it
+// without holding any Poof secret.
 func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.validGlobalToken(r) {
@@ -356,20 +354,15 @@ func (s *Server) authFlex(next http.HandlerFunc) http.HandlerFunc {
 			jsonError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		token := bearerToken(r)
 		// A GitHub Actions OIDC token proves the calling repository without
-		// any shared secret. Anything else is the legacy per-repo deploy token.
-		if oidcIssuerOf(token) == s.oidc.issuer {
-			if err := s.authorizeOIDC(token, p); err != nil {
-				jsonError(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
-				return
-			}
-			next(w, r)
+		// any shared secret.
+		token := bearerToken(r)
+		if oidcIssuerOf(token) != s.oidc.issuer {
+			jsonError(w, "unauthorized: send the API token or a GitHub Actions OIDC token (per-repo POOF_TOKEN secrets were retired in v0.42)", http.StatusUnauthorized)
 			return
 		}
-		repoToken, _ := s.store.GetRepoToken(p.Repo)
-		if token == "" || repoToken == "" || token != repoToken {
-			jsonError(w, "unauthorized", http.StatusUnauthorized)
+		if err := s.authorizeOIDC(token, p); err != nil {
+			jsonError(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
