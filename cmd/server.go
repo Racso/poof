@@ -73,6 +73,7 @@ func (dockerAdapter) Deploy(cfg server.ContainerDeployConfig) error {
 		RegistryUser:  cfg.RegistryUser,
 		RegistryToken: cfg.RegistryToken,
 		CreateOnly:    cfg.CreateOnly,
+		ExtraFlags:    cfg.ExtraFlags,
 	})
 }
 func (dockerAdapter) EnsureNetwork(name string, internal bool) error {

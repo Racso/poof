@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/racso/poof/caddy"
 	"github.com/racso/poof/config"
 	"github.com/racso/poof/defaults"
+	"github.com/racso/poof/docker"
 	"github.com/racso/poof/store"
 	"github.com/racso/poof/workflow"
 )
@@ -1059,6 +1061,28 @@ func (s *Server) snapshotProject(w http.ResponseWriter, r *http.Request) {
 // the pull is anonymous: the server has no registry credential of its own,
 // so a private image that is no longer on this host comes back only through
 // the repository's workflow (see redeployHint).
+// containerFlags reads the project's container flags file (see
+// config.ContainerFlagsPath). A missing file is no flags; an unreadable or
+// invalid one is an error naming the file, so the operator knows what to fix.
+func (s *Server) containerFlags(project string) ([]string, error) {
+	path := config.ContainerFlagsPath(s.cfg.DataDir, project)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	flags, err := docker.ParseFlags(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if len(flags) > 0 {
+		log.Printf("deploy %s: container flags from %s: %s", project, path, strings.Join(flags, " "))
+	}
+	return flags, nil
+}
+
 func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullToken string) {
 	envVars, err := s.store.GetEnvVars(p.Name)
 	if err != nil {
@@ -1074,6 +1098,14 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullT
 	mounts := make([]string, len(vols))
 	for i, v := range vols {
 		mounts[i] = v.HostPath + ":" + v.ContainerPath
+	}
+
+	// Read before anything is stopped: a broken flags file fails the deploy
+	// and leaves the running container alone.
+	extraFlags, err := s.containerFlags(p.Name)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("deploy refused: %v", err), http.StatusBadRequest)
+		return
 	}
 
 	projNets, err := s.store.ListNetworksForProject(p.Name)
@@ -1129,6 +1161,7 @@ func (s *Server) runDeploy(w http.ResponseWriter, p *store.Project, image, pullT
 		RegistryUser:  pullUser,
 		RegistryToken: pullToken,
 		CreateOnly:    p.Paused,
+		ExtraFlags:    extraFlags,
 	})
 
 	if err != nil {

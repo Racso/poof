@@ -370,6 +370,31 @@ poof deploy myapp   # redeploy to apply changes
 
 **Explicit mounts** — `host/path:container/path` format. You control the host directory; Poof! never touches it.
 
+## Container flags
+
+Extra `docker create` flags for a project's container (memory and CPU limits, a read-only root filesystem, ...) live in a file **on the server**, edited by hand over SSH:
+
+```
+/var/lib/poof/containers/<project>.flags     # <data_dir>/containers/<project>.flags
+```
+
+```sh
+# TAP: public queries on a shared host
+--memory=1g --cpus=1
+--pids-limit=256
+--read-only --tmpfs=/tmp:rw,size=64m
+--security-opt=no-new-privileges
+```
+
+Poof! adds them to every container it creates for the project: deploy, rollback, and deploys staged while paused. Edit the file, then `poof deploy <project>` to apply it. No file means no extra flags.
+
+- Docker's own CLI syntax, one or more flags per line, `#` for comments, quotes for values with spaces.
+- **Attach values with `=`** (`--memory=1g`, not `--memory 1g`). A bare word is refused, since `docker create` would take it as the image name.
+- Flags Poof! sets itself are refused: `--name`, `--network`, `--restart`, `--rm`, env vars (`poof env`) and volumes (`poof volume`).
+- A file that cannot be read or parsed fails the deploy with a 400 naming the file and the line, before the running container is touched.
+
+There is deliberately no CLI or API to edit it: a raw flag such as `--privileged` reaches the host, so it takes server access.
+
 ## External projects
 
 Route a domain to a container Poof! doesn't manage — one started by Compose, or by hand:

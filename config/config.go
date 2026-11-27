@@ -39,6 +39,15 @@ func CaddyfilePath(dataDir string) string {
 	return filepath.Join(dataDir, "caddy", "Caddyfile")
 }
 
+// ContainerFlagsPath is a project's container flags file: extra `docker
+// create` flags (memory and CPU limits, a read-only root filesystem, ...)
+// added to every container Poof creates for the project. It is edited on the
+// server only; no API endpoint reads or writes it, because a raw flag such as
+// --privileged reaches the host. A missing file means no extra flags.
+func ContainerFlagsPath(dataDir, project string) string {
+	return filepath.Join(dataDir, "containers", project+".flags")
+}
+
 // CaddyConfigDir is where Poof's Caddy directory is mounted inside the Caddy
 // container. The image's default command and the documented
 // `docker exec -w /etc/caddy <container> caddy reload` both read

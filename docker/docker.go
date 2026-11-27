@@ -25,6 +25,7 @@ type DeployConfig struct {
 	RegistryUser  string   // optional: login before pull
 	RegistryToken string   // optional: login before pull
 	CreateOnly    bool     // create the container without starting it (paused project)
+	ExtraFlags    []string // operator's flags from the project's flags file, already checked by ParseFlags
 }
 
 // managedNetworkLabel marks Docker networks created by Poof so `poof net ls`
@@ -248,6 +249,7 @@ func Deploy(cfg DeployConfig) error {
 		args = append(args, "-v", mount)
 	}
 
+	args = append(args, cfg.ExtraFlags...)
 	args = append(args, cfg.Image)
 
 	out, err := exec.Command("docker", args...).CombinedOutput()

@@ -62,6 +62,7 @@ type ContainerDeployConfig struct {
 	RegistryUser  string
 	RegistryToken string
 	CreateOnly    bool
+	ExtraFlags    []string
 }
 
 // SnapshotResult mirrors docker.SnapshotResult for the interface boundary.

@@ -287,6 +287,7 @@ type testMocks struct {
 	caddy     *mockCaddySyncer
 	// The Caddyfile the server persists on every sync.
 	caddyfilePath string
+	dataDir       string
 }
 
 // --- Test helpers ---
@@ -321,6 +322,7 @@ func newTestServer(t *testing.T) (*server.Server, *store.Store, *testMocks) {
 		caddy:     &mockCaddySyncer{},
 	}
 	mocks.caddyfilePath = cfg.CaddyfilePath()
+	mocks.dataDir = cfg.DataDir
 	srv := server.New(cfg, st, mocks.container, mocks.static, mocks.caddy)
 
 	return srv, st, mocks
@@ -1023,6 +1025,84 @@ func TestDeployCallsContainerDeploy(t *testing.T) {
 	}
 	if c.EnvVars["DB"] != "pg://localhost" {
 		t.Errorf("env DB: got %q", c.EnvVars["DB"])
+	}
+}
+
+// --- Container flags file ---
+
+func writeContainerFlags(t *testing.T, mocks *testMocks, project, content string) {
+	t.Helper()
+	path := config.ContainerFlagsPath(mocks.dataDir, project)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeployAppliesContainerFlags(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "tap", Domain: "tap.rac.so", Image: "ghcr.io/racso/tap",
+		Repo: "racso/tap", Branch: "main", Port: 80,
+	})
+	writeContainerFlags(t, mocks, "tap", "# limits\n--memory=1g --cpus=1\n--read-only\n")
+
+	for _, path := range []string{"/projects/tap/deploy", "/projects/tap/deploy"} {
+		rr := do(t, srv, "POST", path, map[string]interface{}{"image": "ghcr.io/racso/tap:v1"}, globalToken)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+		}
+	}
+	rr := do(t, srv, "POST", "/projects/tap/rollback", nil, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("rollback: %d — %s", rr.Code, rr.Body.String())
+	}
+
+	want := []string{"--memory=1g", "--cpus=1", "--read-only"}
+	if len(mocks.container.deployCalls) != 3 {
+		t.Fatalf("expected 3 container.Deploy calls, got %d", len(mocks.container.deployCalls))
+	}
+	for i, c := range mocks.container.deployCalls {
+		if !slices.Equal(c.ExtraFlags, want) {
+			t.Errorf("call %d: flags %q, want %q", i, c.ExtraFlags, want)
+		}
+	}
+}
+
+func TestDeployWithoutContainerFlagsFile(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "web", Domain: "web.rac.so", Image: "ghcr.io/racso/web",
+		Repo: "racso/web", Branch: "main", Port: 80,
+	})
+	rr := do(t, srv, "POST", "/projects/web/deploy", map[string]interface{}{"image": "ghcr.io/racso/web:v1"}, globalToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d — %s", rr.Code, rr.Body.String())
+	}
+	if flags := mocks.container.deployCalls[0].ExtraFlags; len(flags) != 0 {
+		t.Errorf("no file should mean no flags, got %q", flags)
+	}
+}
+
+func TestDeployRefusesInvalidContainerFlags(t *testing.T) {
+	srv, st, mocks := newTestServer(t)
+	st.CreateProject(store.Project{
+		Name: "tap", Domain: "tap.rac.so", Image: "ghcr.io/racso/tap",
+		Repo: "racso/tap", Branch: "main", Port: 80,
+	})
+	writeContainerFlags(t, mocks, "tap", "--memory 1g\n")
+
+	rr := do(t, srv, "POST", "/projects/tap/deploy", map[string]interface{}{"image": "ghcr.io/racso/tap:v1"}, globalToken)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("deploy: got %d, want 400 — %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "tap.flags") {
+		t.Errorf("error should name the file: %s", rr.Body.String())
+	}
+	if len(mocks.container.deployCalls) != 0 {
+		t.Errorf("a broken flags file must not touch the container, got %d deploy calls", len(mocks.container.deployCalls))
 	}
 }
 
